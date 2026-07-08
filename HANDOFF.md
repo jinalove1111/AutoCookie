@@ -1,15 +1,24 @@
 # HANDOFF — JadeCap Automated Trading Bot
 
-## 상태: Milestone 5 (Alembic + Postgres 전환) 완료. Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+## 상태: Milestone 6 (Frontend 실API 연결) 완료. Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
 
 ## 전체 회차
+- [x] Milestone 6 — `frontend/lib/api.ts`(신규): 8개 엔드포인트 타입드 fetch 래퍼, `NEXT_PUBLIC_API_BASE_URL`(기본 `http://localhost:8000`), 실패 시 명확한 Error로 reject
+- [x] Milestone 6 — `frontend/lib/usePolling.ts`(신규): 컴포넌트 공용 폴링 훅(7초 간격, loading/error/data)
+- [x] Milestone 6 — `lib/types.ts`를 실제 백엔드 snake_case 응답 그대로 반영하도록 재작성 (M1 당시 추측성 camelCase 타입 폐기)
+- [x] Milestone 6 — BotStatusCard/PositionsPanel/LogsPanel → 실데이터 연결. BiasCard/SignalsPanel/RiskStatusPanel → 실제 호출하되 백엔드의 `note`(아직 라이브 아님)를 정직하게 배지로 표시, 가짜 데이터로 꾸미지 않음. ModeToggle → 실제 mode/live_enabled/trading_allowed 표시(전환 버튼은 이번 스코프 아님)
+- [x] Milestone 6 — sub-agent 자체 검증 + 오케스트레이터(저) 독립 재검증: 실제 DB에 트레이드/로그 시드 → uvicorn 실부팅 → curl로 `/dashboard/status`·`/positions`·`/logs` 실데이터 확인, CORS 헤더 확인 → Next.js dev 서버를 그 백엔드에 연결해 SSR 셸 200 확인 → `tsc --noEmit`/`next build` 제가 직접 재실행해 클린 통과 → 테스트 서버 2개 포트 확인 종료, 임시 DB 삭제
+- [ ] Milestone 6 변경사항은 아직 git에 커밋되지 않음 — 마지막 push는 Milestone 5(`9cb98aa`)까지
+- [ ] BiasCard/SignalsPanel/RiskStatusPanel이 호출하는 3개 엔드포인트는 백엔드 자체가 여전히 placeholder — 프론트는 정직하게 반영했을 뿐, 실제 라이브 전략 상태 노출은 아직 없음
+- [ ] ModeToggle에 실제 전환 액션 없음 (표시만) — `/settings/mode` PATCH 연결은 다음 후보
+
+## 전체 회차 (이전 마일스톤)
 - [x] Milestone 5 — git 저장소 초기화 + GitHub 원격(`https://github.com/jinalove1111/AutoCookie.git`) 등록, 로컬 git identity(jinal/jina4926952@gmail.com) 설정, 초기 커밋(80파일) push 완료
 - [x] Milestone 5 — 실제 Alembic 마이그레이션 셋업: `backend/alembic.ini` + `migrations/env.py`(런타임에 `settings.DATABASE_URL` 주입) + 초기 마이그레이션(`a0f5ebc23690_initial_schema.py`) — 6개 테이블·`candles` unique constraint·`strategy_logs→signals` FK 전부 autogenerate로 정확히 캡처됨
 - [x] Milestone 5 — `.env.example`의 `DATABASE_URL`을 실제 Postgres 연결 문자열 형태로 교정 (docker-compose의 POSTGRES_DB/USER/PASSWORD 값과 일치)
 - [x] Milestone 5 — 오케스트레이터(저) 직접: Docker/시스템 Postgres 없는 환경이라 **포터블 PostgreSQL 16 바이너리를 스크래치패드에 다운로드**해 127.0.0.1:5433에 임시 인스턴스 기동(시스템 설치 없음, 세션 종료 시 정리) → 실제 `alembic upgrade head` 적용 → `\dt`/`\d candles`/`\d strategy_logs`로 스키마 직접 확인 → `app.main` 실제 Postgres 연결로 boot → `run_paper.py` 실행 → TradeTracker로 실제 트레이드 기록/조회까지 전부 실제 Postgres 위에서 재검증
 - [x] 회귀 확인: backend 45개 `.py` 파일 `py_compile` 무오류
-- [ ] 검증용 Postgres 인스턴스는 스크래치패드의 **임시** 바이너리였고 이미 종료됨 — 실사용 시 `docker-compose up postgres` 또는 별도 Postgres 준비 필요 (docker-compose.yml은 이미 존재, Docker 자체가 이 환경에 없어 실제로 띄워본 적은 없음 — docker-compose 경로는 아직 미검증)
-- [ ] Milestone 5 변경사항(Alembic 셋업)은 아직 git에 커밋되지 않음 — Milestone 1~4만 `a385faa`로 push됨
+- [x] Postgres/GitHub push는 커밋 `9cb98aa`로 완료 (docker-compose 경로 자체는 여전히 미검증 — Docker가 이 환경에 없음)
 
 ## 전체 회차 (이전 마일스톤)
 - [x] Milestone 1: 6-layer 아키텍처 + 폴더 스캐폴딩 + docs 7종 + .env.example/docker-compose/README/CHANGELOG + FastAPI/Next.js 부팅 검증
