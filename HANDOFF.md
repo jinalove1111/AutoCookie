@@ -1,16 +1,15 @@
 # HANDOFF — JadeCap Automated Trading Bot
 
-## 상태: Milestone 6 (Frontend 실API 연결) 완료. Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+## 상태: Milestone 7 (ModeToggle 실전환 액션) 완료. Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
 
 ## 전체 회차
-- [x] Milestone 6 — `frontend/lib/api.ts`(신규): 8개 엔드포인트 타입드 fetch 래퍼, `NEXT_PUBLIC_API_BASE_URL`(기본 `http://localhost:8000`), 실패 시 명확한 Error로 reject
-- [x] Milestone 6 — `frontend/lib/usePolling.ts`(신규): 컴포넌트 공용 폴링 훅(7초 간격, loading/error/data)
-- [x] Milestone 6 — `lib/types.ts`를 실제 백엔드 snake_case 응답 그대로 반영하도록 재작성 (M1 당시 추측성 camelCase 타입 폐기)
-- [x] Milestone 6 — BotStatusCard/PositionsPanel/LogsPanel → 실데이터 연결. BiasCard/SignalsPanel/RiskStatusPanel → 실제 호출하되 백엔드의 `note`(아직 라이브 아님)를 정직하게 배지로 표시, 가짜 데이터로 꾸미지 않음. ModeToggle → 실제 mode/live_enabled/trading_allowed 표시(전환 버튼은 이번 스코프 아님)
-- [x] Milestone 6 — sub-agent 자체 검증 + 오케스트레이터(저) 독립 재검증: 실제 DB에 트레이드/로그 시드 → uvicorn 실부팅 → curl로 `/dashboard/status`·`/positions`·`/logs` 실데이터 확인, CORS 헤더 확인 → Next.js dev 서버를 그 백엔드에 연결해 SSR 셸 200 확인 → `tsc --noEmit`/`next build` 제가 직접 재실행해 클린 통과 → 테스트 서버 2개 포트 확인 종료, 임시 DB 삭제
-- [ ] Milestone 6 변경사항은 아직 git에 커밋되지 않음 — 마지막 push는 Milestone 5(`9cb98aa`)까지
-- [ ] BiasCard/SignalsPanel/RiskStatusPanel이 호출하는 3개 엔드포인트는 백엔드 자체가 여전히 placeholder — 프론트는 정직하게 반영했을 뿐, 실제 라이브 전략 상태 노출은 아직 없음
-- [ ] ModeToggle에 실제 전환 액션 없음 (표시만) — `/settings/mode` PATCH 연결은 다음 후보
+- [x] Milestone 7 — `portfolio/positions.py`에 `update_bot_mode(mode)` 추가 — `BotState.mode` 실제 영속화
+- [x] Milestone 7 — `GET /settings/mode`가 이제 DB(`BotState`)에서 읽어 `/dashboard/status`와 항상 일치 (기존엔 env값을 읽어 두 엔드포인트가 다를 수 있던 불일치 수정)
+- [x] Milestone 7 — `POST /settings/mode`: paper/backtest는 실제 DB 저장 후 `{"trading_mode":..., "applied":true}` 반환, 유효하지 않은 값은 400. **live 분기는 문자 하나도 안 건드림** — 조건/상태코드/메시지 그대로 유지
+- [x] Milestone 7 — `frontend/lib/api.ts`에 `setTradingMode()` 추가 (POST, FastAPI `detail` 필드 파싱해 명확한 에러 표시). `ModeToggle.tsx`가 실제 backtest/paper/live 버튼으로 전환 — live 시도 시 403 메시지를 숨기지 않고 그대로 노출(안전장치가 작동하는 걸 보여주는 것이 목적)
+- [x] Milestone 7 — 오케스트레이터(저) 독립 재검증: 실제 백엔드 기동 → `/settings/mode`·`/dashboard/status` 초기 일치 확인 → backtest 전환(200, 영속화 확인) → **live 시도(403, DB `updated_at` 불변 확인)** → 잘못된 값(400) → paper 복귀(200) → `tsc --noEmit`/`npm run build`/backend `py_compile` 전부 제가 직접 재실행해 클린 통과 → 테스트 서버 종료, 임시 DB 삭제
+- [ ] Milestone 7 변경사항은 아직 git에 커밋되지 않음 — 마지막 push는 Milestone 6(`5a9ff47`)까지
+- [ ] **frontend sub-agent가 발견한 인프라 gap**: 앱 시작 시 자동으로 스키마를 만드는 부트스트랩이 없음 (`main.py`에 `create_all()`/migration 자동 실행 없음) — 완전히 새 DB에 처음 `/settings/mode`나 `/dashboard/status`를 호출하면 500 발생. 지금까지는 검증할 때마다 수동으로 `create_all()`을 먼저 돌려서 안 드러났음. 실배포 전 `alembic upgrade head`를 앱 시작 절차에 넣거나 문서화 필요
 
 ## 전체 회차 (이전 마일스톤)
 - [x] Milestone 5 — git 저장소 초기화 + GitHub 원격(`https://github.com/jinalove1111/AutoCookie.git`) 등록, 로컬 git identity(jinal/jina4926952@gmail.com) 설정, 초기 커밋(80파일) push 완료

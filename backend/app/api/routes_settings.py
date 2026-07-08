@@ -11,8 +11,11 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.config import settings
+from app.portfolio.positions import get_or_create_bot_state, update_bot_mode
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+
+VALID_PERSISTABLE_MODES = {"backtest", "paper"}
 
 
 class TradingModeUpdate(BaseModel):
@@ -21,17 +24,24 @@ class TradingModeUpdate(BaseModel):
 
 @router.get("/mode")
 def get_trading_mode() -> dict:
-    """Return the current trading mode and whether live trading is permitted."""
+    """Return the current trading mode and whether live trading is permitted.
+
+    `trading_mode`/`live_trading_enabled` are sourced from the persisted
+    BotState DB row (same row /dashboard/status reads), so this endpoint
+    agrees with the dashboard. `is_live_trading_allowed` legitimately still
+    reflects env-level config, since that is the actual safety gate.
+    """
+    state = get_or_create_bot_state()
     return {
-        "trading_mode": settings.TRADING_MODE,
-        "live_trading_enabled": settings.LIVE_TRADING_ENABLED,
+        "trading_mode": state["mode"],
+        "live_trading_enabled": state["live_enabled"],
         "is_live_trading_allowed": settings.is_live_trading_allowed,
     }
 
 
 @router.post("/mode")
 def set_trading_mode(payload: TradingModeUpdate) -> dict:
-    """Attempt to switch trading mode; future: persist to config/DB.
+    """Switch trading mode, persisting backtest/paper switches to the DB.
 
     Any switch to 'live' is rejected with 403 unless
     settings.is_live_trading_allowed is True (TRADING_MODE=live AND
@@ -49,4 +59,11 @@ def set_trading_mode(payload: TradingModeUpdate) -> dict:
             ),
         )
 
-    return {"requested_mode": requested_mode, "applied": False, "note": "stub: not yet persisted"}
+    if requested_mode not in VALID_PERSISTABLE_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail="trading_mode must be one of: backtest, paper",
+        )
+
+    updated_state = update_bot_mode(requested_mode)
+    return {"trading_mode": updated_state["mode"], "applied": True}

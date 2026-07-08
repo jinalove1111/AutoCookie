@@ -46,3 +46,21 @@ def get_or_create_bot_state() -> dict:
             db.add(state)
             db.flush()
         return _row_to_dict(state)
+
+
+def update_bot_mode(mode: str) -> dict:
+    """
+    Persist a new trading mode onto the singleton BotState row and return the
+    updated row as a dict.
+
+    Ensures a BotState row exists first (via get_or_create_bot_state(), which
+    is idempotent), then opens a fresh session to update its `mode` column.
+    Does not touch `live_enabled` or any other column — callers that need to
+    gate/allow live trading enforce that separately before ever calling this.
+    """
+    get_or_create_bot_state()
+    with session_scope() as db:
+        state = db.execute(select(BotState)).scalars().first()
+        state.mode = mode
+        db.flush()
+        return _row_to_dict(state)

@@ -75,3 +75,46 @@ export function getSignals(): Promise<SignalsResponse> {
 export function getRiskStatus(): Promise<RiskStatus> {
   return apiGet<RiskStatus>("/dashboard/risk-status");
 }
+
+/**
+ * POST /settings/mode — request a trading-mode switch.
+ *
+ * Same error contract as apiGet (network failure / non-2xx both reject with
+ * a plain Error), but a non-2xx response body is parsed as JSON to surface
+ * FastAPI's `detail` field (e.g. the live-trading safety-gate explanation)
+ * verbatim, since that's the message the UI must show the operator.
+ */
+export async function setTradingMode(
+  mode: "backtest" | "paper" | "live"
+): Promise<{ trading_mode: string; applied: boolean }> {
+  const path = "/settings/mode";
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trading_mode: mode }),
+    });
+  } catch (cause) {
+    throw new Error(
+      `Failed to reach backend at ${API_BASE_URL}${path}: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`
+    );
+  }
+
+  if (!response.ok) {
+    let detail: string | undefined;
+    try {
+      const body = (await response.json()) as { detail?: unknown };
+      if (typeof body?.detail === "string" && body.detail.length > 0) {
+        detail = body.detail;
+      }
+    } catch {
+      // Response body wasn't parseable JSON — fall through to generic message.
+    }
+    throw new Error(detail ?? `Backend returned ${response.status} for ${path}`);
+  }
+
+  return (await response.json()) as { trading_mode: string; applied: boolean };
+}
