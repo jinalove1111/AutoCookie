@@ -1,12 +1,18 @@
 # HANDOFF — JadeCap Automated Trading Bot
 
-## 상태: DB 부트스트랩 gap 수정 완료. Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+## 상태: scripts/run_backtest.py 실구현 완료. Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
 
 ## 전체 회차
+- [x] `scripts/run_backtest.py`: `print("TODO: implement in later milestone")` 스텁을 실제 백테스트 러너로 교체 — OKX 공개(키 불필요) 엔드포인트에서 실 OHLCV 캔들을 fetch해 기존 실구현 Strategy/Risk/Backtest 엔진(`BacktestEngine.run()`)에 그대로 replay하고 markdown 리포트 + CSV trade export를 생성. 주문을 전혀 내지 않고 trades DB 테이블도 전혀 건드리지 않음(설계상 DB-independent), API 키/계정 불필요
+- [x] 실측으로 확인된 한계를 코드/주석에 문서화: `CandleFetcher`의 `since` 파라미터가 OKX `before` 쿼리 파라미터에 연결되어 있어(더 최신 캔들을 반환할 뿐 더 오래된 과거로 페이징이 안 됨) 단일 fetch(OKX 300개 한도)로 캡하고, 더 많은 캔들이 요청되면 조용히 짧은 샘플을 주는 대신 명확한 안내 메시지를 출력하도록 처리
+- [x] 오케스트레이터 재검증: 실행(BTCUSDT/5m 기본 인자, ETHUSDT/15m 커스텀 인자) + 에러 경로(존재하지 않는 심볼) 확인. 생성된 리포트는 `scripts/reports/`에 저장되며 런타임 산출물이라 `.gitignore`에 추가
+- [x] git에 커밋 완료 (`4904489`)
+
+## 전체 회차 (DB 부트스트랩 수정)
 - [x] DB 부트스트랩 자동화 — `backend/app/main.py`에 FastAPI `lifespan` 훅 추가, 앱 시작 시 `alembic upgrade head`를 프로그래밍 방식으로 자동 실행 (`alembic.ini`/`env.py`는 M5 그대로, 건드리지 않음)
 - [x] 오케스트레이터(저) 독립 재검증: **완전히 새로 만든 빈 SQLite 파일**(사전에 create_all/alembic 수동 실행 전혀 안 함)로 앱을 직접 부팅 → 시작 로그에서 `Running upgrade -> a0f5ebc23690, initial schema` 확인 → `/dashboard/status`·`/settings/mode` 즉시 200 확인 → DB 직접 introspection으로 6개 테이블 + `alembic_version=a0f5ebc23690` 확인 (create_all 우회가 아니라 진짜 Alembic을 통과했음을 증명) → backend `py_compile` 재확인 → 테스트 서버 종료, 임시 DB 삭제
 - [x] sub-agent가 별도로 idempotency(이미 head인 DB에 재부팅 시 no-op)와 fail-fast(잘못된 DATABASE_URL 시 조용히 넘어가지 않고 확실히 실패)까지 검증함
-- [x] Milestone 7 + 이번 부트스트랩 수정 모두 git에 커밋/push 완료
+- [x] Milestone 7 + 이번 부트스트랩 수정 모두 git에 커밋/push 완료 (`f92f507`)
 
 ## 전체 회차 (Milestone 7)
 - [x] `portfolio/positions.py`에 `update_bot_mode(mode)` 추가 — `BotState.mode` 실제 영속화
@@ -14,6 +20,14 @@
 - [x] `POST /settings/mode`: paper/backtest는 실제 DB 저장, 유효하지 않은 값은 400. **live 분기는 문자 하나도 안 건드림**
 - [x] `frontend/lib/api.ts`에 `setTradingMode()` 추가, `ModeToggle.tsx`가 실제 backtest/paper/live 버튼으로 전환 — live 시도 시 403 메시지 그대로 노출
 - [x] 오케스트레이터 독립 재검증: backtest 전환(200, 영속화) → live 시도(403, DB 불변) → 잘못된 값(400) → paper 복귀(200)
+
+## 전체 회차 (Milestone 6)
+- [x] `frontend/lib/api.ts`(신규) — 8개 대시보드/trades 엔드포인트 타입드 fetch 래퍼, `NEXT_PUBLIC_API_BASE_URL`(기본 `http://localhost:8000`) 사용, 실패 시 명확한 Error로 reject
+- [x] `frontend/lib/usePolling.ts`(신규) — 컴포넌트 공용 폴링 훅(loading/data/error)
+- [x] `frontend/lib/types.ts` 재작성 — 실제 백엔드 snake_case 응답 그대로 반영 (Milestone 1 당시 추측성 camelCase 타입 폐기)
+- [x] `BotStatusCard`/`PositionsPanel`/`LogsPanel` → `/dashboard/status`·`/dashboard/positions`·`/dashboard/logs` 실DB 데이터로 연결. `BiasCard`/`SignalsPanel`/`RiskStatusPanel` → 실제로 호출은 하되, 해당 백엔드 엔드포인트 자체가 여전히 placeholder(neutral/빈 값)라 백엔드가 보내는 "아직 라이브 아님" note를 정직하게 배지로 표시(가짜 데이터로 꾸미지 않음). `ModeToggle` → 실제 mode/live_enabled/trading_allowed 상태 표시(전환 액션 자체는 Milestone 7에서 추가됨)
+- [x] sub-agent 자체 검증 + 오케스트레이터(저) 독립 재검증: 실DB에 트레이드/로그 시드 → uvicorn 실부팅 → curl로 `/dashboard/status`·`/positions`·`/logs` 실데이터 확인, CORS 헤더 확인 → Next.js dev 서버를 그 백엔드에 연결해 SSR 셸 200 확인 → `tsc --noEmit`/`next build` 클린 통과 재확인
+- [x] git에 커밋 완료 (`5a9ff47`)
 
 ## 전체 회차 (이전 마일스톤)
 - [x] Milestone 5 — git 저장소 초기화 + GitHub 원격(`https://github.com/jinalove1111/AutoCookie.git`) 등록, 로컬 git identity(jinal/jina4926952@gmail.com) 설정, 초기 커밋(80파일) push 완료
@@ -38,7 +52,7 @@
 - [ ] `DATABASE_URL` 기본값 빈 문자열, `.env` 파일 없음 — 실사용 시 반드시 설정 필요 (Milestone 3부터 반복 확인된 gap)
 - [ ] **다음 단계(Small Live Trading)는 실제 OKX API 키(출금 권한 없는 키) 발급이 선행되어야 하고, 매 단계 operator의 명시적 승인이 필요함 — CTO 재량으로 진행하지 않기로 operator와 합의됨**
 - [ ] LiveBroker, exchange/okx_client.py·orangex_client.py 여전히 완전 스텁 — 실거래 API 호출 코드 전혀 없음
-- [ ] frontend는 아직 이 실DB 엔드포인트들을 소비하지 않음 (Milestone 1 스캐폴딩 상태 그대로)
+- [ ] frontend는 status/positions/logs 실DB 엔드포인트에는 이미 연결됨(Milestone 6). 다만 대시보드 3개 카드(BiasCard/SignalsPanel/RiskStatusPanel)가 부르는 백엔드 엔드포인트(`get_market_bias`/`get_recent_signals`/`get_risk_status`) 자체가 아직 하드코딩된 neutral/빈 값을 반환하는 의도적 placeholder — 실전략 상태로 wiring하는 작업이 다음 단계 후보
 - [ ] CircuitBreaker 상태는 프로세스 메모리에만 존재 — 재시작하면 초기화됨 (DB 영속화는 다음 단계 후보)
 
 ## 현재 위치

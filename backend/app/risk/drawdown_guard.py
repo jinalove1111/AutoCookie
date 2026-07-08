@@ -1,4 +1,4 @@
-"""Drawdown guard stub.
+"""Drawdown guard.
 
 Part of the Risk Engine. Checks realized daily and weekly PnL against
 configured max-loss thresholds to determine whether new trades may be

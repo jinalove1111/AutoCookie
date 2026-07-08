@@ -1,4 +1,4 @@
-"""Position sizing stub.
+"""Position sizing.
 
 Part of the Risk Engine. Computes trade size from account balance, risk
 percent, and the entry/stop-loss distance. Must never be bypassed by

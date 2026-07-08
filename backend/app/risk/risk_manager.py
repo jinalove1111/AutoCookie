@@ -1,4 +1,4 @@
-"""Risk Manager stub — the single gate every trade signal must pass through.
+"""Risk Manager — the single gate every trade signal must pass through.
 
 Part of the Risk Engine. Sits between Strategy and Execution. All trade
 signals must pass through here before execution. Approval requires all of:

@@ -1,8 +1,13 @@
 """
-FastAPI application entrypoint for JadeCap Trading Bot (Milestone 1).
+FastAPI application entrypoint for JadeCap Trading Bot.
 
-This wires together the API routers only. It contains NO strategy, risk,
-or exchange execution logic. Routes currently return stub/placeholder data.
+This wires together the API routers, DB-backed lifespan startup (automatic
+`alembic upgrade head`), and CORS. It contains no strategy, risk, or exchange
+execution logic itself — that lives in app/strategy, app/risk, app/execution.
+Most routes are wired to real DB-backed data (dashboard status/positions/logs,
+trades, settings/mode); a few dashboard endpoints (market bias, recent
+signals, risk status) remain intentional placeholders pending live strategy
+state wiring.
 """
 
 from __future__ import annotations
@@ -56,7 +61,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title="JadeCap Trading Bot API",
-    description="Milestone 1 architecture/foundation skeleton (no live trading logic).",
+    description="Paper/backtest trading bot API, real DB-backed (no live trading logic).",
     version="0.1.0",
     lifespan=lifespan,
 )
