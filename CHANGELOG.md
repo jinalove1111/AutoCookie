@@ -4,6 +4,59 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Paper trades now actually close on SL/TP, with real fill prices recorded
+
+### Fixed
+- **Paper trades opened but never closed**: `TradeTracker().record_trade(status="open")`
+  recorded a trade, but nothing afterward ever checked it against a
+  current price or closed it — `TradeJournal`'s daily/weekly reports (and
+  therefore the loss-limit circuit breaker) could never see a realized
+  loss. `scripts/run_paper.py`'s `run_once()` now runs an exit-check step
+  against every open position on EVERY pass (single-pass and loop mode
+  alike) before signal generation, closing any position whose SL/TP is
+  reached via `PaperBroker().check_exit()` / `TradeTracker().close_trade()`.
+- **Trade persistence recorded the unfilled planned price, not the real
+  fill**: found while verifying an in-flight, uncommitted diff for
+  completeness — its own docstring already claimed `entry_price` was
+  being recorded from `ExecutionResult.fill_price`, but the actual
+  assignment still used `signal.entry_price` (the diff was left
+  incomplete). Fixed to actually use `result.fill_price` (falling back to
+  `signal.entry_price` only if absent). This matters because the new
+  `_compute_exit_pnl()` assumes `position["entry_price"]` is the real
+  fill — uncorrected, every paper trade's PnL would have been silently
+  computed against a price that was never actually filled.
+- `PaperBroker.check_exit()` previously assumed SL/TP fills happen at
+  exactly the trigger price. Now applies the same unfavorable-slippage
+  convention as `fill_entry()`, mirrored in the opposite direction (exits
+  are the opposite-side trade from entries).
+
+### Added
+- `ExecutionResult` gains `fill_price`/`fee_percent` (both `None` on any
+  failure path), surfacing what `PaperBroker.fill_entry()` already
+  computed instead of forcing callers to fall back to the unfilled
+  planned price and a hardcoded fee.
+- `scripts/run_paper.py`: `_check_and_close_open_positions()` /
+  `_compute_exit_pnl()` (PnL formula deliberately mirrors
+  `BacktestEngine._simulate_trade()` exactly — real position size × real
+  price move, minus a flat taker fee applied per leg to that leg's actual
+  notional). A one-trade-open-at-a-time concurrency guard skips signal
+  generation for the rest of a pass if any position remains open after
+  the exit-check step (mirrors `BacktestEngine`'s no-overlap model).
+  `run_once()`'s summary dict gains `positions_closed` /
+  `skipped_signal_generation` / `skipped_reason` (existing fields
+  unchanged in meaning).
+
+### Verified
+- `pytest backend/tests/` 136/136 passing.
+- Real temp-SQLite, real `alembic upgrade head`, no mocks: executed a
+  signal through the real `ExecutionEngine`/`PaperBroker` (fill_price
+  0.02% above the planned entry, as expected from `SLIPPAGE_PERCENT`),
+  persisted it via the fixed logic (`entry_price` = the real fill, not
+  the planned price), reloaded the open position from the DB, drove it
+  through a take-profit exit via `PaperBroker.check_exit()`, computed the
+  round-trip PnL, and closed it — confirming the DB no longer shows it as
+  open.
+
 ## [Unreleased] - Capital-protection: real date-scoped daily/weekly PnL wired into RiskManager and the circuit breaker
 
 ### Fixed

@@ -131,7 +131,11 @@ def test_paper_broker_check_exit_long_stop_loss_triggers():
 
     result = broker.check_exit(position, current_price=94)
 
-    assert result == {"exit_price": 95, "reason": "stop_loss"}
+    # Closing a long = selling -> unfavorable slippage is a LOWER fill than
+    # the raw stop_loss trigger level (see check_exit's docstring).
+    assert result["reason"] == "stop_loss"
+    assert result["exit_price"] < 95
+    assert result["exit_price"] == pytest.approx(95 * (1 - 0.0002))
 
 
 def test_paper_broker_check_exit_long_take_profit_triggers():
@@ -140,7 +144,9 @@ def test_paper_broker_check_exit_long_take_profit_triggers():
 
     result = broker.check_exit(position, current_price=111)
 
-    assert result == {"exit_price": 110, "reason": "take_profit"}
+    assert result["reason"] == "take_profit"
+    assert result["exit_price"] < 110
+    assert result["exit_price"] == pytest.approx(110 * (1 - 0.0002))
 
 
 def test_paper_broker_check_exit_none_when_price_between():
@@ -154,8 +160,18 @@ def test_paper_broker_check_exit_short_mirrors_long():
     broker = PaperBroker()
     position = {"direction": "short", "stop_loss": 105, "take_profit": 90}
 
-    assert broker.check_exit(position, current_price=106) == {"exit_price": 105, "reason": "stop_loss"}
-    assert broker.check_exit(position, current_price=89) == {"exit_price": 90, "reason": "take_profit"}
+    # Closing a short = buying -> unfavorable slippage is a HIGHER fill than
+    # the raw trigger level.
+    sl_result = broker.check_exit(position, current_price=106)
+    assert sl_result["reason"] == "stop_loss"
+    assert sl_result["exit_price"] > 105
+    assert sl_result["exit_price"] == pytest.approx(105 * (1 + 0.0002))
+
+    tp_result = broker.check_exit(position, current_price=89)
+    assert tp_result["reason"] == "take_profit"
+    assert tp_result["exit_price"] > 90
+    assert tp_result["exit_price"] == pytest.approx(90 * (1 + 0.0002))
+
     assert broker.check_exit(position, current_price=100) is None
 
 
@@ -248,6 +264,22 @@ def test_execution_engine_executes_approved_signal_in_paper_mode(monkeypatch):
     assert result.success is True
     assert result.order_id is not None
     assert result.error is None
+    # fill_price/fee_percent now surface what PaperBroker.fill_entry()
+    # already computes -- not left as None placeholders.
+    assert result.fill_price is not None
+    assert result.fill_price > 100  # long: unfavorable slippage = higher fill
+    assert result.fee_percent == 0.05
+
+
+def test_execution_engine_rejects_unapproved_signal_has_no_fill():
+    engine = ExecutionEngine()
+    signal = FakeSignal(direction="long", entry_price=100, stop_loss=95, take_profit=110)
+    decision = FakeRiskDecision(approved=False, reasons=["rr below MIN_RR"])
+
+    result = engine.execute(signal, decision)
+
+    assert result.fill_price is None
+    assert result.fee_percent is None
 
 
 def test_execution_engine_blocks_when_live_trading_not_allowed(monkeypatch):

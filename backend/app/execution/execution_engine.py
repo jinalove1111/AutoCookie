@@ -19,11 +19,22 @@ from app.execution.paper_broker import PaperBroker
 
 @dataclass
 class ExecutionResult:
-    """Outcome of attempting to execute an approved trade signal."""
+    """Outcome of attempting to execute an approved trade signal.
+
+    `fill_price`/`fee_percent` surface what `PaperBroker.fill_entry()`
+    already computes (slippage-adjusted fill price, flat taker fee percent)
+    so callers (e.g. `scripts/run_paper.py`'s trade-persistence step) can
+    record the real fill instead of falling back to the signal's planned
+    `entry_price` and a hardcoded fee. Both are `None` on any failure path
+    (no fill ever happened), and default to `None` so existing positional/
+    keyword construction without these two fields keeps working.
+    """
 
     success: bool
     order_id: str | None
     error: str | None
+    fill_price: float | None = None
+    fee_percent: float | None = None
 
 
 class ExecutionEngine:
@@ -55,4 +66,10 @@ class ExecutionEngine:
 
         fill = self.order_manager.place_entry(signal)
 
-        return ExecutionResult(success=True, order_id=fill["order_id"], error=None)
+        return ExecutionResult(
+            success=True,
+            order_id=fill["order_id"],
+            error=None,
+            fill_price=fill.get("fill_price"),
+            fee_percent=fill.get("fee_percent"),
+        )

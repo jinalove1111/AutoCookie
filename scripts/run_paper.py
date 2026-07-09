@@ -116,6 +116,7 @@ if settings.TRADING_MODE == "live" and not settings.is_live_trading_allowed:
 
 from app.data.candle_fetcher import CandleFetcher
 from app.execution.execution_engine import ExecutionEngine
+from app.execution.paper_broker import FEE_PERCENT, SLIPPAGE_PERCENT, PaperBroker
 from app.notifications.discord import send_discord_alert
 from app.notifications.telegram import send_telegram_alert
 from app.portfolio.journal import TradeJournal
@@ -165,6 +166,92 @@ def _count_trades_opened_today(tracker: TradeTracker) -> int:
         for row in rows
         if row.get("opened_at") is not None and row["opened_at"].date() == today
     )
+
+
+def _compute_exit_pnl(position: dict, exit_price: float) -> float:
+    """Compute realized PnL for closing `position` at `exit_price`.
+
+    Deliberately mirrors `app.backtesting.backtest_engine.BacktestEngine.
+    _simulate_trade`'s formula EXACTLY (same milestone's PnL/fee model,
+    reused rather than re-derived to avoid a third, silently-divergent
+    formula): PnL is the real price move times the real position size (not
+    a percent-of-account approximation), minus a flat taker fee
+    (`app.execution.paper_broker.FEE_PERCENT`) applied once per leg to that
+    leg's actual notional (entry leg = size * entry_price, exit leg =
+    size * exit_price).
+
+    `position["entry_price"]` is expected to already be the broker's real
+    (slippage-adjusted) fill price -- see the "5. Persist the executed
+    trade" section below, which now records `result.fill_price` instead of
+    the old `signal.entry_price` placeholder -- so this is a real
+    round-trip PnL, not one anchored to a price that was never actually
+    filled.
+    """
+    size = position["size"]
+    entry_price = position["entry_price"]
+    direction = position["direction"]
+    fee_rate = FEE_PERCENT / 100
+
+    if direction == "long":
+        raw_pnl = size * (exit_price - entry_price)
+    else:
+        raw_pnl = size * (entry_price - exit_price)
+
+    entry_fee = fee_rate * size * entry_price
+    exit_fee = fee_rate * size * exit_price
+    return raw_pnl - entry_fee - exit_fee
+
+
+def _check_and_close_open_positions(current_price: float) -> list[int]:
+    """Check every currently-open position against `current_price` via
+    `PaperBroker().check_exit(...)` and close (via `TradeTracker().
+    close_trade`) any that trigger a stop-loss or take-profit. Returns the
+    list of trade ids closed this call.
+
+    KNOWN LIMITATION (documented, not silently glossed over): `current_price`
+    is a single point-in-time price (the most recently fetched LTF candle's
+    CLOSE), not an intra-candle high/low scan like `BacktestEngine.
+    _simulate_trade` does over historical OHLC. A stop-loss or take-profit
+    level that was touched and reversed WITHIN a candle -- without that
+    candle's own close being past the level -- will be missed here and only
+    caught on a LATER pass, if/when price actually closes past the level.
+    This is a real, accepted gap of close-driven (rather than tick- or
+    intrabar-driven) paper exit checking, not a bug: a genuinely tick-level
+    paper simulation would need a streaming price feed, out of scope here.
+    """
+    broker = PaperBroker()
+    tracker = TradeTracker()
+    closed_ids: list[int] = []
+
+    for position in tracker.get_open_positions():
+        exit_info = broker.check_exit(position, current_price)
+        if exit_info is None:
+            continue
+
+        exit_price = exit_info["exit_price"]
+        pnl = _compute_exit_pnl(position, exit_price)
+        closed_at = datetime.now(timezone.utc)
+        tracker.close_trade(
+            position["id"],
+            exit_price=exit_price,
+            pnl=pnl,
+            closed_at=closed_at,
+        )
+        closed_ids.append(position["id"])
+        print(
+            f"Closed paper trade id={position['id']} ({position['symbol']} "
+            f"{position['direction']}) via {exit_info['reason']}: "
+            f"exit_price={exit_price:.6f} pnl={pnl:.6f}"
+        )
+        alert_message = (
+            f"Paper trade closed: {position['direction']} {position['symbol']} "
+            f"@ {exit_price:.6f} ({exit_info['reason']}, pnl={pnl:.2f}, "
+            f"trade_id={position['id']})"
+        )
+        send_telegram_alert(alert_message)
+        send_discord_alert(alert_message)
+
+    return closed_ids
 
 
 def _check_drawdown_and_maybe_trip(
@@ -248,13 +335,48 @@ def run_once(
         "trade_id": int | None,
         "error": str | None,
         "exit_code": int,          # 0 = safe/expected outcome, 1 = genuine failure
+        "positions_closed": list[int],   # trade ids closed by this pass's exit-check step
+        "skipped_signal_generation": bool,  # True if the concurrency guard skipped
+                                             # everything past the exit-check step
+        "skipped_reason": str | None,       # why, when skipped_signal_generation is True
       }
 
     When `circuit_breaker` is None (the default -- used by the no-args
     single-pass path), behavior/prints/exit-code are byte-for-byte identical
-    to Milestone 3's `main()`. When a `circuit_breaker` is supplied (loop
-    mode), an extra drawdown check runs first, and a Telegram/Discord alert
-    fires after any successfully persisted trade.
+    to Milestone 3's `main()` for the SIGNAL/RISK/EXECUTE portion. When a
+    `circuit_breaker` is supplied (loop mode), an extra drawdown check runs
+    first, and a Telegram/Discord alert fires after any successfully
+    persisted trade.
+
+    Milestone 4 follow-up #3 (paper trades actually closing -- see this
+    module's own trade-persistence step and `_check_and_close_open_positions`
+    above): EVERY call of `run_once()` -- single-pass AND each loop-mode
+    iteration alike, never loop-mode-only -- now runs an exit-check step
+    against every open position before doing anything else pipeline-wise,
+    followed by a one-trade-open-at-a-time concurrency guard. Both were
+    previously entirely absent: trades opened via `TradeTracker().
+    record_trade(status="open")` but nothing ever checked them against a
+    current price or closed them, so `TradeJournal`'s daily/weekly/all-time
+    reports (and therefore the daily/weekly loss-limit circuit-breaker
+    check above) could never see a realized loss -- a silent, total defeat
+    of both reporting and capital protection in real operation. See
+    `_check_and_close_open_positions`'s docstring for the accepted
+    close-price-only (not intrabar) limitation of this check.
+
+    Concurrency-guard design call (documented, not implicit): if any
+    position(s) remain open AFTER the exit-check step, this pass skips
+    signal generation/risk/execution ENTIRELY for the rest of this call --
+    mirrors `BacktestEngine`'s one-trade-open-at-a-time (no-overlap) model,
+    the simplest choice that keeps real paper risk exposure consistent with
+    what was actually backtested. When this happens, `signal_found`/
+    `approved`/`executed` are left at their untouched defaults
+    (False/None/None) -- deliberately identical to the existing "no signal
+    generated this pass" case, since signal generation genuinely did not
+    run either way; the NEW `skipped_signal_generation`/`skipped_reason`
+    fields are what distinguish "guard skipped this pass" from "the
+    strategy just found nothing" for any caller that cares about the
+    difference, without changing the meaning callers already rely on for
+    the three original fields.
     """
     summary: dict[str, Any] = {
         "signal_found": False,
@@ -263,6 +385,9 @@ def run_once(
         "trade_id": None,
         "error": None,
         "exit_code": 0,
+        "positions_closed": [],
+        "skipped_signal_generation": False,
+        "skipped_reason": None,
     }
 
     # --- 0. Drawdown/circuit-breaker check (loop mode only) ---
@@ -287,6 +412,53 @@ def run_once(
         print(f"No candles returned for {settings.SYMBOL}/{settings.DEFAULT_TIMEFRAME}.")
         summary["error"] = "no candles returned"
         summary["exit_code"] = 1
+        return summary
+
+    # --- 1.5 Check open positions for a stop-loss/take-profit exit ---
+    # Runs BEFORE signal generation (not after), and on EVERY pass
+    # (single-pass and loop-mode alike, not loop-mode-only), so a position
+    # that closes this pass frees capacity within the SAME pass rather than
+    # forcing a wasted no-op pass first. Uses the LTF candle series just
+    # fetched above -- the natural, already-available "current price"
+    # source (its most recent candle's close) -- rather than firing a
+    # separate price fetch. See `_check_and_close_open_positions`'s
+    # docstring for the close-price-only (not intrabar high/low) limitation
+    # of this check.
+    try:
+        current_price = candles[-1]["close"]
+        closed_ids = _check_and_close_open_positions(current_price)
+    except Exception as exc:
+        print(f"ERROR: exit-check step failed: {exc}")
+        summary["error"] = str(exc)
+        summary["exit_code"] = 1
+        return summary
+
+    summary["positions_closed"] = closed_ids
+
+    # --- 1.6 Concurrency guard: at most one open position at a time ---
+    # Re-queries open positions AFTER the exit-check step above (not
+    # before), so a position that just closed this same pass correctly
+    # frees capacity for a new signal in the SAME pass rather than needing
+    # an extra pass. See this function's docstring for the full design
+    # rationale and the summary-field semantics used when this trips.
+    try:
+        still_open = TradeTracker().get_open_positions()
+    except Exception as exc:
+        print(f"ERROR: could not query open positions for the concurrency guard: {exc}")
+        summary["error"] = str(exc)
+        summary["exit_code"] = 1
+        return summary
+
+    if still_open:
+        reason = (
+            f"{len(still_open)} open position(s) remain after the exit-check "
+            "step; skipping signal generation/risk/execution this pass "
+            "(one-trade-open-at-a-time guard, mirroring BacktestEngine's "
+            "no-overlap model)."
+        )
+        print(reason)
+        summary["skipped_signal_generation"] = True
+        summary["skipped_reason"] = reason
         return summary
 
     try:
@@ -398,13 +570,21 @@ def run_once(
     summary["executed"] = True
 
     # --- 5. Persist the executed trade ---
-    # ExecutionResult only exposes success/order_id/error (no fill price),
-    # so entry_price falls back to the signal's planned entry_price as a
-    # reasonable approximation rather than an actual fill price. Similarly,
-    # fee/slippage/leverage are not sourced from ExecutionResult or
-    # TradeSignal (neither carries them), so they are recorded as 0.0/1.0
-    # placeholders below -- a real fee/slippage/leverage feed is out of
-    # scope for this milestone.
+    # entry_price now records `result.fill_price` (the broker's real,
+    # slippage-adjusted fill) so `_compute_exit_pnl` computes a genuine
+    # round-trip PnL at close time -- see that function's docstring. Falls
+    # back to the signal's planned entry_price only if fill_price is
+    # somehow absent (defensive; PaperBroker.fill_entry always sets it on
+    # a successful fill). Position sizing intentionally still keys off the
+    # planned `signal.entry_price` (not the fill), mirroring
+    # `BacktestEngine`'s own size-before-fill ordering: risk is sized
+    # against the planned entry/stop distance before the fill/slippage is
+    # known. fee/leverage are not sourced from ExecutionResult or
+    # TradeSignal, so they are recorded as 0.0/1.0 placeholders below --
+    # matching `BacktestEngine`'s trade record, which likewise nets fees
+    # into `pnl` rather than storing them as a separate field. Slippage is
+    # recorded as the actual applied fraction (not a 0.0 placeholder) since
+    # `PaperBroker` already computes and exposes it via `fill_price`.
     size = calculate_position_size(
         account_balance=PLACEHOLDER_ACCOUNT_BALANCE,
         risk_percent=settings.RISK_PER_TRADE_PERCENT,
@@ -412,16 +592,18 @@ def run_once(
         stop_loss=signal.stop_loss,
     )
 
+    entry_price = result.fill_price if result.fill_price is not None else signal.entry_price
+
     trade_data: dict[str, Any] = {
         "symbol": signal.symbol,
         "direction": signal.direction,
-        "entry_price": signal.entry_price,
+        "entry_price": entry_price,
         "stop_loss": signal.stop_loss,
         "take_profit": signal.take_profit,
         "size": size,
         "leverage": 1.0,
         "fee": 0.0,
-        "slippage": 0.0,
+        "slippage": SLIPPAGE_PERCENT,
         "status": "open",
         "mode": "paper",
         "opened_at": datetime.now(timezone.utc),
@@ -448,7 +630,7 @@ def run_once(
     # raise (frozen contract) -- called unconditionally, no extra gating.
     alert_message = (
         f"Paper trade executed: {signal.direction} {signal.symbol} "
-        f"@ {signal.entry_price} (trade_id={trade_id})"
+        f"@ {entry_price} (trade_id={trade_id})"
     )
     send_telegram_alert(alert_message)
     send_discord_alert(alert_message)

@@ -75,7 +75,7 @@ Strategy Engine cannot send orders directly.
 | Mode | Data Source | Orders | Capital | Notes |
 |---|---|---|---|---|
 | `BACKTEST_MODE` | Historical candles | No exchange orders | Simulated | Includes fee + slippage simulation |
-| `PAPER_MODE` | Live market data | Simulated orders | No real capital | **Default mode** |
+| `PAPER_MODE` | Live market data | Simulated orders | No real capital | **Default mode**. `PaperBroker` simulates fee + slippage on both entry and SL/TP exit fills; `run_paper.py` checks/closes open positions every pass |
 | `LIVE_MODE` | Real exchange API | Real orders | Real capital | Disabled by default. Enabled only when `LIVE_TRADING_ENABLED=true` |
 
 ## 4. Folder Structure

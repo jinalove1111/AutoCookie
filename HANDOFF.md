@@ -1,6 +1,20 @@
 # HANDOFF — JadeCap Automated Trading Bot
 
-## 상태: 자본 보호 갭 해소 완료 — daily/weekly PnL이 all-time cumulative였던 문제, RiskManager에 daily/weekly_pnl_percent가 전혀 배선 안 되어 있던 문제, MAX_WEEKLY_LOSS_PERCENT 미집행 문제까지 3중 해소. Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+## 상태: 페이퍼 트레이드가 SL/TP 도달 시 실제로 청산되지 않던 문제 해소 — 이제 매 pass마다 오픈 포지션을 실제로 체크/청산하고 PnL을 기록함. 실 체결가(슬리피지 반영)가 진입가로 기록되도록 수정. Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+
+## 전체 회차 (페이퍼 트레이드 청산: SL/TP 실체결 + 실 fill price 기록)
+- [x] **자본 보호 갭 발견/해소 — 페이퍼 트레이드가 열리기만 하고 절대 안 닫힘**: `TradeTracker().record_trade(status="open")`로 트레이드는 기록되지만, 그 이후 어떤 코드도 열린 포지션을 current price와 비교해 SL/TP 도달을 확인하거나 닫지 않았음 — `TradeJournal`의 daily/weekly 리포트(따라서 직전 회차에 배선한 loss-limit circuit breaker)가 실현 손실을 영원히 볼 수 없는 상태였음. `run_once()`에 매 pass(single-pass/loop 공용, loop-only 아님)마다 실행되는 "1.5 오픈 포지션 청산 체크" 단계 추가: `PaperBroker().check_exit()`으로 각 오픈 포지션을 확인하고, 트리거되면 `TradeTracker().close_trade()`로 실제 청산 + PnL 기록 + Telegram/Discord 알림(`scripts/run_paper.py`의 신규 `_check_and_close_open_positions()`/`_compute_exit_pnl()`)
+- [x] **동시성 가드 추가(1.6단계)**: 청산 체크 이후에도 여전히 열린 포지션이 있으면 해당 pass는 시그널 생성/리스크/체결을 전부 skip(one-trade-open-at-a-time, `BacktestEngine`의 no-overlap 모델과 일치). `run_once()` summary dict에 `positions_closed`/`skipped_signal_generation`/`skipped_reason` 신규 필드 추가(기존 3개 필드 `signal_found`/`approved`/`executed`의 의미는 무변경)
+- [x] `PaperBroker.check_exit()`에 청산 슬리피지 추가 — 기존엔 SL/TP 트리거 시 정확히 그 레벨 가격으로 체결된다고 가정(비현실적). `fill_entry()`와 동일한 컨벤션으로 불리한 방향 슬리피지 적용(포지션 종료는 반대 방향 거래이므로 진입과 정확히 반대 부호)
+- [x] `ExecutionEngine.execute()`가 이제 `ExecutionResult.fill_price`/`fee_percent`로 `PaperBroker.fill_entry()`가 이미 계산한 실 체결가/수수료율을 노출(이전엔 success/order_id/error만 노출, 호출자가 항상 미체결 planned `entry_price`로 대체해야 했음)
+- [x] **완결성 검증 중 실 버그 발견/수정 (operator 요청: "Verify whether they are complete")**: `scripts/run_paper.py`의 "5. Persist the executed trade" 섹션 docstring이 "이제 `result.fill_price`를 기록한다"고 주장했지만, 실제 코드는 여전히 미체결 `signal.entry_price`를 그대로 기록하고 있었음(docstring과 코드가 불일치하는 미완성 diff — 이전 세션이 docstring만 쓰고 실제 대입문은 안 고친 채 끝난 것으로 추정). 코드를 docstring이 애초에 주장한 대로 수정: `entry_price = result.fill_price if result.fill_price is not None else signal.entry_price`. **이 수정이 중요한 이유**: `_compute_exit_pnl()`이 `position["entry_price"]`가 실 체결가라고 가정하고 라운드트립 PnL을 계산하므로, 고쳐지지 않았다면 모든 페이퍼 트레이드의 PnL이 실제로 한 번도 체결된 적 없는 가격을 기준으로 계산되는 조용한 회계 오류가 났을 것. Telegram/Discord 알림 메시지도 `signal.entry_price` 대신 실 체결가를 쓰도록 함께 수정. `trade_data["slippage"]`도 항상 `0.0` placeholder였던 것을 `PaperBroker`가 실제로 적용한 슬리피지 비율(`SLIPPAGE_PERCENT`)로 교체. 포지션 사이징(`calculate_position_size`)은 의도적으로 계획된 `signal.entry_price` 기준 그대로 유지 — `BacktestEngine`과 동일한 size-before-fill 순서(리스크는 체결 전, 계획된 entry/stop 거리로 사이징)
+- [x] `docs/architecture.md`의 Trading Modes 표 — `PAPER_MODE` 행이 슬리피지/체결 시뮬레이션을 전혀 언급 안 하던 것 보강(fee+slippage 시뮬레이션 자체는 이번 회차 이전부터 `PaperBroker.fill_entry()`에 존재했으나 문서화가 안 돼 있었음)
+- [x] 전체 `pytest backend/tests/` **136/136 통과**(diff에 이미 포함돼 있던 신규 테스트 포함, 이번 완결성 수정으로 회귀 없음 재확인)
+- [x] 오케스트레이터 재검증용 실측(스크립트 레벨 로직은 이 repo 컨벤션대로 pytest가 아니라 실 DB 재현으로 검증 — `scripts/run_paper.py`는 처음부터 전용 pytest 파일이 없고 항상 이 방식으로 검증돼 옴): 임시 SQLite에 실 `alembic upgrade head` 적용 → 실 `ExecutionEngine`/`PaperBroker`로 signal 체결(`fill_price=100.02`, planned `100.0`과 다름을 확인) → `run_paper.py`의 수정된 persist 로직을 그대로 재현해 `TradeTracker().record_trade()`로 실 DB에 기록(`entry_price=100.02`로 기록됨 — 버그가 안 고쳐졌다면 `100.0`이었을 것) → `TradeTracker().get_open_positions()`로 실 DB에서 재조회한 포지션으로 `PaperBroker().check_exit()` 호출(`current_price=116.0` → take_profit 트리거, `exit_price=114.977`) → `_compute_exit_pnl` 공식을 그대로 재현(`pnl=14.8495...`, 버그가 안 고쳐졌다면 다른 entry_price로 계산돼 틀린 값이 나왔을 것) → `TradeTracker().close_trade()`로 실 청산 → `get_open_positions()`가 빈 리스트임을 확인. 5단계 전부 실패 없이 통과
+- [x] `py_compile` 무오류 확인(`scripts/run_paper.py`), grep 확인 — 신규 코드에 TODO/placeholder/mock/bare pass/NotImplementedError 없음
+- [x] `CHANGELOG.md`에 신규 Unreleased 섹션 추가
+- [x] scope 준수: `backend/app/strategy/*`, `backend/app/backtesting/*`, `risk/*`, `exchange/*`, `frontend/*`, live-trading 게이팅 전부 무변경(diff에 등장하지 않음)
+- [x] git commit/push 완료 (`origin/master`) — operator가 사전에 "커밋 후 푸시" 명시적으로 요청함
 
 ## 전체 회차 (자본 보호: 실 date-scoped daily/weekly PnL을 RiskManager·circuit breaker에 배선)
 - [x] **갭 발견/해소 1 — all-time을 daily로 오인**: `TradeJournal.generate_journal_report()`가 날짜 필터가 전혀 없어 `mode=="paper"`인 모든 트레이드를 all-time으로 집계했는데, `scripts/run_paper.py`의 `_check_drawdown_and_maybe_trip()`(loop mode 전용)이 이 all-time 합계를 `daily_pnl_percent`로 오용 — circuit breaker의 "daily loss limit"이 실제로는 all-time 누적 손실을 비교하고 있었음(당일 급락은 놓치고, 여러 날에 걸친 누적 손실이 threshold를 넘기면 "당일"로 잘못 표시하며 trip)
@@ -17,7 +31,7 @@
 - [x] `py_compile` 무오류 확인(`backend/app/portfolio/journal.py`, `scripts/run_paper.py`, `backend/tests/test_portfolio.py`, `backend/tests/test_risk_daily_weekly_real_integration.py`), grep 확인 — TODO/placeholder-스텁/mock/bare pass/NotImplementedError 신규 코드 없음(기존 `PLACEHOLDER_ACCOUNT_BALANCE` 네이밍/주석은 이전부터 있던 것으로 무관)
 - [x] `CHANGELOG.md`에 신규 Unreleased 섹션 추가(append, 기존 항목 전부 무변경)
 - [x] scope 준수: `backend/app/strategy/*`, `backend/app/backtesting/*`, `backend/app/execution/*`, `backend/app/exchange/*`, `risk/risk_manager.py`, `risk/drawdown_guard.py`, `frontend/*`, live-trading 게이팅 전부 무변경(diff에 등장하지 않음) — `risk_manager.py`/`drawdown_guard.py`는 정독해서 기존 `daily_pnl_percent`/`weekly_pnl_percent` 파라미터·`DrawdownGuard` boolean 컨벤션이 이미 이번 배선을 그대로 지원함을 확인만 하고 실제로 한 글자도 안 건드림
-- [x] **git commit 안 함** — operator/CTO 독립 재검증 대기 (이전 마일스톤들과 동일 패턴)
+- [x] git commit/push 완료 (`d6c676a`) — 작성 당시엔 미커밋이었으나 이후 세션에서 operator 승인 후 커밋/push됨(이 문서가 뒤늦게 반영)
 
 ## 전체 회차 (백테스트 엔진: 포지션 사이징 정확성 갭 해소 — 100%-notional placeholder → 실 RISK_PER_TRADE_PERCENT 사이징)
 - [x] **정확성 갭 발견/해소**: `BacktestEngine._simulate_trade()`가 자신의 docstring에서도 스스로 인정하던 placeholder(`pnl = account_balance * net_return` — 매 트레이드가 계정 전체 잔고를 notional로 리스크)를 실제 Risk Engine 사이징 모델로 교체. `docs/risk_rules.md`가 문서화하고 `scripts/run_paper.py`가 이미 올바르게 쓰고 있던 `calculate_position_size(account_balance, RISK_PER_TRADE_PERCENT, entry, stop_loss)`(`backend/app/risk/position_sizing.py`, **무변경** — consume만 함)를 `BacktestEngine`에도 동일하게 배선. 그동안 백테스트 PnL/승률/MDD 수치는 실제 paper/live가 돌릴 전략보다 훨씬 리스크가 큰(계정 전액 notional) 가상의 전략을 측정하고 있었던 것 — 이번 수정으로 백테스트가 실제로 대표성 있는 증거가 됨
@@ -31,7 +45,7 @@
 - [x] `py_compile` 무오류 확인(`backend/app/backtesting/backtest_engine.py`, `backend/tests/test_backtest_engine.py`), 변경/신규 코드에 TODO/placeholder/mock/bare pass/NotImplementedError 없음(grep 확인 — "placeholder"라는 단어 자체는 "구 placeholder를 교체했다"는 설명 주석/독스트링에만 등장, 실제 미구현 코드 없음)
 - [x] `CHANGELOG.md`에 신규 Unreleased 섹션 추가(append, 기존 3개 마일스톤 항목 무변경)
 - [x] scope 준수: `backend/app/strategy/*`, `execution/`, `risk/position_sizing.py` 자체, `exchange/`, live-trading 게이팅 전부 무변경(diff에 등장하지 않음) — `risk/position_sizing.py`는 import해서 consume만 함
-- [x] **git commit 안 함** — operator/CTO 독립 재검증 대기 (이전 3개 마일스톤과 동일 패턴)
+- [x] git commit/push 완료 (`0e52b5a`) — 작성 당시엔 미커밋이었으나 이후 세션에서 operator 승인 후 커밋/push됨(이 문서가 뒤늦게 반영)
 
 ## 전체 회차 (백테스트 엔진: 실 HTF/LTF 워크포워드 + no-lookahead HTF 커서)
 - [x] **이전 회차에서 보고된 블로커 해소**: 직전 Strategy Engine 커밋(`9db3db3`)이 `SignalEngine.generate_signal(symbol, ltf_candles, htf_candles)`로 시그니처를 바꾼 뒤, `backend/app/backtesting/backtest_engine.py`의 walk-forward 루프가 여전히 구 시그니처(`generate_signal(symbol=symbol, candles=candles[:i+1])`)로 호출 중이라 `scripts/run_backtest.py` 전체 실행이 `TypeError`로 즉시 실패하던 문제 수정. `BacktestEngine.run()` 시그니처를 `run(self, ltf_candles, htf_candles, signal_engine, risk_manager, ...)`로 변경
@@ -116,7 +130,7 @@
 - [x] ~~CircuitBreaker 상태는 프로세스 메모리에만 존재~~ — DB 영속화 완료(위 참조, `028087a`)
 
 ## 현재 위치
-Milestone 5 전체 완료 + 오케스트레이터 직접 실제 Postgres 검증 통과. git/GitHub 세팅 + Alembic 마이그레이션까지 완료되어 Paper Mode가 인프라적으로도 완결. Milestone 5 변경분 커밋/push는 아직 안 함 — 다음 요청 대기 중 (Small Live 진행 시 API 키 발급 + 단계별 승인 필요).
+Paper Mode 파이프라인이 이제 end-to-end로 실제로 동작함: Strategy Engine(HTF/LTF 실분리 + confluence 방향 일치) → Risk Engine(실 daily/weekly loss-limit 집행 + 실 RISK_PER_TRADE_PERCENT 사이징, Backtest/Paper 공용) → Execution(실 체결가/수수료 노출) → 포지션이 실제로 열리고 SL/TP 도달 시 실제로 닫히며 실 fill price 기준 PnL이 기록됨 → circuit breaker가 그 실현 손실을 실제로 볼 수 있음. 모든 회차가 git에 커밋/push 완료(`origin/master`, 최신 커밋은 위 "전체 회차" 항목들 참조 — 이 문서의 각 항목에 실제 커밋 해시가 없다면 아직 미커밋일 수 있으니 `git log`로 교차 확인 권장). 다음 후보(우선순위: Strategy > Risk > Backtest > Paper Trading > Dashboard > Live): 대시보드의 `BiasCard`/`SignalsPanel`/`RiskStatusPanel`이 여전히 하드코딩 placeholder(`get_market_bias`/`get_recent_signals`/`get_risk_status` 백엔드 엔드포인트 자체가 아직 실전략 상태로 안 이어짐). Small Live 진행 시 API 키 발급 + 단계별 승인 필요(operator 승인 없이는 절대 진행 안 함).
 
 ## 설계 결정 메모
 - Backend: FastAPI + SQLAlchemy 2.0 + Alembic / Frontend: Next.js App Router + TypeScript (operator 확인, Milestone 1)
@@ -130,6 +144,6 @@ Milestone 5 전체 완료 + 오케스트레이터 직접 실제 Postgres 검증 
 - LiveBroker, exchange 클라이언트는 여전히 `NotImplementedError` 완전 스텁 — 실거래소 API 호출·실주문 코드 전혀 없음
 - `LIVE_TRADING_ENABLED` 기본값 `false` 유지, safety_checks.verify_safe_to_trade가 live-mode 오설정을 defense-in-depth로 재차 차단
 - Paper 실행 결과(트레이드 손익)는 파이프라인 배관 검증 목적 — 전략 수익성 검증 아님, 실거래 여부와 무관하게 계속 유효
-- git/GitHub는 Milestone 5에서 완료됨 (`https://github.com/jinalove1111/AutoCookie.git`, 커밋 `a385faa`는 M1~M4분). M5 변경분(Alembic 등)은 아직 미커밋 — 다음 작업 전 커밋 권장
+- git/GitHub는 Milestone 5에서 세팅 완료됨 (`https://github.com/jinalove1111/AutoCookie.git`, 커밋 `a385faa`는 M1~M4분, `9cb98aa`가 M5분). 이후 전체 회차도 모두 커밋/push 완료 — 새 작업 시작 전 `git status`/`git log`로 항상 최신 상태 재확인 권장
 - 실사용 시 Postgres는 docker-compose 경로(미검증) 또는 직접 준비 필요 — 검증에 쓴 포터블 인스턴스는 임시였고 종료됨
 - **Small Live Trading으로 넘어갈 때는 이 문서의 "다음 단계" 항목을 반드시 operator와 재확인 — API 키 스코프(출금 권한 없음), 소액 한도, 단계별 승인 없이 절대 실주문 코드 작성/실행 금지**

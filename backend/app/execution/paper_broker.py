@@ -49,6 +49,15 @@ class PaperBroker:
         exit for `position`. Returns None if neither is triggered.
 
         `position` must expose at least: direction, stop_loss, take_profit.
+
+        Unfavorable-slippage convention (mirrors `fill_entry` for
+        consistency): closing a "long" position means SELLING, so an
+        unfavorable fill is LOWER than the trigger level, for either exit
+        reason (stop_loss or take_profit alike). Closing a "short" position
+        means BUYING, so an unfavorable fill is HIGHER than the trigger
+        level. This is the exact opposite direction of `fill_entry`'s
+        slippage for the same `direction`, since entering and exiting are
+        opposite-side trades.
         """
         direction = position.get("direction")
         stop_loss = position.get("stop_loss")
@@ -56,14 +65,26 @@ class PaperBroker:
 
         if direction == "long":
             if current_price <= stop_loss:
-                return {"exit_price": stop_loss, "reason": "stop_loss"}
+                return {
+                    "exit_price": stop_loss * (1 - SLIPPAGE_PERCENT),
+                    "reason": "stop_loss",
+                }
             if current_price >= take_profit:
-                return {"exit_price": take_profit, "reason": "take_profit"}
+                return {
+                    "exit_price": take_profit * (1 - SLIPPAGE_PERCENT),
+                    "reason": "take_profit",
+                }
             return None
 
         # "short" (mirrored): stop_loss is above entry, take_profit below.
         if current_price >= stop_loss:
-            return {"exit_price": stop_loss, "reason": "stop_loss"}
+            return {
+                "exit_price": stop_loss * (1 + SLIPPAGE_PERCENT),
+                "reason": "stop_loss",
+            }
         if current_price <= take_profit:
-            return {"exit_price": take_profit, "reason": "take_profit"}
+            return {
+                "exit_price": take_profit * (1 + SLIPPAGE_PERCENT),
+                "reason": "take_profit",
+            }
         return None
