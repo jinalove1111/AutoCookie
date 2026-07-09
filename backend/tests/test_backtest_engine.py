@@ -375,6 +375,121 @@ def test_simulate_trade_pnl_scales_with_size_not_flat_fraction_of_balance():
     assert trade_b["pnl"] == pytest.approx(trade_a["pnl"] * 2)
 
 
+# --- Break-even move (use_breakeven, opt-in -- see docs/strategy_coverage_audit.md
+# and BREAKEVEN_TRIGGER_R's docstring for why this is A/B tested, not default-on) ---
+
+
+def test_simulate_trade_breakeven_disabled_by_default_pullback_does_not_exit():
+    """Baseline/contrast: with use_breakeven left at its default (False), a
+    pullback all the way to entry_price after a 1R favorable move must NOT
+    exit the trade -- only the ORIGINAL stop_loss/take_profit matter.
+    """
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=115.0, direction="long")
+    candle0 = _c(100, 100, 100, 100, BASE_TS)
+    candle1 = _c(100, 106, 99, 105, BASE_TS + LTF_STEP)  # moves 1R (to 105) in favor
+    candle2 = _c(100, 101, 98, 100, BASE_TS + LTF_STEP * 2)  # pulls back to entry -- must NOT exit
+    ltf_candles = [candle0, candle1, candle2]
+
+    trade, exit_index, _ = BacktestEngine()._simulate_trade(
+        signal, ltf_candles, 0, account_balance=10000.0, fee_percent=0.0,
+        slippage_percent=0.0, size=1.0,
+    )
+
+    # No candle ever hit the ORIGINAL stop (95) or take_profit (115), so
+    # the loop runs out of data and falls back to the last candle's close.
+    assert exit_index == 2
+    assert trade["exit_price"] == 100  # candle2's close, not a stop-out
+    assert trade["breakeven_triggered"] is False
+
+
+def test_simulate_trade_breakeven_enabled_pullback_to_entry_exits_at_breakeven():
+    """With use_breakeven=True, the SAME pullback-to-entry candle from the
+    contrast test above now DOES exit the trade -- at entry_fill (a scratch,
+    not the original stop_loss).
+    """
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=115.0, direction="long")
+    candle0 = _c(100, 100, 100, 100, BASE_TS)
+    candle1 = _c(100, 106, 99, 105, BASE_TS + LTF_STEP)  # triggers breakeven (1R = 105)
+    candle2 = _c(100, 101, 98, 100, BASE_TS + LTF_STEP * 2)  # low=98 <= effective_stop(100)
+    ltf_candles = [candle0, candle1, candle2]
+
+    trade, exit_index, _ = BacktestEngine()._simulate_trade(
+        signal, ltf_candles, 0, account_balance=10000.0, fee_percent=0.0,
+        slippage_percent=0.0, size=1.0, use_breakeven=True,
+    )
+
+    assert exit_index == 2
+    assert trade["exit_price"] == 100.0  # entry_fill (breakeven), NOT original stop_loss=95
+    assert trade["pnl"] == pytest.approx(0.0)  # scratch trade, zero fees in this test
+    assert trade["breakeven_triggered"] is True
+
+
+def test_simulate_trade_breakeven_does_not_prevent_reaching_take_profit():
+    """A breakeven trigger earlier in the trade must not block a LATER
+    candle from still reaching the real take_profit -- breakeven only
+    matters if price pulls back far enough to touch the new (entry) stop.
+    """
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=115.0, direction="long")
+    candle0 = _c(100, 100, 100, 100, BASE_TS)
+    candle1 = _c(100, 106, 99, 105, BASE_TS + LTF_STEP)  # triggers breakeven, no pullback after
+    candle2 = _c(110, 116, 109, 115, BASE_TS + LTF_STEP * 2)  # reaches real take_profit=115
+    ltf_candles = [candle0, candle1, candle2]
+
+    trade, exit_index, _ = BacktestEngine()._simulate_trade(
+        signal, ltf_candles, 0, account_balance=10000.0, fee_percent=0.0,
+        slippage_percent=0.0, size=1.0, use_breakeven=True,
+    )
+
+    assert exit_index == 2
+    assert trade["exit_price"] == 115.0  # real take_profit, not entry_fill
+    assert trade["breakeven_triggered"] is True
+
+
+def test_simulate_trade_breakeven_same_candle_conservative_ordering_favors_original_stop():
+    """Conservative-ordering proof (mirrors this method's existing
+    SL-before-TP-in-the-same-candle assumption): a SINGLE candle that
+    touches BOTH the original stop_loss AND the breakeven trigger level
+    must resolve as a normal stop-out at the ORIGINAL stop_loss -- never
+    an optimistic "breakeven triggered, then saved" outcome, since the
+    real intra-candle sequencing can't be known from OHLC alone.
+    """
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=115.0, direction="long")
+    candle0 = _c(100, 100, 100, 100, BASE_TS)
+    # Single wide candle: high=106 (>= 1R breakeven trigger of 105) AND
+    # low=94 (<= original stop_loss of 95), both in the SAME bar.
+    candle1 = _c(100, 106, 94, 100, BASE_TS + LTF_STEP)
+    ltf_candles = [candle0, candle1]
+
+    trade, exit_index, _ = BacktestEngine()._simulate_trade(
+        signal, ltf_candles, 0, account_balance=10000.0, fee_percent=0.0,
+        slippage_percent=0.0, size=1.0, use_breakeven=True,
+    )
+
+    assert exit_index == 1
+    assert trade["exit_price"] == 95.0  # original stop_loss, NOT entry_fill=100
+    assert trade["breakeven_triggered"] is False  # never reached the trigger check
+
+
+def test_simulate_trade_breakeven_mirrors_correctly_for_short_direction():
+    """Short-direction mirror of the enabled-pullback-exits-at-breakeven
+    test above -- proves the trigger/effective-stop logic isn't
+    long-only."""
+    signal = _FakeSignal(entry_price=100.0, stop_loss=105.0, take_profit=85.0, direction="short")
+    candle0 = _c(100, 100, 100, 100, BASE_TS)
+    candle1 = _c(100, 101, 94, 95, BASE_TS + LTF_STEP)  # low=94 <= 1R trigger (95) -> breakeven
+    candle2 = _c(100, 101, 99, 100, BASE_TS + LTF_STEP * 2)  # high=101 >= effective_stop(100)
+    ltf_candles = [candle0, candle1, candle2]
+
+    trade, exit_index, _ = BacktestEngine()._simulate_trade(
+        signal, ltf_candles, 0, account_balance=10000.0, fee_percent=0.0,
+        slippage_percent=0.0, size=1.0, use_breakeven=True,
+    )
+
+    assert exit_index == 2
+    assert trade["exit_price"] == 100.0  # entry_fill (breakeven), NOT original stop_loss=105
+    assert trade["breakeven_triggered"] is True
+
+
 class _FakeApprovedRiskDecision:
     approved = True
     reasons: list = []

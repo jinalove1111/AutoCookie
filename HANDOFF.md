@@ -1,6 +1,23 @@
 # HANDOFF — JadeCap Automated Trading Bot
 
-## 상태: `run_backtest.py --periods N`로 진짜 out-of-sample(비중첩 기간) 검증 도구 추가 완료 — 직전 회차의 "단일 연속 샘플이라 검증 아님"이라는 정직한 유보를 직접 해소. 실측: BTCUSDT/15m 3개 비중첩 기간 중 2개 수익(1개는 소폭 손실 -$48.64), ETHUSDT/15m은 3개 기간 전부 수익. 2개 자산 합쳐 6개 독립 기간 중 5개 수익, 손실 기간도 큰 손실이 아님 — 고무적이지만 여전히 "검증됨"이라 부르기엔 이름(기간당 트레이드 수 적음, 전부 같은 ~31일 달력 구간). Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+## 상태: 전체 Strategy Coverage Audit 완료(`docs/strategy_coverage_audit.md`) 후 최고-ROI 항목(break-even stop management, 이미 구현돼 있었지만 한 번도 실제 트레이딩 루프에 연결된 적 없던 죽은 코드) 실장 + A/B 검증 완료 — `--breakeven` 옵션으로 동일한 6개 독립 기간(BTCUSDT/ETHUSDT 15m 각 3개)을 재실행: 합산 PnL $819.09→$929.49(+13.5%), 수익 기간 5/6→**6/6**(유일한 손실 기간이 수익으로 반전). 효과는 균일하지 않음(한 기간은 오히려 약화) — "최악 기간을 보호하는 대신 최상 기간의 일부를 희생"하는 break-even의 전형적 효과. 아직 실 paper trading에는 연결 안 함(opt-in 유지, 표본 6개로는 기본값 전환 근거 부족). Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+
+## 전체 회차 (Strategy Coverage Audit + break-even stop management A/B 검증 — operator 지시: "기능 추가 금지, 먼저 감사부터")
+- [x] **감사 수행(코드 작성 전)**: `docs/architecture.md`의 6-layer 설계 + `docs/strategy_spec.md` + `docs/risk_rules.md`에 문서화된 모든 규칙을 실제 구현(`backend/app/`)과 테스트 커버리지에 대조하는 전체 매트릭스를 `docs/strategy_coverage_audit.md`로 작성(규칙/구현상태/테스트커버리지/누락로직/가정/모호성/우선순위 7개 컬럼, 28개 규칙 전부 검토)
+- [x] **감사로 발견한 핵심 패턴**: HIGH 우선순위 3개 항목이 전부 같은 모양 — **실 로직이 이미 존재하고 격리 단위테스트까지 있지만 실제 라이브 의사결정 루프에서 완전히 분리돼 있음**: (1) Breaker Block 탐지(`detect_breaker_block`, `SignalEngine.generate_signal()`에서 한 번도 호출 안 됨), (2) Break-even stop 이동(`OrderManager.move_to_breakeven`), (3) Partial TP(`OrderManager.handle_partial_tp`) — (2)/(3)은 자기 모듈 밖 어디에서도 호출된 적이 grep으로 확인한 결과 전무함(pycache 외 매치 0건)
+- [x] **최고-ROI 항목 선정 근거**: break-even move를 선택 — entry 로직(어떤 트레이드가 발생하는지)은 완전히 그대로 두고 **exit 관리만** 바꾸는 유일한 후보라 before/after 비교가 가장 깨끗함(breaker block은 새 시그널 소스를 추가하고, partial TP는 PnL을 두 leg로 쪼개 교란 변수가 늘어남). "Improved risk management"라는 operator 승인 카테고리에 직접 부합
+- [x] `backend/app/backtesting/backtest_engine.py`에 `BREAKEVEN_TRIGGER_R = 1.0`(1R 이동 시 손절을 진입가로 이동, "튜닝 안 된 합리적 기본값"이라고 명시적으로 문서화) + `BacktestEngine.run(..., use_breakeven=False)`(opt-in, 기존 호출자는 전부 무변경 동작 유지) 신규
+- [x] `_simulate_trade()`에 보수적 same-candle 우선순위 구현: 한 캔들이 원래 stop_loss와 breakeven 트리거 레벨을 동시에 건드리면 **항상 원래 stop_loss로 처리**(이 메서드의 기존 SL-before-TP 보수적 가정과 동일한 철학 — intracandle 순서를 알 수 없으므로 유리한 쪽으로 가정하지 않음). trade record에 `breakeven_triggered: bool` 필드 추가
+- [x] `scripts/run_backtest.py --breakeven` 플래그 추가(opt-in, 콘솔에 ENABLED/disabled 명시 출력) — `--periods`와 조합해 진짜 A/B 비교 가능
+- [x] 신규 테스트 5종(`test_backtest_engine.py`): breakeven 비활성 시 동일 풀백 캔들이 청산 안 됨(대조) / 활성 시 같은 캔들이 breakeven(진입가)에서 청산됨 / breakeven 트리거 후에도 실제 take_profit 도달은 막지 않음 / **same-candle 보수적 우선순위 직접 증명**(원 stop과 breakeven 트리거를 동시에 건드리는 캔들은 원 stop으로 청산) / short 방향 대칭 확인
+- [x] 전체 `pytest backend/tests/` **174/174 통과**(기존 169 + 신규 5). `use_breakeven` 기본값 `False`라 기존 169개 테스트는 전부 무변경 동작으로 재확인
+- [x] **오케스트레이터 재검증용 실측(A/B, 가장 중요)**: 직전 회차와 완전히 동일한 시드 데이터(BTCUSDT/ETHUSDT 15m, 각 3개 비중첩 기간)로 `--breakeven` on/off만 바꿔 재실행 — **BTCUSDT**: P1 -$48.64(승률50%)→**+$67.48(승률58%, 손실→수익 반전)**, P2 $165.81(변화없음), P3 +$184.62(승률80%)→+$150.88(승률60%, **악화**). **ETHUSDT**: P1/P2 변화없음, P3 +$308.75(승률90%, 변화없음)→+$336.78(**MDD 0.38%→0.11%로 개선**). **6개 기간 합산: $819.09→$929.49(+13.5%), 수익 기간 5/6→6/6**(유일한 손실 기간이 수익 전환)
+- [x] **정직한 해석(과장 금지)**: 효과가 균일하지 않음 — 3개 기간은 아예 변화 없음(breakeven 트리거 후 되돌림이 한 번도 없었음), 1개 기간은 악화(끝까지 갔으면 풀 TP였을 트레이드가 breakeven에서 조기 청산됨), 2개 기간이 개선(그 중 1개는 손실→수익 반전). 이것이 정확히 breakeven stop의 교과서적 효과 — "총합보다 결과의 편차(range)를 줄임", 최악의 시나리오를 최상의 시나리오 일부를 희생해서 방어
+- [x] **operator 지시 "통계적으로 더 강해지지 않으면 계속 추가 금지" 준수 판단**: 이번 결과는 합산 PnL 개선(+13.5%) + 수익 기간 비율 개선(5/6→6/6)으로 "통계적으로 더 강해짐"의 기준을 충족한다고 판단 — 다만 표본이 여전히 작음(6개 기간)을 감안해 **기본값을 바꾸지 않고 opt-in으로 유지**, `run_paper.py`/live에는 연결하지 않음(추가 기능 확장 자제, 이번 회차는 이 1개 컴포넌트로 한정 — operator 지시 "Implement only that component" 준수)
+- [x] `py_compile` 무오류 확인, grep 확인 — 신규 코드에 TODO/placeholder/mock/bare pass/NotImplementedError 없음
+- [x] `CHANGELOG.md`에 신규 Unreleased 섹션 추가(A/B 비교 표 포함)
+- [x] scope 준수: `backend/app/strategy/*`(무변경), `backend/app/risk/*`(무변경), `backend/app/execution/*` 자체(무변경 — `OrderManager.move_to_breakeven`을 재사용하지 않고 `BacktestEngine` 안에 동등한 로직을 독립 구현했음, 아래 "다음 후보"에 이 설계 판단 이유 명시), `scripts/run_paper.py`(무변경, 의도적), Dashboard/live 게이팅 전부 무변경
+- [x] git commit/push 완료 (`origin/master`) — operator가 사전에 "커밋 후 푸시, 라이브/자격증명/외부유료서비스/보안/파괴적 아니면 계속 진행"이라고 명시적으로 요청함(이 태스크는 그 어느 카테고리에도 해당하지 않음)
 
 ## 전체 회차 (Backtest 품질: 진짜 out-of-sample 다중 기간 검증 도구 추가 — 직전 회차 자체가 명시한 유보 해소)
 - [x] **동기**: 직전 회차(zone mitigation 버그 수정)의 CHANGELOG/HANDOFF에 스스로 "3개 샘플 전부 단일 연속 구간(in-sample)이라 전략이 검증됐다고 주장하기엔 부족하다"고 명시적으로 기록해뒀음 — 이번 회차는 그 구체적 유보를 실제로 해소하는 작업
@@ -231,14 +248,17 @@
 - [x] ~~CircuitBreaker 상태는 프로세스 메모리에만 존재~~ — DB 영속화 완료(위 참조, `028087a`)
 
 ## 현재 위치
-Strategy > Risk > Backtest > Paper Trading > Dashboard 전 계층의 배관(정확성/실데이터 배선) 갭은 전부 해소됨. CTO 관점 재평가 이후로는 "배관이 맞는가"에서 "전략이 실제로 수익성 있는가"로 초점이 이동함 — 딥 백테스트(페이지네이션 수정) → 실 전략 버그 발견/수정(zone 중복 재진입) → 진짜 out-of-sample 다중 기간 검증 도구(`--periods N`) 추가까지 3연속 회차로 이어짐. 현재까지 실측: BTCUSDT/ETHUSDT 15m, 각 3개 비중첩 기간, 총 6개 독립 기간 중 5개 수익(1개는 소폭 손실). **다음 최고-ROI 후보 (수익성 검증 관점, CTO 우선순위 유지)**:
-- **다른 시장 레짐에 걸친 기간 확보 (최우선 후보)**: 지금까지의 모든 기간이 같은 ~31일 달력 구간 안에서만 나뉜 것 — 진짜 다른 레짐(추세장/횡보장, 고변동성/저변동성) 검증은 아직 아님. `--candles`를 늘려 더 긴 히스토리를 가져오거나(예: `--candles 3000 --periods 6`으로 총 18000캔들 = 15m 기준 ~187일), 시간이 더 지난 뒤 이 도구를 다시 돌려서 자연스럽게 새로운 레짐 데이터를 축적하는 방법도 있음
-- **더 다양한/독립적인 심볼**: 지금까지 BTCUSDT/ETHUSDT만 확인(서로 상관성 높음) — 상관성 낮은 자산으로 확장하면 증거력이 커짐
-- **`_LOOKBACK`/`_IMPULSE_MULT`/`_STOP_BUFFER`/`_RR` 파라미터 재검토 (OOS 도구가 이제 존재하니 가능해짐)**: `order_block.py`/`entry_model.py`에 이미 "백테스트로 튜닝된 값이 아닌 합리적 시작값"이라고 정직하게 문서화돼 있음 — 파라미터 스윕(grid search)을 한다면 **반드시** `--periods`로 나눈 일부 기간에서만 스윕하고 나머지는 절대 들여다보지 않은 채 최종 확인에만 써야 함(그렇지 않으면 이번에 만든 OOS 도구 자체가 무의미해짐 — overfitting 방지가 이 도구를 만든 이유임을 다음 세션이 반드시 기억할 것)
-- **scope 경계(오해 방지용 명시)**: `/dashboard/signals`는 `run_paper.py`(paper 실행)에서만 배선함 — `run_backtest.py`는 의도적으로 안 건드림(별도 설계 결정 필요, 낮은 우선순위)
-- **`ltf_bias` 재검토 후보**: bias 회차에서 operator 승인 없이 실용적 판단으로 진행함(근거 문서화됨) — 이 필드가 실제 트레이딩 판단에 쓰이게 되면 재확인 필요
-- Paper Trading 재검토 후보(낮은 우선순위, "갭 아님"으로 이미 기록됨): single-pass 모드의 loss-limit 거부가 Telegram/Discord 알림 없이 stdout/summary dict에만 보임
-- **Live Trading으로 넘어갈 때**: 반드시 operator와 재확인 — 실 OKX API 키(출금 권한 없음) 발급, 소액 한도, 단계별 승인 없이는 `LiveBroker`/`exchange/okx_client.py`·`orangex_client.py`의 `NotImplementedError` 스텁에 단 한 줄도 손대지 않음. 다른 시장 레짐 검증 없이는 Live는 물론 Small Live 논의 자체도 시기상조 — API 키 발급 자체가 operator 승인 필요 카테고리("API credentials")에 해당하므로 CTO/에이전트 재량으로 절대 시작하지 않음
+Strategy > Risk > Backtest > Paper Trading > Dashboard 전 계층의 배관(정확성/실데이터 배선) 갭은 전부 해소됨. "배관이 맞는가"에서 "전략이 실제로 수익성 있는가"로 초점 이동 후: 딥 백테스트 → zone 중복 재진입 버그 수정 → OOS 다중 기간 도구(`--periods`) → **전체 커버리지 감사(`docs/strategy_coverage_audit.md`) → break-even stop management A/B 검증(6개 기간 합산 +13.5%, 수익 기간 5/6→6/6)**까지 이어짐. `--breakeven`은 opt-in으로 유지(표본 6개로는 기본값 전환 근거 부족). **다음 최고-ROI 후보 (우선순위순)**:
+- **`BacktestEngine`의 breakeven 구현이 `OrderManager.move_to_breakeven()`을 재사용하지 않고 독립 구현한 이유(설계 판단, 오해 방지용 명시)**: `move_to_breakeven()`은 DB 스타일 "position" dict를 받아 새 dict를 반환하는 1회성 호출 계약이라(paper/live에서 "지금 breakeven으로 옮길까?"를 외부에서 결정해 호출하는 용도), `_simulate_trade()`의 캔들 단위 스캔 루프(매 캔들마다 트리거 여부를 内부적으로 판정) 안에 자연스럽게 맞지 않음 — 억지로 재사용하면 오히려 코드가 더 복잡해질 상황이라 판단해 동등한 로직을 `BacktestEngine` 안에 직접 구현. `OrderManager.move_to_breakeven()` 자체는 여전히 미사용(paper/live 연결은 아래 항목 참조)
+- **`run_paper.py`(실 paper trading)에 breakeven 연결 여부 결정 (다음 최우선 후보)**: 이번 회차는 `BacktestEngine`에서만 검증함 — operator 지시("Implement only that component")를 지키기 위해 paper 연결은 의도적으로 보류함. Backtest 결과가 긍정적이므로 다음 후보로는 유력하지만, paper trading은 `OrderManager.move_to_breakeven()`이라는 이미 존재하는(하지만 여전히 미사용인) 메서드를 실제로 호출하는 설계가 될 것 — DB에 저장된 open position의 stop_loss를 갱신하는 새 경로가 필요(`TradeTracker`에 현재 `update_stop_loss` 같은 메서드가 없음, 신규 설계 필요)
+- **다른 시장 레짐에 걸친 기간 확보**: 지금까지의 모든 백테스트 기간이 같은 ~31일 달력 구간 안에서만 나뉜 것 — `--candles`를 늘리거나(`--candles 3000 --periods 6` 등) 시간이 지난 뒤 재실행
+- **Breaker Block / Partial TP**: 감사에서 함께 발견된 나머지 2개 HIGH 항목 — 이번엔 손대지 않음(operator 지시 "구현은 1개만"). 다음 라운드 후보
+- **`_LOOKBACK`/`_IMPULSE_MULT`/`_STOP_BUFFER`/`_RR` 파라미터 재검토**: 파라미터 스윕을 한다면 **반드시** `--periods`로 나눈 일부 기간에서만 스윕하고 나머지는 최종 확인에만 사용(OOS 도구를 만든 이유 자체가 overfitting 방지임을 다음 세션이 기억할 것)
+- **더 다양한/독립적인 심볼**: 지금까지 BTCUSDT/ETHUSDT만 확인(상관성 높음)
+- **scope 경계**: `/dashboard/signals`는 `run_paper.py`에서만 배선(`run_backtest.py`는 의도적으로 안 건드림)
+- **`ltf_bias` 재검토 후보**: 실제 트레이딩 판단에 쓰이게 되면 재확인 필요
+- Paper Trading 재검토 후보(낮은 우선순위, "갭 아님"): single-pass 모드의 loss-limit 거부가 Telegram/Discord 알림 없이 stdout/summary dict에만 보임
+- **Live Trading으로 넘어갈 때**: 반드시 operator와 재확인 — API 키 발급 자체가 operator 승인 필요 카테고리에 해당, CTO/에이전트 재량으로 절대 시작하지 않음
 
 모든 회차가 git에 커밋/push 완료(`origin/master`, 최신 커밋은 위 "전체 회차" 항목들 참조 — 이 문서의 각 항목에 실제 커밋 해시가 없다면 아직 미커밋일 수 있으니 `git log`로 교차 확인 권장). Small Live 진행 시 API 키 발급 + 단계별 승인 필요(operator 승인 없이는 절대 진행 안 함).
 

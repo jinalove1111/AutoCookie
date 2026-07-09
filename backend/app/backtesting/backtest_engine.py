@@ -13,6 +13,22 @@ from app.risk.position_sizing import calculate_position_size
 
 MIN_CANDLES = 31  # need index 30 available (30 candles of prior LTF history)
 
+# Break-even move trigger, in multiples of the trade's own initial risk
+# (R = |entry_fill - stop_loss|). 1.0 (move stop to entry once price has
+# moved 1R in favor) is the standard, simplest convention -- not
+# backtested/tuned to a different multiple, same "reasonable starting
+# default, disclosed as such" spirit as entry_model.py's _RR/_STOP_BUFFER.
+# Only takes effect when `BacktestEngine.run(..., use_breakeven=True)` --
+# see that parameter's docstring for why this is opt-in, not default-on:
+# `OrderManager.move_to_breakeven()` (Execution layer) has existed since
+# Milestone 3 but was never wired into any live/paper/backtest trade path
+# (see docs/strategy_coverage_audit.md) -- this is the first real,
+# empirically-tested integration of it, and it is NOT yet proven to
+# improve results (a break-even move can just as easily turn an eventual
+# full winner into a scratch trade on a pullback-then-continuation move
+# as it can protect against a full loss on a reversal).
+BREAKEVEN_TRIGGER_R = 1.0
+
 # MIN_CANDLES sizing note (deliberate, not an oversight): MIN_CANDLES is sized
 # only for LTF history and is NOT enough runway to ever have real (non-empty)
 # HTF history for realistic timeframe ratios -- e.g. DEFAULT_TIMEFRAME=5m /
@@ -136,11 +152,20 @@ class BacktestEngine:
         account_balance: float = 10000.0,
         fee_percent: float = 0.05,
         slippage_percent: float = 0.02,
+        use_breakeven: bool = False,
     ) -> "BacktestResult":
         """Replays historical LTF candles (with a time-aligned, no-lookahead
         HTF slice at each step) through the Strategy Engine and Risk Engine
         to simulate trades, including fee and slippage (BACKTEST_MODE). No
         live orders are ever placed.
+
+        `use_breakeven` (default `False`, opt-in): when `True`, each
+        trade's stop is moved to its own entry price once price has moved
+        `BREAKEVEN_TRIGGER_R` (default 1R) in favor -- see that constant's
+        docstring. Default `False` preserves the exact prior behavior for
+        every existing caller; this is a genuinely new, unproven behavior
+        being A/B tested (see docs/strategy_coverage_audit.md), not a
+        silent default change.
 
         Walk-forward, expanding window, one trade open at a time (no
         overlap): starts at index MIN_CANDLES - 1 so LTF signal generation
@@ -249,7 +274,14 @@ class BacktestEngine:
 
             trades_today += 1
             trade, exit_index, account_balance = self._simulate_trade(
-                signal, ltf_candles, i, account_balance, fee_percent, slippage_percent, size
+                signal,
+                ltf_candles,
+                i,
+                account_balance,
+                fee_percent,
+                slippage_percent,
+                size,
+                use_breakeven=use_breakeven,
             )
             trades.append(trade)
             equity_curve.append(account_balance)
@@ -273,6 +305,7 @@ class BacktestEngine:
         fee_percent: float,
         slippage_percent: float,
         size: float,
+        use_breakeven: bool = False,
     ) -> tuple[dict, int, float]:
         """Fills entry (with unfavorable slippage), scans forward for SL/TP, and
         returns (trade_record, exit_index, updated_account_balance).
@@ -283,6 +316,23 @@ class BacktestEngine:
         sizing model `scripts/run_paper.py` uses -- rather than the old
         placeholder that risked the full account_balance as notional on
         every trade.
+
+        `use_breakeven`: when `True`, tracks an EFFECTIVE stop_loss
+        (starts at the signal's real stop, may move to `entry_fill` once
+        triggered) separately from the original `stop_loss` used for
+        sizing/reporting. Conservative ordering, matching this method's
+        existing "assume the worse outcome first" philosophy for a candle
+        that touches multiple levels: within any given candle, the
+        CURRENT effective stop (as of the START of that candle) is always
+        checked first; only after confirming that candle did NOT exit the
+        trade does a break-even trigger (price having moved
+        `BREAKEVEN_TRIGGER_R` in favor) update the effective stop for
+        candles AFTER this one. A candle that would touch both the
+        original stop AND the break-even trigger level in the same bar is
+        therefore resolved as a normal stop-out, never an optimistic
+        breakeven-then-saved outcome -- there is no way to know the real
+        intra-candle sequencing from OHLC alone, so this never assumes
+        the favorable order.
         """
         entry_price = getattr(signal, "entry_price")
         stop_loss = getattr(signal, "stop_loss")
@@ -293,28 +343,51 @@ class BacktestEngine:
         slip = slippage_percent / 100
         entry_fill = entry_price * (1 + slip) if is_long else entry_price * (1 - slip)
 
+        risk_per_unit = abs(entry_fill - stop_loss) if stop_loss is not None else 0.0
+        breakeven_trigger_price = (
+            (entry_fill + BREAKEVEN_TRIGGER_R * risk_per_unit)
+            if is_long
+            else (entry_fill - BREAKEVEN_TRIGGER_R * risk_per_unit)
+        )
+        effective_stop = stop_loss
+        breakeven_triggered = False
+
         exit_price = None
         exit_index = len(ltf_candles) - 1
         for j in range(entry_index + 1, len(ltf_candles)):
             high = _get(ltf_candles[j], "high")
             low = _get(ltf_candles[j], "low")
             if is_long:
-                hit_sl = low is not None and stop_loss is not None and low <= stop_loss
+                hit_sl = low is not None and effective_stop is not None and low <= effective_stop
                 hit_tp = high is not None and take_profit is not None and high >= take_profit
             else:
-                hit_sl = high is not None and stop_loss is not None and high >= stop_loss
+                hit_sl = high is not None and effective_stop is not None and high >= effective_stop
                 hit_tp = low is not None and take_profit is not None and low <= take_profit
 
             # If both levels fall within this candle's range, assume the worse
             # (stop_loss) outcome hit first — the conservative assumption.
             if hit_sl:
-                exit_price = stop_loss
+                exit_price = effective_stop
                 exit_index = j
                 break
             if hit_tp:
                 exit_price = take_profit
                 exit_index = j
                 break
+
+            # Break-even trigger check happens AFTER this candle's exit
+            # check (not before) -- see this method's docstring for why:
+            # a candle that touches the ORIGINAL stop is always resolved
+            # as a stop-out first, never optimistically "saved" by a
+            # break-even move triggered within that same candle.
+            if use_breakeven and not breakeven_triggered and risk_per_unit > 0:
+                triggered_this_candle = (
+                    (is_long and high is not None and high >= breakeven_trigger_price)
+                    or (not is_long and low is not None and low <= breakeven_trigger_price)
+                )
+                if triggered_this_candle:
+                    effective_stop = entry_fill
+                    breakeven_triggered = True
 
         if exit_price is None:
             exit_price = _get(ltf_candles[exit_index], "close")
@@ -353,5 +426,6 @@ class BacktestEngine:
             "closed_at": _get(ltf_candles[exit_index], "timestamp"),
             "direction": direction,
             "size": size,
+            "breakeven_triggered": breakeven_triggered,
         }
         return trade, exit_index, account_balance

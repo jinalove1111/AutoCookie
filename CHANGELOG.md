@@ -4,6 +4,68 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Strategy coverage audit + break-even stop management (A/B tested)
+
+### Added
+- `docs/strategy_coverage_audit.md`: full rule-by-rule matrix of every
+  JadeCap rule from `docs/architecture.md`'s six-layer design against its
+  actual implementation status, test coverage, missing logic, assumptions,
+  ambiguity, and priority. Found three HIGH-priority items sharing the
+  same shape -- real logic that already exists, is unit-tested in
+  isolation, and is completely disconnected from the live decision loop:
+  breaker-block detection (never called from `SignalEngine`), break-even
+  stop management, and partial take-profit (`OrderManager.move_to_breakeven`/
+  `handle_partial_tp`, never called anywhere outside their own module).
+- `BacktestEngine.run(..., use_breakeven=False)` (opt-in, default
+  preserves exact prior behavior): once a trade has moved
+  `BREAKEVEN_TRIGGER_R` (1R, a disclosed-as-untuned default) in favor, its
+  stop moves to entry. Conservative same-candle ordering: a candle that
+  touches both the original stop and the breakeven trigger level in the
+  same bar always resolves as a normal stop-out, never an optimistic
+  "triggered then saved" outcome (matches this method's existing
+  SL-before-TP conservative assumption). Trade records gain a
+  `breakeven_triggered` field. `scripts/run_backtest.py --breakeven` wires
+  it up for real A/B comparisons.
+
+### Verified
+- `pytest backend/tests/` 174/174 passing (5 new: enabled vs. disabled
+  contrast on an identical pullback-to-entry candle, breakeven not
+  blocking a later real take-profit, the conservative same-candle-
+  ordering proof, and a short-direction mirror). Full suite unaffected
+  by the opt-in default.
+- Real end-to-end A/B comparison, live OKX data, same 3-period splits
+  used in the prior commit's out-of-sample validation (identical seed
+  data, only `--breakeven` toggled):
+
+  | | BTCUSDT/15m P1 | P2 | P3 | ETHUSDT/15m P1 | P2 | P3 |
+  |---|---|---|---|---|---|---|
+  | Without | -$48.64 (50%) | +$165.81 (83%) | +$184.62 (80%) | +$148.51 (100%) | +$60.04 (60%) | +$308.75 (90%) |
+  | With | **+$67.48 (58%)** | +$165.81 (83%) | +$150.88 (60%) | +$148.51 (100%) | +$60.04 (60%) | **+$336.78 (90%)** |
+
+  Aggregate across all 6 independent periods: **$819.09 -> $929.49
+  (+13.5%)**, profitable periods **5/6 -> 6/6** (the one losing period,
+  BTCUSDT P1, flipped to profitable). Effect is genuinely mixed, not
+  uniformly positive -- BTCUSDT P3 got worse (some winners that reached
+  full take-profit anyway got cut short at breakeven on the way there);
+  3 of 6 periods were completely unaffected (no trade ever pulled back
+  through the breakeven level after triggering). Net effect: reduces the
+  RANGE of outcomes more than it reduces the total -- protects the worst
+  period more than it costs the best one, which is the expected,
+  textbook effect of break-even stop management.
+
+### Decision: kept opt-in, not made the default (yet)
+- 6 total periods is still a small sample to declare a permanent behavior
+  change, even though the direction is consistently positive-to-neutral
+  (never made a previously-profitable period unprofitable, only ever
+  traded some upside in the best period for eliminating the only loss).
+  `--breakeven` is validated and available for the same
+  out-of-sample-periods methodology going forward; NOT wired into
+  `scripts/run_paper.py`/live paper trading in this round -- per operator
+  instruction, no further features were added past this single validated
+  component. Flagged in HANDOFF.md as a strong candidate for the next
+  decision point (either promote to default after more periods confirm
+  the pattern, or wire into paper trading as opt-in first).
+
 ## [Unreleased] - Backtest quality: multi-period out-of-sample validation
 
 ### Added
