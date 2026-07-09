@@ -1,6 +1,15 @@
 # HANDOFF — JadeCap Automated Trading Bot
 
-## 상태: CircuitBreaker DB 영속화 완료. Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+## 상태: Strategy Engine 정확성 갭 2건 해소 완료. Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+
+## 전체 회차 (Strategy Engine 정확성 갭 해소: HTF/LTF 실분리 + confluence 방향 일치)
+- [x] **Gap 1 — 가짜 HTF/LTF 분리 수정**: `SignalEngine.generate_signal(symbol, candles)` 단일 캔들 리스트를 `detect_htf_bias()`를 포함한 모든 detector에 동일하게 먹이던 문제 수정. 시그니처를 `generate_signal(symbol, ltf_candles, htf_candles)`로 변경 — `detect_htf_bias(htf_candles)`만 별도, 나머지(sweep/choch/fvg/order_block)는 `ltf_candles` 유지. `scripts/run_paper.py`가 `CandleFetcher`로 `DEFAULT_TIMEFRAME`(5m)/`HTF_TIMEFRAME`(4h) 두 시리즈를 독립적으로 fetch — HTF fetch 실패/빈 응답은 LTF와 동일하게 명확한 에러 + exit_code 1 처리(LTF를 HTF 대신 쓰는 fallback 없음)
+- [x] **Gap 2 — confluence 방향 불일치 버그 수정 (실제 정확성 버그)**: `entry_model.build_entry_model()`의 confluence 게이트가 `sweep`/`choch`의 존재 여부만 체크하고 방향(`type`)은 전혀 안 봐서, 엔진이 방금 감지한 구조적 신호와 반대 방향으로 진입할 수 있던 버그 수정. 결정론적 규칙 추가(코드 주석 + `docs/strategy_spec.md`에 명시): `sell_side` sweep은 `long`에만, `buy_side` sweep은 `short`에만 유효 confluence; `bullish_choch`는 `long`에만, `bearish_choch`는 `short`에만 유효. 불일치 시 "없는 것"으로 취급(에러 아님)
+- [x] `market_structure.detect_choch_mss()`에 `swept_index: int | None = None` 파라미터 추가 — 제공 시 해당 index 이후의 swing만 broken level 후보로 인정, CHoCH가 실제로 그 CHoCH를 유발한 sweep 이후에 형성된 구조를 반영하도록 인과관계 연결(`docs/strategy_spec.md` section 3의 "swept liquidity level" 요구사항 충족). `swept_index=None`(기본값)이면 기존 동작과 완전 동일. `SignalEngine`이 `detect_liquidity_sweep(ltf_candles)` 먼저 호출 후 그 결과의 `swept_index`를 `detect_choch_mss`에 전달하도록 배선
+- [x] `order_block.py`의 `_LOOKBACK=10`/`_IMPULSE_MULT=1.5`, `entry_model.py`의 `_STOP_BUFFER=0.001`/`_RR=2.0`에 "왜 이 값인지" 주석 보강 — 실제 근거가 없는 값은 "백테스트로 튜닝된 값이 아닌 합리적 시작값"이라고 솔직히 명시(가짜 근거 창작 안 함)
+- [x] 테스트: `test_strategy_signal_engine.py`에 LTF 단독으로는 "neutral" bias가 나오지만(직접 검증) 별도의 bullish HTF와 짝지으면 실제로 "long" 신호가 나오는 실제 회귀 테스트 추가(단순 시그니처 리네임이 아니라 진짜 분리가 작동함을 증명). `test_strategy_entry_model.py`에 방향 불일치 sweep/choch가 이제 `None`을 반환하는 회귀 테스트 4종 추가. `test_strategy_market_structure.py`에 `swept_index`가 이전 구조 break를 올바르게 배제하는 테스트 추가. 전체 `pytest backend/tests/` 117/117 통과(신규 이전 109 + 신규 8)
+- [x] **블로커 발견/보고 (미해결, engineering-head 라우팅 필요)**: `backend/app/backtesting/backtest_engine.py`(scope 밖)가 walk-forward 루프마다 `signal_engine.generate_signal(symbol=symbol, candles=candles[:i+1])`를 구 시그니처로 호출 중이라, 이번 변경 이후 `scripts/run_backtest.py` 전체 실행은 `TypeError`로 즉시 실패함(명확한 에러 메시지로 exit 1 — 조용한 오동작은 아님). 제대로 고치려면 `BacktestEngine`이 LTF/HTF 두 캔들 시리즈를 타임스탬프 기준으로 동기화해서 걷는 로직이 필요한데, 이는 `backend/app/backtesting/`(이번 태스크 scope.allow 밖) 영역의 비trivial 설계 변경이라 손대지 않음 — 후속 태스크로 라우팅 필요
+- [x] 오케스트레이터 재검증용 실측: 실 OKX API로 5m(300개)/4h(300개) 캔들 fetch → 서로 다른 시간 범위 확인(5m: 약 1일치, 4h: 약 50일치) → `SignalEngine.generate_signal()` 실제 호출까지 에러 없이 완주(오늘 시장은 우연히 neutral이라 신호 없음 — 정상 케이스). `scripts/run_paper.py`도 임시 SQLite DB로 실제 1회 spawn 실행, exit 0 확인
 
 ## 전체 회차 (CircuitBreaker DB 영속화)
 - [x] 자본 보호 갭 해소: `scripts/run_paper.py` loop mode의 `CircuitBreaker`가 프로세스 메모리에만 존재해 crash/redeploy/cron respawn 시 tripped 상태가 조용히 초기화되던 문제 수정

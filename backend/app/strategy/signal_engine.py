@@ -38,21 +38,40 @@ class TradeSignal:
 class SignalEngine:
     """Orchestrates bias/liquidity/structure/FVG/order-block analysis into a TradeSignal."""
 
-    def generate_signal(self, symbol: str, candles: list) -> "TradeSignal | None":
+    def generate_signal(
+        self, symbol: str, ltf_candles: list, htf_candles: list
+    ) -> "TradeSignal | None":
         """Analyze market structure for `symbol` and produce a TradeSignal, or None.
+
+        `ltf_candles` and `htf_candles` must be genuinely distinct candle
+        series (the project's `DEFAULT_TIMEFRAME` and `HTF_TIMEFRAME`
+        respectively, e.g. `5m`/`4h`) — per docs/strategy_spec.md section 1,
+        HTF bias must come from a real higher-timeframe series, not the LTF
+        series relabeled. `detect_htf_bias()` is called on `htf_candles`
+        only; every other detector (liquidity sweep, CHOCH/MSS, FVG, order
+        block) stays on `ltf_candles`, matching how those concepts are
+        actually traded (structure/entries on the execution timeframe,
+        bias from the higher one).
 
         This is Backtest Mode analysis only: it never places orders. The
         returned TradeSignal is downstream input to the Risk Engine, which
         must approve it before Execution ever sees it.
         """
-        if not candles:
+        if not ltf_candles or not htf_candles:
             return None
 
-        bias = detect_htf_bias(candles)
-        sweep = detect_liquidity_sweep(candles)
-        choch = detect_choch_mss(candles)
-        fvg_zones = detect_fair_value_gap(candles)
-        order_block = detect_order_block(candles)
+        bias = detect_htf_bias(htf_candles)
+        sweep = detect_liquidity_sweep(ltf_candles)
+        # CHoCH must reflect structure that formed at or after the actual
+        # swept point (see market_structure.detect_choch_mss docstring and
+        # docs/strategy_spec.md section 3), not any arbitrary earlier
+        # structural shift -- so the sweep (if any) is resolved first and
+        # its swept_index is threaded into the CHoCH call.
+        choch = detect_choch_mss(
+            ltf_candles, swept_index=sweep["swept_index"] if sweep else None
+        )
+        fvg_zones = detect_fair_value_gap(ltf_candles)
+        order_block = detect_order_block(ltf_candles)
 
         model = build_entry_model(bias, sweep, choch, fvg_zones, order_block)
         if model is None:
@@ -61,7 +80,7 @@ class SignalEngine:
         return TradeSignal(
             symbol=symbol,
             direction=model["direction"],
-            timestamp=cf(candles[-1], "timestamp"),
+            timestamp=cf(ltf_candles[-1], "timestamp"),
             htf_bias=bias,
             sweep_type=sweep["type"] if sweep else None,
             choch_detected=bool(choch),

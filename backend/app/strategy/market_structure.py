@@ -39,13 +39,30 @@ def find_swing_lows(candles: list, n: int = 2) -> list[int]:
     return result
 
 
-def detect_choch_mss(candles: list, n: int = 2) -> dict | None:
-    """Detect a CHOCH/MSS event in the given candles and return its details, or None."""
+def detect_choch_mss(
+    candles: list, n: int = 2, swept_index: int | None = None
+) -> dict | None:
+    """Detect a CHOCH/MSS event in the given candles and return its details, or None.
+
+    `swept_index` (optional): the index of the swing point a preceding
+    `detect_liquidity_sweep()` call reported as swept (its `"swept_index"`).
+    When provided, only swing highs/lows at index >= `swept_index` are
+    considered when picking the broken level, so the CHOCH this function
+    returns causally reflects structure that formed at or after that
+    specific sweep -- not an arbitrary, unrelated earlier structural leg
+    (see docs/strategy_spec.md section 3: "swept liquidity level" is a
+    required input here). When `swept_index` is None (e.g. standalone
+    calls, as the unit tests in this package do), behavior is unchanged
+    from before this parameter was added -- all swing points are eligible.
+    """
     if len(candles) < 2 * n + 3:
         return None
 
     swing_highs = find_swing_highs(candles, n)
     swing_lows = find_swing_lows(candles, n)
+    if swept_index is not None:
+        swing_highs = [i for i in swing_highs if i >= swept_index]
+        swing_lows = [i for i in swing_lows if i >= swept_index]
     if len(swing_highs) < 2 or len(swing_lows) < 2:
         return None
 

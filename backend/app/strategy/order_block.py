@@ -15,7 +15,19 @@ from __future__ import annotations
 
 from .utils import cf
 
+# Neither constant is derived from backtesting/optimization -- both are
+# reasonable starting defaults, not yet tuned against real performance
+# data.
+#
+# _LOOKBACK = 10: a rolling window "long enough to average out single-candle
+# noise, short enough to still track recent (not stale) volatility" -- 10
+# was picked as a round-number compromise between those two pulls, not
+# derived from a statistical test on real data.
 _LOOKBACK = 10
+# _IMPULSE_MULT = 1.5: the impulse candle's range must exceed the rolling
+# average range by 50% to count as a "strong move" rather than ordinary
+# chop -- 1.5x is an arbitrary round threshold chosen for the same reason
+# (a plausible starting cutoff), not backtested/tuned.
 _IMPULSE_MULT = 1.5
 
 

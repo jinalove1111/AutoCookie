@@ -33,6 +33,22 @@ Exit codes:
        sample -- not an error, still produces a report).
   1 -> genuine failures: candle fetch/network error, zero candles returned,
        or an unexpected exception from the backtest engine itself.
+
+KNOWN GAP (blocker, out of scope for this change): `SignalEngine.generate_
+signal()` now requires real, distinct `ltf_candles`/`htf_candles` series
+(HTF bias must come from a genuine higher-timeframe series, per
+docs/strategy_spec.md section 1). `BacktestEngine.run()`
+(backend/app/backtesting/backtest_engine.py) still calls it with the old
+single-series signature (`generate_signal(symbol=symbol, candles=candles[:
+i + 1])`) for each walk-forward step, so a full run of this script will
+currently fail with a clear `TypeError` (caught below, reported, exit code
+1) rather than silently misbehaving. Properly fixing this requires
+`BacktestEngine` to walk two separate candle series in sync (mapping each
+LTF step to the HTF candles closed as of that timestamp) -- a nontrivial
+timestamp-alignment change belonging to backend/app/backtesting/, which is
+outside this task's scope.allow (backend/app/strategy/*.py, scripts/*, and
+tests/docs only). Flagged to engineering-head for a follow-up task/scope
+grant; not fixed here to avoid a cross-domain edit.
 """
 
 from __future__ import annotations

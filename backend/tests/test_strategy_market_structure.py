@@ -90,3 +90,69 @@ def test_detect_choch_mss_none_when_no_break_occurs():
     ]
 
     assert detect_choch_mss(candles, n=1) is None
+
+
+# --- Regression tests: `swept_index` gating (new causal link to the
+# specific liquidity sweep that preceded the CHOCH, per
+# docs/strategy_spec.md section 3) ---
+
+
+def test_detect_choch_mss_swept_index_none_is_unchanged_from_before():
+    """`swept_index=None` (the default) must behave byte-for-byte like
+    calling without the parameter at all -- this is the exact fixture from
+    `test_detect_choch_mss_bullish_choch_on_downtrend_break` above, just
+    asserted again with the parameter passed explicitly as None.
+    """
+    candles = [
+        candle(10, 12, 9, 10, "t0"),
+        candle(10, 15, 9, 11, "t1"),  # swing high (15)
+        candle(11, 11, 8, 9, "t2"),
+        candle(9, 13, 8, 9, "t3"),  # swing high (13) < 15 -> highs falling
+        candle(9, 10, 5, 6, "t4"),  # swing low (5)
+        candle(6, 9, 4, 8, "t5"),  # swing low (4) < 5 -> lows falling
+        candle(8, 9, 6, 16, "t6"),  # close (16) breaks back above 13
+    ]
+
+    assert detect_choch_mss(candles, n=1, swept_index=None) == {
+        "type": "bullish_choch",
+        "broken_level": 13,
+        "broken_index": 3,
+        "confirm_index": 6,
+    }
+
+
+def test_detect_choch_mss_excludes_earlier_unrelated_swing_break_before_swept_index():
+    """Same downtrend fixture as
+    `test_detect_choch_mss_bullish_choch_on_downtrend_break`: WITHOUT the
+    `swept_index` constraint, the function reports a bullish CHOCH whose
+    broken level is the swing high at index 3 (value 13) -- the only
+    swing high available, formed well before any sweep. If the liquidity
+    sweep that actually preceded this reversal happened later (e.g. at
+    index 4, a swept swing low), that index-3 swing high is an earlier,
+    unrelated structural point relative to the real sweep -- referencing
+    it would be exactly the correctness gap described in
+    docs/strategy_spec.md section 3.
+
+    Passing `swept_index=4` (a point strictly after the index-3 break)
+    must exclude that swing high from consideration. With no other swing
+    high at or after index 4 in this short series, the function correctly
+    returns None instead of the stale, sweep-unrelated CHOCH it would
+    have returned unconstrained.
+    """
+    candles = [
+        candle(10, 12, 9, 10, "t0"),
+        candle(10, 15, 9, 11, "t1"),  # swing high (15)
+        candle(11, 11, 8, 9, "t2"),
+        candle(9, 13, 8, 9, "t3"),  # swing high (13) -- the "earlier, unrelated" break
+        candle(9, 10, 5, 6, "t4"),  # swing low (5)
+        candle(6, 9, 4, 8, "t5"),  # swing low (4)
+        candle(8, 9, 6, 16, "t6"),  # close (16) breaks back above 13
+    ]
+
+    # Without the constraint: detected, using the index-3 swing high.
+    unconstrained = detect_choch_mss(candles, n=1)
+    assert unconstrained is not None
+    assert unconstrained["broken_index"] == 3
+
+    # With swept_index pointing after that early break: correctly excluded.
+    assert detect_choch_mss(candles, n=1, swept_index=4) is None

@@ -188,7 +188,10 @@ def run_once(
     if circuit_breaker is not None:
         _check_drawdown_and_maybe_trip(circuit_breaker)
 
-    # --- 1. Fetch recent candles ---
+    # --- 1. Fetch recent candles (LTF for structure/entries, HTF for bias) ---
+    # Real HTF/LTF separation (docs/strategy_spec.md section 1): these must
+    # be two genuinely distinct fetches, never the LTF series reused as HTF
+    # -- that would defeat the entire point of the separation.
     try:
         candles = CandleFetcher().fetch_ohlcv(
             settings.SYMBOL, settings.DEFAULT_TIMEFRAME, limit=300
@@ -205,9 +208,25 @@ def run_once(
         summary["exit_code"] = 1
         return summary
 
+    try:
+        htf_candles = CandleFetcher().fetch_ohlcv(
+            settings.SYMBOL, settings.HTF_TIMEFRAME, limit=300
+        )
+    except Exception as exc:  # network/data errors are genuine failures
+        print(f"ERROR: failed to fetch HTF candles for {settings.SYMBOL}: {exc}")
+        summary["error"] = str(exc)
+        summary["exit_code"] = 1
+        return summary
+
+    if not htf_candles:
+        print(f"No HTF candles returned for {settings.SYMBOL}/{settings.HTF_TIMEFRAME}.")
+        summary["error"] = "no HTF candles returned"
+        summary["exit_code"] = 1
+        return summary
+
     # --- 2. Generate a signal ---
     try:
-        signal = SignalEngine().generate_signal(settings.SYMBOL, candles)
+        signal = SignalEngine().generate_signal(settings.SYMBOL, candles, htf_candles)
     except Exception as exc:
         print(f"ERROR: signal generation failed: {exc}")
         summary["error"] = str(exc)
