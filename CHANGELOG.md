@@ -4,6 +4,50 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Backtest engine: real HTF/LTF walk-forward with no-lookahead HTF cursor
+
+### Fixed
+- **Resolves the "Known gap" blocker flagged below**: `BacktestEngine.run()`
+  still called `signal_engine.generate_signal()` with the old single-series
+  signature after the Strategy Engine's HTF/LTF separation landed, so any
+  full `scripts/run_backtest.py` run failed immediately with a `TypeError`.
+  `BacktestEngine.run()`'s signature is now
+  `run(self, ltf_candles, htf_candles, signal_engine, risk_manager, ...)`.
+
+### Added
+- `app.backtesting.backtest_engine._advance_htf_cursor()`: a forward-only,
+  O(n)-total two-pointer cursor that, at each LTF walk-forward step, exposes
+  to `generate_signal()` ONLY the HTF candles that are provably fully closed
+  as of that LTF step's timestamp (an HTF candle at index `k` is provably
+  closed once HTF candle `k + 1` exists with `timestamp <= ` the current LTF
+  timestamp — sidesteps needing to parse/hardcode the HTF timeframe's
+  duration). This prevents lookahead bias: a still-forming HTF candle can
+  never influence a signal generated at an earlier LTF step. Degrades safely
+  to an empty HTF slice (-> `detect_htf_bias([])` -> `"neutral"` -> no
+  signal) when no HTF candle has closed yet relative to the current LTF step.
+- `scripts/run_backtest.py` now fetches LTF and HTF candles as two
+  independent `CandleFetcher` calls (mirrors `run_paper.py`'s pattern): an
+  HTF fetch failure or empty result is a hard failure (exit code 1), never a
+  silent fallback to LTF-as-HTF.
+- `MIN_CANDLES` (still `31`) sizing decision documented explicitly in code:
+  it is sized only for LTF history and is deliberately NOT raised to
+  guarantee real HTF history exists (for realistic ratios like 5m LTF / 4h
+  HTF, meaningful HTF bias needs hundreds of LTF candles of runway) — this
+  is safe as-is because the empty-slice/`"neutral"`-bias degrade path never
+  produces a wrong signal, only some early no-op walk-forward iterations.
+- 6 new tests in `backend/tests/test_backtest_engine.py`, including a
+  mandatory no-lookahead regression proof at both the unit level
+  (`_advance_htf_cursor` directly, with a contrasting "naive/buggy cursor
+  would have leaked the still-forming bar" assertion proving the test is
+  non-vacuous) and the full end-to-end level (two `BacktestEngine.run()`
+  calls with LTF held identical and HTF differing only in a still-forming
+  final bar, asserting byte-identical `BacktestResult`s including a real,
+  non-empty trade). Full suite: 123/123 passing (117 pre-existing + 6 new).
+- Real end-to-end verification: `scripts/run_backtest.py` run against real
+  OKX data (BTCUSDT/5m and ETHUSDT/15m, 300 candles each, real HTF 4h fetch)
+  completes with exit code 0 (0-trade outcome today — a valid, non-error
+  result, not a crash).
+
 ## [Unreleased] - Strategy Engine correctness: real HTF/LTF separation + confluence direction-matching
 
 ### Fixed
@@ -46,14 +90,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `docs/strategy_spec.md` sections 1-3 updated to state these deterministic
   resolutions explicitly instead of leaving them implicit/ambiguous.
 
-### Known gap (blocker, flagged for follow-up)
+### Known gap (blocker) — RESOLVED
 - `backend/app/backtesting/backtest_engine.py` (out of scope for this
-  change) still calls `generate_signal()` with the old single-series
+  change) still called `generate_signal()` with the old single-series
   signature inside its walk-forward loop, so a full `scripts/run_backtest.py`
-  run currently fails fast with a clear `TypeError` (exit code 1) rather
-  than silently misbehaving. Fixing it requires `BacktestEngine` to walk
-  two timestamp-aligned candle series (LTF + HTF) in sync — a nontrivial
-  design change belonging to `backend/app/backtesting/`, not touched here.
+  run failed fast with a clear `TypeError` (exit code 1) rather than
+  silently misbehaving. Fixed in the "Backtest engine: real HTF/LTF
+  walk-forward with no-lookahead HTF cursor" entry above.
 
 ## [Unreleased] - Capital-protection follow-up: CircuitBreaker DB persistence
 

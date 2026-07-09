@@ -1,6 +1,16 @@
 # HANDOFF — JadeCap Automated Trading Bot
 
-## 상태: Strategy Engine 정확성 갭 2건 해소 완료. Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+## 상태: 백테스트 엔진 HTF/LTF 워크포워드 블로커 해소 완료. Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+
+## 전체 회차 (백테스트 엔진: 실 HTF/LTF 워크포워드 + no-lookahead HTF 커서)
+- [x] **이전 회차에서 보고된 블로커 해소**: 직전 Strategy Engine 커밋(`9db3db3`)이 `SignalEngine.generate_signal(symbol, ltf_candles, htf_candles)`로 시그니처를 바꾼 뒤, `backend/app/backtesting/backtest_engine.py`의 walk-forward 루프가 여전히 구 시그니처(`generate_signal(symbol=symbol, candles=candles[:i+1])`)로 호출 중이라 `scripts/run_backtest.py` 전체 실행이 `TypeError`로 즉시 실패하던 문제 수정. `BacktestEngine.run()` 시그니처를 `run(self, ltf_candles, htf_candles, signal_engine, risk_manager, ...)`로 변경
+- [x] **no-lookahead HTF 커서 구현 (정확성 핵심)**: `app.backtesting.backtest_engine._advance_htf_cursor()` 신규 — walk-forward의 각 LTF step마다, 해당 LTF 캔들 시점 기준으로 "확실히 마감된" HTF 캔들만 `generate_signal()`에 노출하는 forward-only 2-pointer 커서(전체 루프에서 O(n)). HTF 캔들 `k`는 `k+1`번째 캔들이 존재하고 그 타임스탬프가 현재 LTF 타임스탬프 이하일 때만 "마감 확정"으로 간주(HTF 타임프레임 길이를 파싱/하드코딩할 필요 없음). 아직 마감된 HTF 캔들이 하나도 없으면 빈 리스트(`[]`)를 넘기고, `detect_htf_bias([])`가 이미 안전하게 "neutral"을 반환하므로 별도 예외 처리 불필요
+- [x] `scripts/run_backtest.py`가 `run_paper.py`와 동일한 패턴으로 LTF/HTF 캔들을 독립적으로 fetch(`settings.HTF_TIMEFRAME`) — HTF fetch 실패/빈 응답은 LTF와 동일하게 명확한 에러 + exit code 1(LTF를 HTF 대신 쓰는 fallback 없음). 스크립트 docstring의 "KNOWN GAP(blocker)" 문단을 실제 해결된 HTF 처리 설명으로 교체
+- [x] `MIN_CANDLES`(현재값 `31`) 유지 결정을 코드에 명시적으로 문서화 — LTF 히스토리 기준으로만 산정된 값이라 5m/4h 같은 실제 타임프레임 비율에서는 의미 있는 HTF bias가 나오려면 수백 개의 LTF 캔들이 필요하지만, 빈 슬라이스/"neutral" bias로 안전하게 degrade되므로(잘못된 신호가 나올 위험 없음, 초반 no-op 반복만 약간 늘어남) 값을 올리지 않기로 의도적으로 결정
+- [x] 테스트: `backend/tests/test_backtest_engine.py` 신규 6종 — no-lookahead 회귀 증명을 (1) `_advance_htf_cursor` 단위 테스트(아직 마감 안 된 HTF 캔들의 OHLC가 완전히 달라도 결과 슬라이스가 바이트 단위로 동일함을 직접 증명, 게다가 "naive/buggy off-by-one 커서였다면 실제로 슬라이스가 달라졌을 것"이라는 대조 assertion까지 포함해 테스트가 공허하지 않음을 증명) + (2) `BacktestEngine.run()` 전체 실행 레벨(LTF는 동일하게 유지하고 마감되지 않은 마지막 HTF 캔들의 OHLC만 다르게 한 두 시나리오가 실제 트레이드 1건 포함 `BacktestResult`까지 완전히 동일함을 증명) 양쪽에서 수행. 전체 `pytest backend/tests/` 123/123 통과(기존 117 + 신규 6)
+- [x] 오케스트레이터 재검증용 실측: `scripts/run_backtest.py`를 실 OKX API로 두 번 실행(BTCUSDT/5m 300개, ETHUSDT/15m 300개) — 둘 다 LTF/HTF 캔들 fetch 성공, `TypeError` 없이 완주, exit code 0(오늘 시장은 confluence가 안 맞아 0-trade 결과 — 유효한 정상 결과, 에러 아님)
+- [x] `py_compile` 무오류 확인(`backend/app/backtesting/backtest_engine.py`, `scripts/run_backtest.py`, `backend/tests/test_backtest_engine.py`), 변경/신규 코드에 TODO/placeholder/mock/bare pass/NotImplementedError 없음(grep 확인)
+- [x] `CHANGELOG.md`에 신규 Unreleased 섹션 추가, 직전 회차의 "Known gap (blocker, flagged for follow-up)" 노트를 "RESOLVED"로 갱신하고 이번 항목을 가리키도록 수정
 
 ## 전체 회차 (Strategy Engine 정확성 갭 해소: HTF/LTF 실분리 + confluence 방향 일치)
 - [x] **Gap 1 — 가짜 HTF/LTF 분리 수정**: `SignalEngine.generate_signal(symbol, candles)` 단일 캔들 리스트를 `detect_htf_bias()`를 포함한 모든 detector에 동일하게 먹이던 문제 수정. 시그니처를 `generate_signal(symbol, ltf_candles, htf_candles)`로 변경 — `detect_htf_bias(htf_candles)`만 별도, 나머지(sweep/choch/fvg/order_block)는 `ltf_candles` 유지. `scripts/run_paper.py`가 `CandleFetcher`로 `DEFAULT_TIMEFRAME`(5m)/`HTF_TIMEFRAME`(4h) 두 시리즈를 독립적으로 fetch — HTF fetch 실패/빈 응답은 LTF와 동일하게 명확한 에러 + exit_code 1 처리(LTF를 HTF 대신 쓰는 fallback 없음)

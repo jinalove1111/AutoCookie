@@ -34,21 +34,16 @@ Exit codes:
   1 -> genuine failures: candle fetch/network error, zero candles returned,
        or an unexpected exception from the backtest engine itself.
 
-KNOWN GAP (blocker, out of scope for this change): `SignalEngine.generate_
-signal()` now requires real, distinct `ltf_candles`/`htf_candles` series
-(HTF bias must come from a genuine higher-timeframe series, per
-docs/strategy_spec.md section 1). `BacktestEngine.run()`
-(backend/app/backtesting/backtest_engine.py) still calls it with the old
-single-series signature (`generate_signal(symbol=symbol, candles=candles[:
-i + 1])`) for each walk-forward step, so a full run of this script will
-currently fail with a clear `TypeError` (caught below, reported, exit code
-1) rather than silently misbehaving. Properly fixing this requires
-`BacktestEngine` to walk two separate candle series in sync (mapping each
-LTF step to the HTF candles closed as of that timestamp) -- a nontrivial
-timestamp-alignment change belonging to backend/app/backtesting/, which is
-outside this task's scope.allow (backend/app/strategy/*.py, scripts/*, and
-tests/docs only). Flagged to engineering-head for a follow-up task/scope
-grant; not fixed here to avoid a cross-domain edit.
+HTF/LTF handling: `SignalEngine.generate_signal()` requires real, distinct
+`ltf_candles`/`htf_candles` series (HTF bias must come from a genuine
+higher-timeframe series, per docs/strategy_spec.md section 1). This script
+fetches both series independently via `CandleFetcher` -- `args.timeframe`/
+`settings.DEFAULT_TIMEFRAME` for LTF (unchanged), `settings.HTF_TIMEFRAME`
+for HTF (new) -- mirroring `run_paper.py`'s pattern: an HTF fetch
+failure/empty result is a hard failure (exit code 1), never a silent
+fallback to LTF-as-HTF. `BacktestEngine.run()` walks both series in sync via
+a no-lookahead HTF cursor (`app.backtesting.backtest_engine._advance_htf_cursor`)
+so only genuinely closed HTF candles are ever visible to a given LTF step.
 """
 
 from __future__ import annotations
@@ -92,10 +87,12 @@ def fetch_candles(symbol: str, timeframe: str, requested: int) -> list:
     return CandleFetcher().fetch_ohlcv(symbol, timeframe, limit=effective_limit)
 
 
-def run_backtest(candles: list) -> Any:
-    """Replay `candles` once through the real Strategy/Risk/Backtest engines."""
+def run_backtest(ltf_candles: list, htf_candles: list) -> Any:
+    """Replay `ltf_candles`/`htf_candles` once through the real
+    Strategy/Risk/Backtest engines."""
     return BacktestEngine().run(
-        candles,
+        ltf_candles,
+        htf_candles,
         SignalEngine(),
         RiskManager(),
         account_balance=10000.0,
@@ -146,7 +143,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main() -> int:
     args = _parse_args()
 
-    # --- 1. Fetch historical candles (single call, see docstring) ---
+    # --- 1. Fetch historical LTF candles (single call, see docstring) ---
     try:
         candles = fetch_candles(args.symbol, args.timeframe, args.candles)
     except Exception as exc:  # network/data errors are genuine failures
@@ -165,9 +162,26 @@ def main() -> int:
             "backtest will produce a valid, empty (0-trade) result."
         )
 
+    # --- 1b. Fetch historical HTF candles (independent fetch, mirrors
+    # run_paper.py's pattern: never fall back to reusing the LTF series as
+    # HTF -- an HTF fetch failure or empty result is a hard failure here
+    # too, since a silent LTF-as-HTF fallback would defeat the entire point
+    # of the HTF/LTF separation).
+    try:
+        htf_candles = fetch_candles(args.symbol, settings.HTF_TIMEFRAME, args.candles)
+    except Exception as exc:  # network/data errors are genuine failures
+        print(f"ERROR: failed to fetch HTF candles for {args.symbol}: {exc}")
+        return 1
+
+    if not htf_candles:
+        print(f"No HTF candles returned for {args.symbol}/{settings.HTF_TIMEFRAME}.")
+        return 1
+
+    print(f"Fetched {len(htf_candles)} HTF candles for {args.symbol}/{settings.HTF_TIMEFRAME}.")
+
     # --- 2. Replay through the real Strategy/Risk/Backtest engines ---
     try:
-        result = run_backtest(candles)
+        result = run_backtest(candles, htf_candles)
     except Exception as exc:  # unexpected engine failure is a genuine failure
         print(f"ERROR: backtest engine raised an exception: {exc}")
         return 1
