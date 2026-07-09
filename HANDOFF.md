@@ -1,6 +1,16 @@
 # HANDOFF — JadeCap Automated Trading Bot
 
-## 상태: scripts/run_backtest.py 실구현 완료. Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+## 상태: CircuitBreaker DB 영속화 완료. Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+
+## 전체 회차 (CircuitBreaker DB 영속화)
+- [x] 자본 보호 갭 해소: `scripts/run_paper.py` loop mode의 `CircuitBreaker`가 프로세스 메모리에만 존재해 crash/redeploy/cron respawn 시 tripped 상태가 조용히 초기화되던 문제 수정
+- [x] `risk/circuit_breaker.py`에 `PersistentCircuitBreaker` 래퍼 추가 — 기존 `CircuitBreaker`는 완전 무변경(DB 의존성 0, 단위테스트 그대로 통과), 생성자에 주입된 `state_loader`/`state_saver` 콜러블로만 영속화(Iron Wall 패턴 유지, `app.portfolio` 직접 import 없음)
+- [x] `bot_state` 테이블에 `circuit_breaker_tripped`/`circuit_breaker_reason`/`circuit_breaker_tripped_at` 컬럼 추가 — 실 Alembic 마이그레이션(`4b8a822a475b`, `alembic revision --autogenerate` 기반, non-empty 테이블 대응 `server_default` 수동 보정)
+- [x] `portfolio/positions.py`에 `load_circuit_breaker_state()`/`save_circuit_breaker_state()` 추가 (기존 `get_or_create_bot_state()`/`update_bot_mode()` 패턴 그대로)
+- [x] `run_paper.py` loop mode가 `PersistentCircuitBreaker` 사용 — 시작 시 DB에서 이전 tripped 상태 로드/적용, trip()/reset() 시마다 동기 영속화
+- [x] 신규 테스트 8종(실 마이그레이션된 임시 SQLite 기반, mock 없음) — 2-OS-프로세스 실통합 테스트로 "crash mid-trip → respawn" 시나리오 직접 재현·검증
+- [x] 오케스트레이터(CTO) 독립 재검증: 변경분 diff 직접 확인(engineering-head 보고와 파일 단위 일치), `pytest` 직접 재실행(109/109 통과), execution/exchange/LiveBroker 무변경 diff로 확인
+- [x] operator 승인 후 git commit(`028087a`)/push 완료
 
 ## 전체 회차
 - [x] `scripts/run_backtest.py`: `print("TODO: implement in later milestone")` 스텁을 실제 백테스트 러너로 교체 — OKX 공개(키 불필요) 엔드포인트에서 실 OHLCV 캔들을 fetch해 기존 실구현 Strategy/Risk/Backtest 엔진(`BacktestEngine.run()`)에 그대로 replay하고 markdown 리포트 + CSV trade export를 생성. 주문을 전혀 내지 않고 trades DB 테이블도 전혀 건드리지 않음(설계상 DB-independent), API 키/계정 불필요
@@ -53,7 +63,7 @@
 - [ ] **다음 단계(Small Live Trading)는 실제 OKX API 키(출금 권한 없는 키) 발급이 선행되어야 하고, 매 단계 operator의 명시적 승인이 필요함 — CTO 재량으로 진행하지 않기로 operator와 합의됨**
 - [ ] LiveBroker, exchange/okx_client.py·orangex_client.py 여전히 완전 스텁 — 실거래 API 호출 코드 전혀 없음
 - [ ] frontend는 status/positions/logs 실DB 엔드포인트에는 이미 연결됨(Milestone 6). 다만 대시보드 3개 카드(BiasCard/SignalsPanel/RiskStatusPanel)가 부르는 백엔드 엔드포인트(`get_market_bias`/`get_recent_signals`/`get_risk_status`) 자체가 아직 하드코딩된 neutral/빈 값을 반환하는 의도적 placeholder — 실전략 상태로 wiring하는 작업이 다음 단계 후보
-- [ ] CircuitBreaker 상태는 프로세스 메모리에만 존재 — 재시작하면 초기화됨 (DB 영속화는 다음 단계 후보)
+- [x] ~~CircuitBreaker 상태는 프로세스 메모리에만 존재~~ — DB 영속화 완료(위 참조, `028087a`)
 
 ## 현재 위치
 Milestone 5 전체 완료 + 오케스트레이터 직접 실제 Postgres 검증 통과. git/GitHub 세팅 + Alembic 마이그레이션까지 완료되어 Paper Mode가 인프라적으로도 완결. Milestone 5 변경분 커밋/push는 아직 안 함 — 다음 요청 대기 중 (Small Live 진행 시 API 키 발급 + 단계별 승인 필요).

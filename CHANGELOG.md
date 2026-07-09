@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Capital-protection follow-up: CircuitBreaker DB persistence
+
+### Fixed
+- `CircuitBreaker` tripped state was process-memory-only in `scripts/run_paper.py`
+  loop mode; a crash, redeploy, or cron respawn while tripped silently reset
+  the daily-loss protection. Added `PersistentCircuitBreaker` (DB-backed via
+  new `bot_state.circuit_breaker_*` columns) so a respawned process observes
+  and honors a prior real trip. Plain `CircuitBreaker` is unchanged and stays
+  fully decoupled from the database for unit testing.
+
+### Added
+- Alembic migration `4b8a822a475b` adding `circuit_breaker_tripped`,
+  `circuit_breaker_reason`, `circuit_breaker_tripped_at` to `bot_state`.
+- `load_circuit_breaker_state()` / `save_circuit_breaker_state()` in
+  `portfolio/positions.py`.
+- 8 new tests in `backend/tests/test_circuit_breaker_persistence.py`,
+  including a real two-process integration test simulating crash-and-respawn.
+
 ## [0.1.0] - Milestone 1: System Architecture
 
 ### Added
