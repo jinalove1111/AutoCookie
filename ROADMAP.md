@@ -14,53 +14,60 @@ because data proves it, not because it's popular in ICT/SMC communities.
 ## Done (this session, night CTO mode)
 
 All three HIGH-priority `docs/strategy_coverage_audit.md` findings are
-now wired and A/B tested, with three genuinely different outcomes:
+now wired, A/B tested on an initial ~31-day/3-period sample, AND
+re-tested on a much larger 6-month/6-period sample (BTCUSDT, genuinely
+varied conditions):
 
-- ~~Wire Breaker Block detection into `SignalEngine`~~ — DONE (opt-in
-  `--breaker-block`). Result: **neutral**, measured ZERO effect across 6
-  out-of-sample periods (BTCUSDT/ETHUSDT 15m). Diagnosed why: the
-  detector fires regularly and CAN change signal-level output (2 real
-  differences confirmed by direct scan), but both moments fell inside an
-  already-open trade's window in this sample. Kept opt-in.
 - ~~Wire break-even stop management into `BacktestEngine`~~ — DONE
-  (opt-in `--breakeven`). Result: **positive**, +13.5% aggregate PnL
-  across the same 6 periods, profitable periods 5/6 → 6/6. Kept opt-in
-  (not enough samples yet to make it default).
+  (opt-in `--breakeven`). Result: **positive, REPRODUCED**: +13.5% on
+  the small sample, +9.2% on the 6-month sample. The most robust of the
+  three findings -- same direction on two independent datasets.
 - ~~Wire partial take-profit into `BacktestEngine`~~ — DONE (opt-in
-  `--partial-tp`). Result: **negative**, reduced PnL in ALL 6 of 6
-  periods (aggregate -31.4%). Diagnosed why: this strategy's fixed 2:1
-  RR + high win rate in this sample means locking in half the position
-  at 1R trades away upside on winners without meaningfully protecting
-  losers. Kept opt-in; actively not recommended for the current strategy
-  shape.
+  `--partial-tp`). Result: **negative, REPRODUCED**: -31.4% on the small
+  sample, -32.6% on the 6-month sample -- reduced PnL in every single
+  period tested across BOTH samples (12 of 12, no exceptions).
+- ~~Wire Breaker Block detection into `SignalEngine`~~ — DONE (opt-in
+  `--breaker-block`). Result: **REVISED, neutral -> slightly negative**.
+  Zero effect on the small sample (the detector fires and can change
+  output, but the 2 confirmed differences happened to fall inside an
+  already-open trade's window). On the 6-month sample it fired for real
+  once (1 of 6 periods) and the effect was negative (win rate 90.48% ->
+  85.71%). Still thin evidence (1 affected period), but "neutral" no
+  longer accurately describes it.
+- ~~Fixed a real HTF over-fetch bug~~ found while running the 6-month
+  test: `run_backtest.py` requested the same candle COUNT for LTF and
+  HTF, so a large `--periods` request asked for years more HTF history
+  than needed. Added `timeframe_to_timedelta()`/`htf_candle_count_for_span()`
+  to size the HTF request off the real time span instead.
 
-See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all three.
+See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all of this.
 
 ## Immediate (highest ROI, unblocked, no operator input needed)
 
-1. **Expand out-of-sample periods to different market regimes** — every
-   period checked so far (all three experiments above) falls within the
-   same ~31-day calendar span. Fetch materially more history
-   (`--candles 3000 --periods 6` or larger) or re-run this tooling after
-   more calendar time has passed, specifically looking for periods with
-   different volatility/trend characteristics. This is now the single
-   highest-value next step: it's the direct way to check whether
-   Breaker Block's null result, Partial TP's negative result, AND
-   break-even's positive result all hold up outside this one sample, or
-   are themselves artifacts of this particular ~31-day window.
-2. **Wire break-even into paper trading** (`scripts/run_paper.py`) — the
-   only one of the three experiments with a positive backtest result.
-   Requires a new `TradeTracker.update_stop_loss()`-style method
-   (doesn't exist yet) since paper positions are DB rows, not an
+1. **Wire break-even into paper trading** (`scripts/run_paper.py`) —
+   promoted to #1: this is the only one of the three experiments with a
+   positive result that REPRODUCED across two independent samples (small
+   AND 6-month). Requires a new `TradeTracker.update_stop_loss()`-style
+   method (doesn't exist yet) since paper positions are DB rows, not an
    in-memory candle scan. Should ship as opt-in (`ENABLE_BREAKEVEN`
    setting, mirroring `ENABLE_TELEGRAM_ALERTS`'s pattern).
+2. **Re-run the 6-month deep test on ETHUSDT** — the 6-month/6-period
+   validation above was BTCUSDT only (time-boxed this round). Confirming
+   the same three verdicts (break-even positive, partial-TP negative,
+   breaker-block slightly negative) hold on ETHUSDT too would meaningfully
+   strengthen all three findings; a DIFFERENT verdict on ETHUSDT would be
+   equally informative (asset-specific rather than universal effects).
 3. **Add more, less-correlated symbols** — only BTCUSDT/ETHUSDT checked
    so far (highly correlated with each other). Lower-correlation assets
    would make all three findings above meaningfully stronger evidence.
+4. **Extend even further back in time / to other years** — the 6-month
+   sample (Jan-Jul 2026) is still one continuous span of recent history.
+   Genuinely different YEARS (different macro conditions) would be a
+   stronger test than a longer contiguous window in the same period.
 
 ## Near-term (needs the above first, or is inherently larger scope)
 
-4. **Parameter sweep of `_LOOKBACK`/`_IMPULSE_MULT`/`_STOP_BUFFER`/`_RR`/
+5. **Parameter sweep of `_LOOKBACK`/`_IMPULSE_MULT`/`_STOP_BUFFER`/`_RR`/
    `BREAKEVEN_TRIGGER_R`/`PARTIAL_TP_TRIGGER_R`/`PARTIAL_TP_PORTION`** —
    all seven are disclosed-as-untuned defaults. **Hard rule,
    non-negotiable**: any sweep MUST reserve a subset of `--periods`
@@ -74,7 +81,7 @@ See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all three.
    rate/RR profile, a smaller `PARTIAL_TP_TRIGGER_R` or a different
    `_RR` might change that conclusion -- worth investigating with proper
    held-out discipline, not by assumption.
-5. **Resolve the spec/implementation ambiguity in confluence strength**
+6. **Resolve the spec/implementation ambiguity in confluence strength**
    (audit item #9) — `docs/strategy_spec.md` section 6 reads as requiring
    bias + sweep + CHOCH + FVG/OB all in confluence; the actual code
    requires only bias + (sweep OR choch) + (FVG OR OB), a strictly
@@ -82,7 +89,7 @@ See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all three.
    confluence (more factors aligned) produces meaningfully better
    trades, or whether the looser bar is correct and the spec wording
    should be relaxed to match reality instead.
-6. **Equal-highs/equal-lows liquidity detection** (audit item #3) —
+7. **Equal-highs/equal-lows liquidity detection** (audit item #3) —
    `detect_liquidity_sweep()` only recognizes single swing-point sweeps;
    real SMC also treats clusters of near-equal highs/lows as a stronger
    resting-liquidity signal. Neither the spec nor the code currently
@@ -91,7 +98,7 @@ See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all three.
 
 ## Medium-term (architecture / scalability)
 
-7. **Multi-strategy plug-in architecture** — today `SignalEngine` is a
+8. **Multi-strategy plug-in architecture** — today `SignalEngine` is a
    single hardcoded pipeline. If/when a second, genuinely different
    strategy is worth trying (not just parameter variants of the current
    one), the Strategy Engine's interface (`generate_signal(symbol,
@@ -99,31 +106,33 @@ See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all three.
    enough contract to support multiple implementations behind it — no
    redesign needed yet, just keep new strategies behind the same
    interface rather than special-casing them into the existing modules.
-8. **Monte Carlo readiness** — the backtest engine's trade list
+9. **Monte Carlo readiness** — the backtest engine's trade list
    (`BacktestResult.trades`) already has everything needed (`pnl`,
    `direction`, `size`, timestamps) to bootstrap/reshuffle trade
    sequences for Monte Carlo drawdown analysis. Not yet built; a
    natural next step once there are enough real trades across enough
-   periods to make resampling meaningful (current per-period counts of
-   4-12 trades are too small to resample usefully yet).
+   periods to make resampling meaningful (the 6-month sample's 8-28
+   trades per period is still on the small side for resampling).
 
 ## Explicitly NOT started, and why
 
 - **Live Trading** (`LiveBroker`, `exchange/okx_client.py`,
   `exchange/orangex_client.py`) — all `NotImplementedError` stubs,
   deliberately. Requires, IN ORDER: (a) out-of-sample validation across
-  genuinely different market regimes (not yet done, see item #1 above),
-  (b) operator-issued OKX API keys with withdrawal disabled, (c) a small
-  live-capital limit agreed with the operator, (d) step-by-step operator
-  approval at each stage per `docs/live_trading_checklist.md`. None of
-  this proceeds without the operator present — API credential
-  provisioning and live-trading approval are both explicit stop
-  conditions, not something a CTO-mode session decides alone.
-- **Paper trading break-even** — see item #2, deliberately sequenced
-  after the backtest-only validation that already shipped, not done in
-  the same round (one validated change at a time).
+  genuinely different market regimes (partially done -- see the 6-month
+  BTCUSDT result above, but ETHUSDT and other years/assets remain, see
+  items #2-4 above), (b) operator-issued OKX API keys with withdrawal
+  disabled, (c) a small live-capital limit agreed with the operator, (d)
+  step-by-step operator approval at each stage per
+  `docs/live_trading_checklist.md`. None of this proceeds without the
+  operator present — API credential provisioning and live-trading
+  approval are both explicit stop conditions, not something a CTO-mode
+  session decides alone.
+- **Paper trading break-even** — see item #1, deliberately sequenced
+  after the backtest-only validation that already shipped (now on TWO
+  independent samples), not done in the same round (one validated
+  change at a time).
 - **Paper trading Breaker Block or Partial TP** — NOT planned currently.
-  Breaker Block's backtest result was neutral; Partial TP's was
-  negative. Neither has positive evidence to justify wiring into paper
-  trading. Revisit only if item #1 (different market regimes) changes
-  either conclusion.
+  Breaker Block's backtest result is now slightly negative (was
+  neutral); Partial TP's is negative on two independent samples. Neither
+  has positive evidence to justify wiring into paper trading.

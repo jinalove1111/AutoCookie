@@ -11,6 +11,7 @@ config (e.g. `BTCUSDT`, `5m`, `4h`) into OKX's expected wire format
 from __future__ import annotations
 
 import time
+from datetime import timedelta
 from typing import Optional
 
 import httpx
@@ -80,6 +81,48 @@ def to_okx_timeframe(timeframe: str) -> str:
         return f"{amount}m"
     if unit in ("h", "d", "w"):
         return f"{amount}{unit.upper()}"
+
+    raise ValueError(f"Unsupported timeframe unit in {timeframe!r}: {unit!r}")
+
+
+def timeframe_to_timedelta(timeframe: str) -> timedelta:
+    """
+    Convert a project-style timeframe (e.g. `5m`, `4h`, `1d`, `1w`) into
+    the real-world duration of one candle, as a `timedelta`.
+
+    Added to fix a real bug found while running a deep multi-period
+    backtest: `scripts/run_backtest.py` was requesting the SAME candle
+    COUNT for both the LTF and HTF fetch (`total_candles = --candles *
+    --periods` for both), but a fixed candle count means wildly different
+    real time spans across timeframes -- e.g. requesting 18000 candles at
+    `4h` asks for ~8 years of history (vs. the ~187 days actually needed
+    to match an 18000-candle `15m` LTF request), causing the HTF fetch to
+    page through far more history than needed, taking many minutes and
+    risking hitting `fetch_ohlcv_history`'s `max_pages` safety cap before
+    ever getting real data back. Callers should instead size an HTF
+    request off the REAL TIME SPAN the LTF request covers (see
+    `scripts/run_backtest.py::_htf_candle_count_for_span`), using this
+    helper to convert both timeframes' candle counts into comparable
+    durations.
+    """
+    tf = timeframe.strip()
+    if not tf:
+        raise ValueError("timeframe must be a non-empty string")
+
+    unit = tf[-1].lower()
+    amount = tf[:-1]
+    if not amount.isdigit():
+        raise ValueError(f"Unsupported timeframe format: {timeframe!r}")
+    amount = int(amount)
+
+    if unit == "m":
+        return timedelta(minutes=amount)
+    if unit == "h":
+        return timedelta(hours=amount)
+    if unit == "d":
+        return timedelta(days=amount)
+    if unit == "w":
+        return timedelta(weeks=amount)
 
     raise ValueError(f"Unsupported timeframe unit in {timeframe!r}: {unit!r}")
 

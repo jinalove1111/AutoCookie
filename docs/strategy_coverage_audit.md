@@ -22,7 +22,7 @@ gated).
 | 4 | CHOCH/MSS Detection + swept-index causality (`market_structure.py`) | Implemented | Unit + causality-specific tests | None major | Fixed `n=2` swing window; no multi-bar confirmation | None | LOW |
 | 5 | FVG Detection (`fvg.py`) | Implemented | Unit tested | No minimum gap-size threshold — any nonzero imbalance counts | Assumes any 3-candle gap is tradeable | Spec doesn't define a minimum size either | MEDIUM |
 | 6 | Order Block Detection (`order_block.py`) | Implemented, now returns `impulse_index` | Unit tested | Only the single most-recent OB is ever considered; `_LOOKBACK=10`/`_IMPULSE_MULT=1.5` explicitly documented as untuned | Untuned constants, disclosed in-code | None | MEDIUM |
-| 7 | **Breaker Block Detection** (`detect_breaker_block`) | **UPDATE (post-audit): wired into `SignalEngine.generate_signal(use_breaker_block=False)`, opt-in, A/B tested.** Zero measured effect across 6 real out-of-sample periods (BTCUSDT/ETHUSDT 15m) -- diagnosed as "never got the chance to matter in this sample" (detector fires and can change signal output, but the 2 confirmed differing moments both fell inside an already-open trade's window), not "doesn't work." See CHANGELOG.md/HANDOFF.md/ENGINEERING_DECISIONS.md #11 for full evidence. Kept opt-in, not made default | Unit + end-to-end integration tests now exist (`test_strategy_entry_model.py`, `test_strategy_signal_engine.py`) | None remaining at the wiring level; needs a different/larger out-of-sample period to get a fair test | Assumes a mitigated OB that reverses (a "breaker") is a valid setup -- tested, inconclusive so far (not disproven, not proven) | Resolved: now wired, matching spec section 5 | LOW (wired + tested; re-test priority MEDIUM once more market regimes are available, see ROADMAP.md item #3) |
+| 7 | **Breaker Block Detection** (`detect_breaker_block`) | **UPDATE #2 (re-tested at scale): wired into `SignalEngine.generate_signal(use_breaker_block=False)`, opt-in, A/B tested on TWO independent samples.** Small sample (~31 days): zero measured effect. Larger sample (6 months, BTCUSDT): fired for real in 1 of 6 periods, effect NEGATIVE (win rate 90.48% -> 85.71%, aggregate -3.8%). Conclusion REVISED from "neutral" to "slightly negative" -- exactly the kind of thing more out-of-sample data is supposed to reveal. See CHANGELOG.md/HANDOFF.md/ENGINEERING_DECISIONS.md #14 for full evidence. Kept opt-in, not made default | Unit + end-to-end integration tests exist (`test_strategy_entry_model.py`, `test_strategy_signal_engine.py`) | None remaining at the wiring level; still only 1 real data point of "it fired and hurt" -- more samples would sharpen this further | Assumes a mitigated OB that reverses (a "breaker") is a valid setup -- tested twice, leaning negative so far | Resolved: now wired, matching spec section 5 | LOW (wired + tested; evidence leans negative, not neutral) |
 | 8 | Zone Mitigation Filter (`utils.is_zone_mitigated`) | Implemented this session | Unit + end-to-end regression test | None major yet | Any wick overlap = mitigated (no partial-fill/percentage nuance) | None | LOW (just shipped, verified against real data) |
 | 9 | Entry Model / confluence combination (`entry_model.py`) | Implemented | Unit tested | Binary confluence only (no strength scoring); a signal with exactly 1 of 4 possible confluence factors is treated identically to one with all 4; RR is always a fixed 2.0, never derived from structure | `_RR=2.0`, `_STOP_BUFFER=0.001` both explicitly disclosed as "reasonable defaults, not tuned" | Spec section 6 says entry requires bias + sweep + CHOCH + FVG/OB to "have confluence" (reads as ALL); actual code requires bias + (sweep OR choch) + (FVG OR OB) — a real, never-resolved gap between spec wording and implementation | MEDIUM |
 | 10 | Signal Engine orchestration (`signal_engine.py`) | Implemented | Integration tested | None | None | None | LOW |
@@ -45,7 +45,7 @@ gated).
 | 17 | Place entry order | Implemented (PaperBroker); LiveBroker fully stubbed | Tested (paper path) | LiveBroker is `NotImplementedError` throughout | N/A — Live is explicitly gated, out of scope | None | N/A (Live) |
 | 18 | Place SL/TP, exit checking | Implemented via `check_exit`/backtest scan-forward, incl. slippage on both entry and exit | Tested | Fixed levels only for the whole trade lifetime — no dynamic/volatility-based stop adjustment | None | None | MEDIUM |
 | 19 | **Handle break-even move** (`OrderManager.move_to_breakeven`) | **Implemented but NEVER called anywhere outside its own module** — no live/paper/backtest trade has ever had its stop moved to break-even | Unit tested in isolation only (pure function correctness); zero integration coverage | Never triggers automatically during an open trade in paper OR backtest | Assumes moving to break-even after a favorable move improves risk-adjusted returns — **completely unverified empirically** | None — this is unambiguous dead code, and `docs/architecture.md` explicitly lists it as a core Execution Engine responsibility | **HIGH** |
-| 20 | **Handle partial TP** (`OrderManager.handle_partial_tp`) | **UPDATE (post-audit): wired into `BacktestEngine._simulate_trade(use_partial_tp=False)`, opt-in, A/B tested.** Result: NEGATIVE -- reduced PnL in all 6 of 6 real out-of-sample periods tested (aggregate -31.4%). Mechanistic cause: this strategy's fixed 2:1 RR + high win rate in the tested sample means locking in 50% at 1R trades away upside on winners without protecting losers (which mostly never reach +1R before reversing to stop). See CHANGELOG.md/HANDOFF.md/ENGINEERING_DECISIONS.md #12 for full evidence and the ordering rationale (partial-TP checked before take_profit in a candle, not after). Kept opt-in, actively not recommended for the current strategy shape | Unit + end-to-end tests now exist (`test_backtest_engine.py`) proving disabled/enabled/protection/same-candle-ordering/short-mirror behavior | None remaining at the wiring level; the negative result itself may be strategy-shape-specific (different RR/win-rate profile could flip it) | Assumed locking in early profit reduces risk -- tested, and for THIS strategy's profile it net reduces returns instead | Resolved: now wired, matching architecture.md's "Handle partial TP" responsibility | LOW (wired + tested; negative result documented, not a gap) |
+| 20 | **Handle partial TP** (`OrderManager.handle_partial_tp`) | **UPDATE (re-tested at scale): wired into `BacktestEngine._simulate_trade(use_partial_tp=False)`, opt-in, A/B tested on TWO independent samples.** Result: NEGATIVE, REPRODUCED -- -31.4% on the small (~31-day) sample, -32.6% on a larger 6-month sample (BTCUSDT), reducing PnL in every single period on BOTH samples (12 of 12, no exceptions). Mechanistic cause: this strategy's fixed 2:1 RR + high win rate means locking in 50% at 1R trades away upside on winners without protecting losers (which mostly never reach +1R before reversing to stop). See CHANGELOG.md/HANDOFF.md/ENGINEERING_DECISIONS.md #12/#14 for full evidence and the ordering rationale (partial-TP checked before take_profit in a candle, not after). Kept opt-in, actively not recommended for the current strategy shape | Unit + end-to-end tests exist (`test_backtest_engine.py`) proving disabled/enabled/protection/same-candle-ordering/short-mirror behavior | None remaining at the wiring level; the negative result itself may be strategy-shape-specific (different RR/win-rate profile could flip it) | Assumed locking in early profit reduces risk -- tested twice, and for THIS strategy's profile it consistently reduces returns instead | Resolved: now wired, matching architecture.md's "Handle partial TP" responsibility | LOW (wired + tested; negative result reproduced on 2 samples, not a gap) |
 | 21 | Handle exchange errors / cancel unsafe orders | Implemented (`safety_checks.verify_safe_to_trade`, `CandleFetcher` raises `ConnectionError`/`RuntimeError` rather than swallowing) | Tested | Live-specific exchange error handling deferred with `LiveBroker` | N/A — Live gated | None | N/A (Live) |
 
 ## Portfolio / Journal Engine
@@ -70,26 +70,36 @@ gated).
 Three items were originally marked **HIGH** and shared the same shape —
 real logic that already existed, was unit-tested in isolation, and was
 **completely disconnected from the live decision loop**. All three are
-now wired and A/B tested against the same 6 real out-of-sample periods
-(BTCUSDT/ETHUSDT 15m), with three genuinely different outcomes:
+now wired, A/B tested against an initial 6-period sample (BTCUSDT/ETHUSDT
+15m, ~31 days), AND re-tested against a much larger 6-month/6-period
+sample (BTCUSDT only so far) -- two verdicts reproduced, one was revised:
 
-1. ~~Breaker Block detection (never wired into signal generation)~~ —
-   **RESOLVED, NEUTRAL**: wired (opt-in `--breaker-block`), zero
-   measured effect on all 6 periods, diagnosed why (see row #7 above and
-   `ENGINEERING_DECISIONS.md` #11). Kept opt-in.
-2. ~~Break-even stop management (never wired into trade exit handling)~~ —
-   **RESOLVED, POSITIVE**: wired (opt-in `--breakeven`), +13.5%
-   aggregate PnL and 5/6 → 6/6 profitable periods. Kept opt-in
-   (backtest-only so far; not yet wired into paper trading, see
-   `ROADMAP.md` item #2 — this is the one with an actual case for
+1. ~~Break-even stop management (never wired into trade exit handling)~~ —
+   **RESOLVED, POSITIVE, REPRODUCED**: wired (opt-in `--breakeven`),
+   +13.5% on the small sample, +9.2% on the 6-month sample (same
+   direction, independent data -- the most robust of the three). Kept
+   opt-in (backtest-only so far; not yet wired into paper trading, see
+   `ROADMAP.md` item #1 — this is the one with the strongest case for
    eventually promoting to paper trading).
-3. ~~Partial take-profit (never wired into trade exit handling)~~ —
-   **RESOLVED, NEGATIVE**: wired (opt-in `--partial-tp`), reduced PnL in
-   ALL 6 of 6 periods (aggregate -31.4%), mechanistic cause identified
-   (this strategy's fixed 2:1 RR + high win rate in-sample means partial
-   exits trade away winner upside without protecting losers). Kept
-   opt-in, actively not recommended for the current strategy shape (see
-   row #20 above and `ENGINEERING_DECISIONS.md` #12).
+2. ~~Partial take-profit (never wired into trade exit handling)~~ —
+   **RESOLVED, NEGATIVE, REPRODUCED**: wired (opt-in `--partial-tp`),
+   -31.4% on the small sample, -32.6% on the 6-month sample -- reduced
+   PnL in every single period tested across BOTH samples (12 of 12, no
+   exceptions). Mechanistic cause identified (this strategy's fixed 2:1
+   RR + tendency toward a high win rate means partial exits trade away
+   winner upside without protecting losers). Kept opt-in, actively not
+   recommended for the current strategy shape (see row #20 above and
+   `ENGINEERING_DECISIONS.md` #12/#14).
+3. ~~Breaker Block detection (never wired into signal generation)~~ —
+   **RESOLVED, REVISED from NEUTRAL to SLIGHTLY NEGATIVE**: wired
+   (opt-in `--breaker-block`). Zero measured effect on the small sample;
+   on the 6-month sample it fired for real in 1 of 6 periods and the
+   effect was negative (aggregate -3.8%). This is the clearest
+   demonstration in this project so far of why out-of-sample testing at
+   increasing scale matters -- the smaller sample's "neutral" verdict was
+   real but incomplete, not wrong exactly, just under-powered to detect
+   an effect that needed more data to show up (see row #7 above and
+   `ENGINEERING_DECISIONS.md` #14).
 
 The fact that identical A/B methodology applied to three similar-looking
 "wire up dead code" changes produced three different verdicts (neutral /

@@ -4,6 +4,75 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Fixed HTF over-fetch bug; re-validated all 3 audit findings across 6 months of real regimes
+
+### Fixed
+- **`scripts/run_backtest.py` requested the SAME candle COUNT for both
+  the LTF and HTF fetch**, discovered while attempting a deep
+  multi-period run: requesting 18000 candles at `15m` (to cover ~187
+  days across 6 periods) also requested 18000 candles at `4h` for
+  HTF -- ~8.2 years of history, causing the HTF fetch to page through
+  vastly more data than needed and hang for many minutes (had to be
+  killed). Added `app.data.candle_fetcher.timeframe_to_timedelta()` and
+  `scripts/run_backtest.py::htf_candle_count_for_span()`, which sizes
+  the HTF request off the REAL TIME SPAN the LTF request covers (with a
+  300-candle floor so `detect_htf_bias()` never starves of history) --
+  confirmed directly: the exact same buggy scenario now requests 1125
+  HTF candles (~187 days, matching the LTF span) instead of 18000
+  (~8.2 years).
+
+### Verified
+- `pytest backend/tests/` 187/187 passing (2 new: `timeframe_to_timedelta`
+  unit conversion + bad-format error tests).
+
+### Re-validated all 3 audit findings on a much larger, more diverse sample
+- Using the fix above, re-ran all four configurations (baseline,
+  `--breakeven`, `--breaker-block`, `--partial-tp`) on BTCUSDT/15m
+  across 6 periods of 3000 candles each (~187 days total, January
+  through July 2026 -- genuinely different market conditions per period:
+  win rates ranged 62.5%-90.48%, trade counts 8-28, unlike the single
+  ~31-day window every prior result in this project rested on).
+  Baseline itself: **6 of 6 periods profitable** (aggregate $1905.29).
+
+  | | P1 | P2 | P3 | P4 | P5 | P6 | Sum |
+  |---|---|---|---|---|---|---|---|
+  | Baseline | $433.51 | $208.77 | $70.14 | $567.92 | $162.77 | $462.18 | $1905.29 |
+  | Break-even | $383.30 | $235.08 | $96.52 | $596.91 | $274.69 | $493.95 | **$2080.45 (+9.2%)** |
+  | Breaker Block | (same) | (same) | (same) | $496.11 | (same) | (same) | **$1833.48 (-3.8%)** |
+  | Partial TP | $282.50 | $98.83 | $42.89 | $404.57 | $157.88 | $297.21 | **$1283.87 (-32.6%)** |
+
+  - **Break-even: CONFIRMED positive** (+9.2% here vs. +13.5% on the
+    smaller sample -- same direction, reproducible across two
+    independent, non-overlapping datasets). 5 of 6 periods individually
+    improved.
+  - **Partial TP: CONFIRMED negative** (-32.6% here vs. -31.4% on the
+    smaller sample -- also reproducible). Every period got worse; the
+    earlier mechanistic explanation (fixed 2:1 RR + high win rate means
+    partial exits trade away winner upside without protecting losers)
+    holds up on the larger sample too.
+  - **Breaker Block: REVISED from neutral to slightly negative.** The
+    smaller sample showed literally zero effect (the 2 confirmed
+    signal-level differences both happened to fall inside an
+    already-open trade's window). On this larger sample, it DID get a
+    real chance to matter once (period 4: win rate 90.48% -> 85.71%,
+    PnL $567.92 -> $496.11) -- and the effect was negative. Still only 1
+    of 6 periods affected, so "proven harmful" would overstate this, but
+    "neutral" no longer accurately describes it either -- the evidence
+    now leans negative, not neutral. This is exactly why the out-of-
+    sample tooling and the "re-test at larger scale" roadmap item exist:
+    the smaller sample's conclusion was real but incomplete.
+
+### Why this matters
+- All three audit findings from the previous session rested on a SINGLE
+  ~31-day window. Re-testing on a 6x larger, genuinely more varied
+  sample reproduced two of the three conclusions almost exactly
+  (break-even positive, partial-TP negative) and meaningfully refined
+  the third (Breaker Block neutral -> slightly negative). This is
+  itself validation of the out-of-sample methodology: results that
+  reproduce across independent samples are real; one that changes with
+  more data is exactly the kind of thing more data is supposed to
+  reveal.
+
 ## [Unreleased] - Partial take-profit wired and A/B tested (measured NEGATIVE, kept optional)
 
 ### Added

@@ -324,3 +324,71 @@ assumption like the SL-vs-TP one, it's a deterministic consequence of
 `PARTIAL_TP_TRIGGER_R < RR`. (If a future change ever made
 `PARTIAL_TP_TRIGGER_R >= RR` for some configuration, this ordering
 argument would no longer hold and would need to be revisited.)
+
+---
+
+## 13. HTF fetch size is derived from the LTF request's real time span, not copied from its candle count
+
+**Decision**: `scripts/run_backtest.py` no longer requests the same
+candle COUNT for the HTF fetch as the LTF fetch. `htf_candle_count_for_span()`
+converts the LTF request into a real time span (via the new
+`app.data.candle_fetcher.timeframe_to_timedelta()`) and divides by the
+HTF bar's own duration to get the right HTF candle count for that same
+span, with a 300-candle floor.
+
+**Why**: discovered as a real bug, not a theoretical concern -- a
+6-period/3000-candles-per-period regime-validation run (`--candles 3000
+--periods 6`) requested 18000 candles for BOTH the `15m` LTF fetch
+(correctly ~187 days) and the `4h` HTF fetch (~8.2 years, since a fixed
+candle count means wildly different real time spans across timeframes).
+The HTF fetch consequently paged through far more history than needed
+and had to be killed after 10+ minutes with no output. A candle COUNT is
+not a portable unit of "how much history do I need" across different
+timeframes; a time SPAN is.
+
+**Alternative considered**: cap the HTF request at some fixed maximum
+(e.g. `min(total_requested, 2000)`) rather than computing the real
+span. Rejected — an arbitrary cap either over-fetches for small LTF
+requests (wasteful) or under-fetches for large ones (risks starving
+`detect_htf_bias()` of real runway for genuinely long backtests), while
+computing the actual required span gets the right answer in both
+directions automatically.
+
+**Trade-off accepted**: none significant — `timeframe_to_timedelta()`
+only supports the same timeframe formats `to_okx_timeframe()` already
+does (`m`/`h`/`d`/`w` suffixes), so no new format support was needed to
+implement this.
+
+---
+
+## 14. Out-of-sample results are re-validated at larger scale before being trusted, not assumed to generalize
+
+**Decision**: after the initial A/B tests for break-even/Breaker Block/
+partial-TP (all on a single ~31-day/3-period sample), the SAME three
+experiments were re-run on a 6-month/6-period sample before treating any
+of the three conclusions as settled.
+
+**Why**: this is not redundant busywork -- it changed one of the three
+conclusions. Break-even and partial-TP reproduced almost exactly (+13.5%
+-> +9.2%; -31.4% -> -32.6%), which is real evidence those effects are
+robust, not sample-specific flukes. Breaker Block did NOT reproduce as
+"neutral" -- on the larger sample it fired for real once and the effect
+was negative. Had the project stopped at the first (smaller) sample and
+called Breaker Block's result final, it would have carried a materially
+wrong (too optimistic) belief about that feature forward. The entire
+point of building out-of-sample tooling (see decision #8) is defeated if
+its output is only ever checked once and then trusted indefinitely.
+
+**Alternative considered**: treat the first sample as sufficient once
+each experiment showed SOME result (positive/neutral/negative) and move
+on to the next roadmap item. Rejected — a single sample, however
+carefully split into non-overlapping periods, is still one dataset from
+one continuous slice of history; "reproduces on an independent, larger,
+more varied sample" is a categorically stronger evidentiary bar than
+"produced a result once."
+
+**Trade-off accepted**: real time and API calls spent re-running
+experiments that had already produced results once. Accepted because
+the Breaker Block revision alone justified the cost -- it changed a
+real conclusion this project would otherwise be carrying forward
+incorrectly.

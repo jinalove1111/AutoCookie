@@ -14,11 +14,14 @@ from __future__ import annotations
 
 import pytest
 
+from datetime import timedelta
+
 from app.data.candle_fetcher import (
     OKX_HISTORY_CANDLES_URL,
     OKX_MAX_LIMIT,
     OKX_PUBLIC_CANDLES_URL,
     CandleFetcher,
+    timeframe_to_timedelta,
     to_okx_symbol,
     to_okx_timeframe,
 )
@@ -56,6 +59,20 @@ def test_to_okx_timeframe_raises_for_bad_format():
         to_okx_timeframe("abc")
     with pytest.raises(ValueError, match="Unsupported timeframe unit"):
         to_okx_timeframe("5x")
+
+
+def test_timeframe_to_timedelta_converts_every_unit():
+    assert timeframe_to_timedelta("15m") == timedelta(minutes=15)
+    assert timeframe_to_timedelta("4h") == timedelta(hours=4)
+    assert timeframe_to_timedelta("1d") == timedelta(days=1)
+    assert timeframe_to_timedelta("2w") == timedelta(weeks=2)
+
+
+def test_timeframe_to_timedelta_raises_for_bad_format():
+    with pytest.raises(ValueError, match="Unsupported timeframe format"):
+        timeframe_to_timedelta("abc")
+    with pytest.raises(ValueError, match="Unsupported timeframe unit"):
+        timeframe_to_timedelta("5x")
 
 
 # --- Network-mocked pagination tests ----------------------------------------

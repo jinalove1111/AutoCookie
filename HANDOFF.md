@@ -1,6 +1,30 @@
 # HANDOFF — JadeCap Automated Trading Bot
 
-## 상태: (야간 CTO 세션, founder 부재) 감사에서 발견한 HIGH 항목 3개 전부 완료 — Partial TP까지 배선 + A/B 검증 완료. **이번 결과는 명확한 부정적 결과**: break-even/breaker-block 검증에 썼던 것과 동일한 6개 독립 기간(BTCUSDT/ETHUSDT 15m)에서 partial-tp가 **6개 기간 전부에서 PnL을 악화시킴**(합산 $819.09→$562.27, -31.4%), 예외 없음. 원인도 명확: 이 전략은 RR=2.0 고정 + 이 표본에서 승률이 높아서(많은 트레이드가 끝까지 TP 도달), 1R에서 절반을 미리 청산하면 승리 트레이드의 upside 절반을 매번 포기하는데 패배 트레이드는 애초에 1R까지도 못 가는 경우가 많아 방어 효과가 거의 없음 — "이 전략처럼 승률 높고 RR 고정인 경우 partial-TP가 구조적으로 불리하다"는 실측 기반 결론. opt-in 유지, 기본값 전환 안 함, paper에도 연결 안 함. 감사에서 발견된 3개 HIGH 항목(breaker block=중립, break-even=긍정, partial-tp=부정) 전부 A/B 검증 완료. Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+## 상태: (야간 CTO 세션, founder 부재, 계속 진행 중) HTF 과다 fetch 버그 발견/수정 + 감사 3개 항목을 6개월(6기간×3000캔들) 딥 데이터로 재검증 완료. **핵심 발견**: break-even(+9.2%, 이전 소표본 +13.5%와 방향 일치 — 재현됨)과 partial-tp(-32.6%, 이전 -31.4%와 거의 동일 — 재현됨)는 두 독립 표본에서 결론이 그대로 유지됨. 반면 **breaker-block은 결론이 바뀜**: 소표본에서는 "완전히 중립"(발현 기회 자체가 없었음)이었는데, 6개월 딥 데이터에서는 실제로 한 기간(P4)에서 발현되어 **부정적** 효과를 보임(승률 90.48%→85.71%, PnL $567.92→$496.11, 합산 -3.8%) — "충분한 데이터가 있으면 결론이 바뀔 수 있다"를 실제로 보여준 사례. Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+
+## 전체 회차 (HTF 과다 fetch 버그 수정 + 3개 감사 항목 딥 데이터 재검증 — "계속하라" 지시에 따라 로드맵 1순위 항목 진행)
+- [x] **버그 발견 계기**: 로드맵 1순위 "다른 시장 레짐에 걸친 기간 확보"를 실행하려고 `--candles 3000 --periods 6`(총 18000캔들 ≈ 187일)으로 딥 백테스트를 시도했는데, 10분 넘게 아무 출력도 없이 멈춤 — 프로세스 확인 결과 실제로 살아있었지만 진행이 없어 강제 종료
+- [x] **근본 원인 진단**: `run_backtest.py`가 LTF와 HTF fetch 양쪽에 동일한 `total_candles = --candles * --periods`를 그대로 사용하고 있었음 — LTF(15m) 기준 18000캔들은 187일치인데, 같은 18000캔들을 HTF(4h) 기준으로 요청하면 약 8.2년치 히스토리를 요구하게 되어 `fetch_ohlcv_history`가 `max_pages` 안전 상한(200페이지)까지 계속 페이징하며 몇 분간 멈춘 것처럼 보였음
+- [x] `app.data.candle_fetcher.timeframe_to_timedelta()`(타임프레임 문자열→실제 시간 길이 변환) + `scripts/run_backtest.py::htf_candle_count_for_span()`(LTF 요청이 커버하는 실제 시간 범위에 맞춰 HTF 요청량을 역산, `detect_htf_bias()`가 굶지 않도록 300캔들 하한 적용) 신규 — 실측으로 직접 확인: 동일한 버그 시나리오에서 이제 HTF 요청량이 18000(≈8.2년)이 아니라 1125(≈187일, LTF 범위와 정확히 일치)로 계산됨
+- [x] 신규 테스트 2종(`test_candle_fetcher.py`): `timeframe_to_timedelta`의 단위별 변환 + 잘못된 포맷 에러 처리
+- [x] 전체 `pytest backend/tests/` **187/187 통과**(기존 185 + 신규 2)
+- [x] **수정 후 딥 데이터 재검증(가장 중요)**: BTCUSDT/15m, `--candles 3000 --periods 6`(2026년 1월~7월, 6개월치, 실제로 서로 다른 시장 상황 — 승률 62.5%~90.48%, 트레이드 수 8~28건으로 기간마다 확연히 다름)로 baseline/breakeven/breaker-block/partial-tp 4개 설정 전부 재실행:
+
+  | | P1 | P2 | P3 | P4 | P5 | P6 | 합계 |
+  |---|---|---|---|---|---|---|---|
+  | Baseline | $433.51 | $208.77 | $70.14 | $567.92 | $162.77 | $462.18 | $1905.29 |
+  | Break-even | $383.30 | $235.08 | $96.52 | $596.91 | $274.69 | $493.95 | **$2080.45 (+9.2%)** |
+  | Breaker Block | 동일 | 동일 | 동일 | $496.11 | 동일 | 동일 | **$1833.48 (-3.8%)** |
+  | Partial TP | $282.50 | $98.83 | $42.89 | $404.57 | $157.88 | $297.21 | **$1283.87 (-32.6%)** |
+
+  baseline 자체가 이미 **6개 기간 전부 수익**(합산 $1905.29) — 소표본(31일/3기간)보다 훨씬 강력하고 다양한 증거
+- [x] **Break-even: 재현됨(긍정 결론 유지)** — 소표본 +13.5% vs 딥표본 +9.2%, 방향 일치. 6개 기간 중 5개 개선
+- [x] **Partial TP: 재현됨(부정 결론 유지)** — 소표본 -31.4% vs 딥표본 -32.6%, 거의 동일한 크기로 재현. 이전 회차의 기계적 설명(RR 고정 + 높은 승률 → partial 청산이 승자의 upside를 매번 깎아먹음)이 큰 표본에서도 그대로 확인됨
+- [x] **Breaker Block: 결론이 실제로 바뀜(중립 → 소폭 부정)** — 소표본에서는 발현 기회 자체가 없어서(2번의 실제 신호 차이가 둘 다 이미 열려있던 트레이드 구간에 우연히 걸림) 완전히 중립이었는데, 6배 큰 표본에서는 실제로 1개 기간(P4)에서 발현됐고 그 효과가 부정적이었음(승률 90.48%→85.71%). 여전히 "확실히 해롭다"고 하기엔 표본이 작지만(6개 중 1개), "중립"이라는 이전 결론은 더 이상 정확하지 않음 — **이것이 바로 OOS 검증 도구를 만든 이유가 실제로 작동한 사례**: 표본이 작으면 진짜 결론이 아니라 우연히 발현 기회가 없었을 뿐인 결론을 얻을 수 있음
+- [x] `py_compile` 무오류 확인, grep 확인 — 신규 코드에 TODO/placeholder/mock/bare pass/NotImplementedError 없음
+- [x] `CHANGELOG.md`에 신규 Unreleased 섹션 추가(전체 비교표 + 재검증 결과 포함)
+- [x] scope 준수: `backend/app/*` 전부 무변경(이번 회차는 데이터 계층 fetch 버그 수정 + 실측 재검증), live-trading 게이팅 무관
+- [x] git commit/push 완료 (`origin/master`) — operator가 "계속하라, CTO처럼 사고하라, API 자격증명/라이브 승인/보안/외부유료서비스 아니면 계속 진행"이라고 명시적으로 재확인함(이 태스크는 그 어느 카테고리에도 해당하지 않음)
 
 ## 전체 회차 (Partial Take-Profit 완전 배선 + A/B 검증 — 감사 HIGH 항목 3개 중 마지막, "계속하라" 지시에 따라 이어서 진행)
 - [x] `BacktestEngine._simulate_trade()`에 2-leg exit 지원 추가: `use_partial_tp=True`(opt-in) 시 `PARTIAL_TP_PORTION`(50%)이 `PARTIAL_TP_TRIGGER_R`(1R) 도달 시 자체 가격/수수료로 청산되고, 나머지는 원래 stop_loss/take_profit으로 계속 진행. 캔들 내 체크 순서: stop_loss(최악 우선, 기존 유지) → **partial-TP 트리거**(아직 미발동 시) → take_profit — partial 트리거가가 항상 take_profit보다 진입가에 가까우므로(RR>1인 한) take_profit에 도달하는 캔들은 반드시 partial 트리거도 지나쳤을 것이라는 논리로, 단일 캔들이 곧장 take_profit까지 점프해도 partial leg를 먼저 정확히 banking하도록 설계
@@ -284,11 +308,11 @@
 - [x] ~~CircuitBreaker 상태는 프로세스 메모리에만 존재~~ — DB 영속화 완료(위 참조, `028087a`)
 
 ## 현재 위치
-Strategy > Risk > Backtest > Paper Trading > Dashboard 전 계층의 배관 갭은 전부 해소됨. 감사(`docs/strategy_coverage_audit.md`)에서 발견한 HIGH 항목 3개 **전부** A/B 검증 완료: **break-even**(6개 기간 +13.5%, 5/6→6/6 수익 — 긍정적, opt-in 유지) / **Breaker Block**(6개 기간 전부 변화 0 — 중립, 원인 진단 완료, opt-in 유지) / **Partial TP**(6개 기간 전부 악화, -31.4% — 부정적, opt-in 유지하되 이 전략엔 비추천, 원인 진단 완료). 감사 항목 자체는 이제 전부 처리됨. **다음 최고-ROI 후보 (우선순위순)**:
-- **다른 시장 레짐에 걸친 기간 확보 (최우선 후보로 승격)**: 지금까지의 모든 백테스트 기간(break-even/breaker-block/partial-tp 검증 전부 포함)이 같은 ~31일 달력 구간 안에서만 나뉜 것 — `--candles`를 늘리거나(`--candles 3000 --periods 6` 등) 시간이 지난 뒤 재실행. Breaker Block의 "이 표본에서 기회가 없었을 뿐"이라는 결론과 Partial TP의 "이 전략의 승률/RR 프로필에서는 불리함"이라는 결론 둘 다 표본 의존적일 수 있음 — 다른 레짐에서 재검증하면 셋 다 다른 결론이 나올 수도 있음
-- **`run_paper.py`(실 paper trading)에 break-even 연결 여부 결정**: 감사 3개 항목 중 유일하게 긍정적 결과(backtest A/B 기준). `TradeTracker`에 현재 `update_stop_loss` 같은 메서드가 없음 — DB에 저장된 open position의 stop_loss를 갱신하는 새 경로 설계 필요
+Strategy > Risk > Backtest > Paper Trading > Dashboard 전 계층의 배관 갭은 전부 해소됨. 감사 HIGH 항목 3개 전부 A/B 검증 완료, 이제 **6개월 딥 데이터로 재검증까지 완료**: **break-even**(딥표본 +9.2%, 소표본 +13.5%와 재현 — 긍정적, opt-in 유지) / **Partial TP**(딥표본 -32.6%, 소표본 -31.4%와 재현 — 부정적, opt-in 유지하되 비추천) / **Breaker Block**(소표본 중립 → 딥표본 소폭 부정으로 결론 변경, 6개 중 1개 기간에서 실제 악화 발현). **다음 최고-ROI 후보 (우선순위순)**:
+- **`run_paper.py`(실 paper trading)에 break-even 연결 (최우선 후보로 승격)**: 소표본+딥표본(6개월) 양쪽 모두에서 긍정적으로 재현된 유일한 항목 — 이제 두 독립 표본에서 검증됐으니 paper 연결을 진지하게 고려할 시점. `TradeTracker`에 현재 `update_stop_loss` 같은 메서드가 없음 — DB에 저장된 open position의 stop_loss를 갱신하는 새 경로 설계 필요
+- **ETHUSDT도 동일한 6개월 딥 데이터로 재검증**: 이번 회차는 BTCUSDT만 재검증함(시간 관계상) — ETHUSDT에서도 break-even 긍정/partial-tp 부정/breaker-block 소폭부정이 재현되는지 확인하면 증거력이 한층 강해짐
+- **상관성 낮은 추가 심볼 확보**: 지금까지 BTCUSDT/ETHUSDT만 확인(서로 상관성 높음)
 - **`_LOOKBACK`/`_IMPULSE_MULT`/`_STOP_BUFFER`/`_RR`/`BREAKEVEN_TRIGGER_R`/`PARTIAL_TP_TRIGGER_R`/`PARTIAL_TP_PORTION` 파라미터 재검토**: 파라미터 스윕을 한다면 **반드시** `--periods`로 나눈 일부 기간에서만 스윕하고 나머지는 최종 확인에만 사용
-- **더 다양한/독립적인 심볼**: 지금까지 BTCUSDT/ETHUSDT만 확인(상관성 높음)
 - **scope 경계**: `/dashboard/signals`는 `run_paper.py`에서만 배선(`run_backtest.py`는 의도적으로 안 건드림)
 - **`ltf_bias` 재검토 후보**: 실제 트레이딩 판단에 쓰이게 되면 재확인 필요
 - Paper Trading 재검토 후보(낮은 우선순위, "갭 아님"): single-pass 모드의 loss-limit 거부가 Telegram/Discord 알림 없이 stdout/summary dict에만 보임

@@ -48,6 +48,7 @@ so only genuinely closed HTF candles are ever visible to a given LTF step.
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -62,10 +63,14 @@ DEFAULT_OUTPUT_PATH = DEFAULT_REPORTS_DIR / "backtest_report.md"
 # statistically meaningful sample for judging whether the strategy has
 # real edge than the ~1 day a single 300-candle page gave.
 DEFAULT_CANDLE_COUNT = 5000
+# Floor for the HTF fetch (see htf_candle_count_for_span) -- one full
+# OKX page, ensuring detect_htf_bias() always has enough runway even
+# when the LTF request is small.
+_HTF_FLOOR_CANDLES = 300
 
 from app.backtesting.backtest_engine import MIN_CANDLES, BacktestEngine
 from app.backtesting.report_generator import ReportGenerator
-from app.data.candle_fetcher import CandleFetcher
+from app.data.candle_fetcher import CandleFetcher, timeframe_to_timedelta
 from app.risk.risk_manager import RiskManager
 from app.strategy.signal_engine import SignalEngine
 
@@ -79,6 +84,36 @@ def fetch_candles(symbol: str, timeframe: str, requested: int) -> list:
     caller (via the returned count), not silently swallowed here.
     """
     return CandleFetcher().fetch_ohlcv_history(symbol, timeframe, total_candles=requested)
+
+
+def htf_candle_count_for_span(ltf_timeframe: str, ltf_candle_count: int, htf_timeframe: str) -> int:
+    """How many `htf_timeframe` candles are needed to cover the SAME real
+    time span as `ltf_candle_count` candles of `ltf_timeframe`.
+
+    Bug found and fixed while running a deep multi-period backtest: this
+    script previously requested the SAME candle COUNT for both the LTF
+    and HTF fetch, but a fixed count means wildly different real time
+    spans across timeframes -- requesting e.g. 18000 candles at `4h`
+    asks for ~8 years of history (vs. the ~187 days actually needed to
+    match an 18000-candle `15m` LTF request), making the HTF fetch page
+    through vastly more history than needed (many minutes, and risking
+    exhausting `fetch_ohlcv_history`'s `max_pages` safety cap before ever
+    returning). See `app.data.candle_fetcher.timeframe_to_timedelta`'s
+    docstring for the full story.
+
+    A small floor (300, one full page) is applied so short LTF requests
+    never ask for an unreasonably tiny HTF slice that would starve
+    `detect_htf_bias()` of the history it needs (it requires >= 10 HTF
+    candles with >= 2 swing highs/lows each, per `MIN_CANDLES`'s own
+    sizing note in backtest_engine.py) -- slightly over-fetching HTF is
+    harmless (`_advance_htf_cursor` simply won't use candles beyond what
+    a given LTF step's timestamp allows), under-fetching risks silently
+    degrading every early signal to "neutral" bias.
+    """
+    ltf_span = timeframe_to_timedelta(ltf_timeframe) * ltf_candle_count
+    htf_bar = timeframe_to_timedelta(htf_timeframe)
+    needed = math.ceil(ltf_span / htf_bar)
+    return max(needed, _HTF_FLOOR_CANDLES)
 
 
 def run_backtest(
@@ -272,9 +307,15 @@ def main() -> int:
     # run_paper.py's pattern: never fall back to reusing the LTF series as
     # HTF -- an HTF fetch failure or empty result is a hard failure here
     # too, since a silent LTF-as-HTF fallback would defeat the entire point
-    # of the HTF/LTF separation).
+    # of the HTF/LTF separation). Sized to cover the SAME REAL TIME SPAN as
+    # the LTF request, not the same raw candle count (see
+    # htf_candle_count_for_span's docstring for the real bug this fixes --
+    # found while running a deep multi-period backtest, where requesting
+    # the LTF count verbatim for HTF asked for years more history than
+    # needed and took many minutes to page through).
+    htf_requested = htf_candle_count_for_span(args.timeframe, total_requested, settings.HTF_TIMEFRAME)
     try:
-        htf_candles = fetch_candles(args.symbol, settings.HTF_TIMEFRAME, total_requested)
+        htf_candles = fetch_candles(args.symbol, settings.HTF_TIMEFRAME, htf_requested)
     except Exception as exc:  # network/data errors are genuine failures
         print(f"ERROR: failed to fetch HTF candles for {args.symbol}: {exc}")
         return 1
@@ -284,12 +325,13 @@ def main() -> int:
         return 1
 
     print(f"Fetched {len(htf_candles)} HTF candles for {args.symbol}/{settings.HTF_TIMEFRAME}.")
-    if len(htf_candles) < total_requested:
+    if len(htf_candles) < htf_requested:
         print(
-            f"NOTE: requested {total_requested} HTF candles but only "
-            f"{len(htf_candles)} are available from OKX for "
-            f"{args.symbol}/{settings.HTF_TIMEFRAME} -- not an error, this "
-            "is genuinely all the history that exists."
+            f"NOTE: requested {htf_requested} HTF candles (sized to cover the "
+            f"same time span as {total_requested} {args.timeframe} LTF "
+            f"candles) but only {len(htf_candles)} are available from OKX "
+            f"for {args.symbol}/{settings.HTF_TIMEFRAME} -- not an error, "
+            "this is genuinely all the history that exists."
         )
 
     # --- 2. Split into non-overlapping periods (periods=1 -> single chunk,
