@@ -18,23 +18,12 @@ export default function BiasCard() {
 
       {!loading && !error && bias && (
         <>
-          <span
-            style={{
-              display: "inline-block",
-              background: "#eee",
-              border: "1px solid #ccc",
-              borderRadius: 4,
-              padding: "2px 8px",
-              fontSize: 12,
-              marginBottom: 8,
-            }}
-          >
-            Not live yet
-          </span>
           <p style={{ margin: "4px 0" }}>Symbol: {bias.symbol}</p>
           <p style={{ margin: "4px 0" }}>HTF bias: {bias.htf_bias}</p>
           <p style={{ margin: "4px 0" }}>LTF bias: {bias.ltf_bias}</p>
-          <p style={{ margin: "4px 0", fontSize: 12, opacity: 0.7 }}>{bias.note}</p>
+          {bias.note && (
+            <p style={{ margin: "4px 0", fontSize: 12, opacity: 0.7 }}>{bias.note}</p>
+          )}
         </>
       )}
     </section>

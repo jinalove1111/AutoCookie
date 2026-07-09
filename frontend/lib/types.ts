@@ -53,8 +53,14 @@ export interface LogEntry {
 }
 
 /**
- * GET /dashboard/bias — INTENTIONALLY still a placeholder on the backend.
- * Always includes `note` explaining it is not yet wired to live strategy state.
+ * GET /dashboard/bias — real, live-computed via detect_htf_bias() against
+ * freshly-fetched OKX candles (no API key needed). `htf_bias` matches the
+ * real strategy's HTF bias gate exactly; `ltf_bias` reuses the same
+ * algorithm on the LTF series -- there is no distinct "LTF bias" concept
+ * in the actual strategy design, see the backend docstring for the full
+ * judgment-call rationale. `note` is empty on success, and describes the
+ * failure (falling back to "neutral"/"neutral") if the live candle fetch
+ * fails.
  */
 export interface Bias {
   symbol: string;

@@ -4,6 +4,47 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Dashboard: /dashboard/bias now real, live-computed
+
+### Fixed
+- **`/dashboard/bias` hardcoded `"neutral"`/`"neutral"` with a "not yet
+  wired" note.** Now fetches real OKX HTF/LTF candles (read-only, no API
+  key, the same live-fetch pattern `scripts/run_paper.py`/
+  `run_backtest.py` already use) and computes `htf_bias` via the real
+  `detect_htf_bias()` -- the exact same function the live strategy's bias
+  gate uses. A live fetch failure degrades gracefully (returns
+  `"neutral"`/`"neutral"` with a note describing the failure) instead of
+  500ing the dashboard.
+- Removed a hardcoded "Not live yet" badge from the frontend `BiasCard`
+  (same stale badge already removed from `RiskStatusPanel` in the
+  previous commit), now misleading since the data is live.
+
+### Design note (not a bug, documented for the next engineer)
+- **`ltf_bias` has no defined meaning in the real strategy design** --
+  `docs/strategy_spec.md`/`signal_engine.py` only ever call
+  `detect_htf_bias()` on HTF candles; LTF candles feed the
+  sweep/CHoCH/FVG/order-block detectors instead, not a bias concept. This
+  API field predates that design. Rather than fabricate a number, this
+  reuses the same real, generic structural-bias algorithm on the LTF
+  series -- a genuine "recent LTF swing-structure bias" reading, but a
+  distinct concept from the strategy's real HTF bias gate. Flagged in
+  HANDOFF.md as worth an explicit design confirmation if this field's
+  meaning matters downstream (e.g. is ever consumed by an actual trading
+  decision rather than just displayed).
+
+### Verified
+- `pytest backend/tests/` 145/145 passing (2 new: HTF/LTF bias computed
+  independently from two genuinely different fetched series -- proving
+  `ltf_bias` isn't just `htf_bias` duplicated -- and graceful degradation
+  on a simulated fetch failure). Full suite re-run 2x with no flakiness.
+- Real end-to-end: booted the actual FastAPI app, hit the live
+  `/dashboard/bias` endpoint through `TestClient` against REAL OKX data
+  (no mocks) -- returned `{"symbol": "BTCUSDT", "htf_bias": "neutral",
+  "ltf_bias": "neutral", "note": ""}` (neutral is a valid real result in
+  today's flat market, not an error -- consistent with the same day's
+  0-trade backtest run in an earlier commit).
+- `npx tsc --noEmit` clean.
+
 ## [Unreleased] - Dashboard: /dashboard/risk-status now real, DB-backed
 
 ### Fixed

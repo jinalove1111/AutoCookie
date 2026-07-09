@@ -33,19 +33,102 @@ def test_dashboard_logs_empty_on_fresh_db(client):
     assert response.json() == []
 
 
-def test_dashboard_bias_and_signals_still_placeholders(client):
-    """Unlike /dashboard/risk-status (see below, now real -- wired in the
-    same round of Dashboard work), /bias and /signals remain intentional
-    placeholders: bias has no persisted live-strategy output to read, and
-    no running process persists generated signals to the signals table yet.
+def test_dashboard_signals_still_a_placeholder(client):
+    """Unlike /dashboard/bias and /dashboard/risk-status (both now real),
+    /signals remains an intentional placeholder: no running process
+    persists generated signals to the signals table yet (a separate,
+    larger design decision -- see HANDOFF.md).
     """
-    bias = client.get("/dashboard/bias")
-    assert bias.status_code == 200
-    assert "note" in bias.json()
-
     signals = client.get("/dashboard/signals")
     assert signals.status_code == 200
     assert signals.json()["signals"] == []
+    assert "note" in signals.json()
+
+
+def _bias_candle(high: float, low: float, ts) -> dict:
+    from datetime import datetime, timedelta, timezone
+
+    base = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    mid = (high + low) / 2
+    return {
+        "open": mid,
+        "high": high,
+        "low": low,
+        "close": mid,
+        "timestamp": base + timedelta(minutes=ts),
+    }
+
+
+# Same shapes test_strategy_bias.py uses directly against detect_htf_bias --
+# reused here as fixtures fed through the live HTTP endpoint instead.
+_BULLISH_HIGHS = [10, 11, 20, 11, 9, 11, 25, 11, 9, 11, 30, 11, 9]
+_BULLISH_LOWS = [8, 9, 15, 9, 5, 9, 18, 9, 8, 9, 22, 11, 12]
+_BEARISH_HIGHS = [10, 11, 30, 11, 9, 11, 25, 11, 9, 11, 20, 11, 9]
+_BEARISH_LOWS = [8, 9, 15, 9, 6, 9, 18, 9, 3, 9, 22, 11, 12]
+
+
+def _bullish_candles() -> list:
+    return [_bias_candle(h, l, i) for i, (h, l) in enumerate(zip(_BULLISH_HIGHS, _BULLISH_LOWS))]
+
+
+def _bearish_candles() -> list:
+    return [_bias_candle(h, l, i) for i, (h, l) in enumerate(zip(_BEARISH_HIGHS, _BEARISH_LOWS))]
+
+
+class _FakeCandleFetcherDistinctByTimeframe:
+    """Returns a DIFFERENT real candle series depending on which timeframe
+    is requested -- proves htf_bias/ltf_bias are each computed from their
+    OWN independently-fetched series (not the same series reused for
+    both), mirroring the real HTF/LTF-separation regression proof used
+    elsewhere in this suite (test_strategy_signal_engine.py).
+    """
+
+    def __init__(self, htf_timeframe: str, htf_candles: list, ltf_candles: list):
+        self._htf_timeframe = htf_timeframe
+        self._htf_candles = htf_candles
+        self._ltf_candles = ltf_candles
+
+    def fetch_ohlcv(self, symbol, timeframe, limit=300):
+        return self._htf_candles if timeframe == self._htf_timeframe else self._ltf_candles
+
+
+class _FakeCandleFetcherAlwaysFails:
+    def fetch_ohlcv(self, symbol, timeframe, limit=300):
+        raise ConnectionError("simulated OKX outage")
+
+
+def test_dashboard_bias_computes_real_htf_and_ltf_bias_independently(client, monkeypatch):
+    import app.api.routes_dashboard as routes_dashboard
+
+    fake = _FakeCandleFetcherDistinctByTimeframe(
+        htf_timeframe=routes_dashboard.settings.HTF_TIMEFRAME,
+        htf_candles=_bullish_candles(),
+        ltf_candles=_bearish_candles(),
+    )
+    monkeypatch.setattr(routes_dashboard, "CandleFetcher", lambda: fake)
+
+    response = client.get("/dashboard/bias")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["htf_bias"] == "bullish"
+    assert body["ltf_bias"] == "bearish"  # proves it's NOT just htf_bias duplicated
+    assert body["note"] == ""
+    assert body["symbol"] == routes_dashboard.settings.SYMBOL
+
+
+def test_dashboard_bias_degrades_gracefully_on_fetch_failure(client, monkeypatch):
+    """A live OKX fetch failure must not 500 the dashboard -- returns
+    neutral/neutral with a note describing the failure instead."""
+    import app.api.routes_dashboard as routes_dashboard
+
+    monkeypatch.setattr(routes_dashboard, "CandleFetcher", _FakeCandleFetcherAlwaysFails)
+
+    response = client.get("/dashboard/bias")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["htf_bias"] == "neutral"
+    assert body["ltf_bias"] == "neutral"
+    assert "simulated OKX outage" in body["note"]
 
 
 def test_dashboard_risk_status_zero_on_fresh_db(client):

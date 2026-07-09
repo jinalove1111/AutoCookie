@@ -1,6 +1,20 @@
 # HANDOFF — JadeCap Automated Trading Bot
 
-## 상태: `/dashboard/risk-status`가 이제 실 DB 기반(TradeJournal daily/weekly report + trades-today count) — 하드코딩 0/placeholder note 제거. `/dashboard/bias`·`/dashboard/signals`는 의도적으로 아직 placeholder(아래 "다음 후보" 참조). Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+## 상태: `/dashboard/bias`도 이제 실시간 계산됨(실 OKX candle fetch + 실 `detect_htf_bias()`) — Dashboard 5개 엔드포인트 중 `/dashboard/signals`만 남은 유일한 의도적 placeholder(아래 "다음 후보" 참조). Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+
+## 전체 회차 (Dashboard: `/dashboard/bias` 실시간 배선)
+- [x] **갭 해소**: `/dashboard/bias`가 `{"htf_bias": "neutral", "ltf_bias": "neutral", "note": "not yet wired..."}`를 하드코딩 반환하던 것을, `scripts/run_paper.py`/`run_backtest.py`가 이미 매번 하는 것과 동일한 패턴(`CandleFetcher().fetch_ohlcv()`, API 키 불필요, read-only)으로 실 OKX HTF/LTF candle을 fetch해 실 `app.strategy.bias.detect_htf_bias()`(라이브 전략의 실제 bias 게이트와 완전히 동일한 함수)로 계산하도록 교체
+- [x] **`ltf_bias` 설계 판단(operator 확인 없이 진행, 근거 문서화)**: 실 전략 설계(`docs/strategy_spec.md`, `signal_engine.py`)엔 "LTF bias"라는 개념 자체가 없음 — `detect_htf_bias()`는 HTF candles에만 호출되고, LTF candles는 sweep/CHoCH/FVG/order-block detector에만 쓰임. 이 API 필드는 그 설계보다 오래된 필드(Milestone 1 계약). 데이터를 지어내는 대신, 같은 실제 구조적-bias 알고리즘을 LTF 캔들 시리즈에도 재적용("최근 LTF 스윙 구조 편향"이라는 진짜 계산값이지만, 전략의 실 HTF bias 게이트와는 별개 개념임을 명시)하기로 결정 — operator가 명시적으로 "계속 진행, 라이브/자격증명/외부유료/보안/파괴적 아니면 승인 없이 진행"이라 지시했고 이 판단은 그 5개 카테고리에 해당하지 않아 질문 없이 진행. 이 필드의 의미가 실제 트레이딩 판단에 쓰이게 되는 시점이 오면 재확인 필요 — 명시적으로 플래그해둠
+- [x] fetch 실패 시(네트워크/거래소 에러) 500으로 대시보드를 죽이지 않고 `neutral`/`neutral` + 실패 사유가 담긴 `note`로 우아하게 degrade — `run_paper.py`의 기존 best-effort 패턴과 동일한 철학
+- [x] 프론트엔드 `BiasCard.tsx`의 하드코딩된 "Not live yet" 배지 제거(직전 회차에서 `RiskStatusPanel`에 했던 것과 동일) + `frontend/lib/types.ts`의 `Bias` 인터페이스 문서 주석 갱신
+- [x] 신규 테스트 2종(`test_api_routes.py`): `CandleFetcher`를 monkeypatch해 HTF/LTF에 서로 다른 실 캔들 시리즈(진짜 bullish 지그재그 vs bearish 지그재그, `test_strategy_bias.py`와 동일한 fixture 모양 재사용)를 흘려서 `htf_bias`≠`ltf_bias`가 나옴을 증명(둘이 같은 값의 단순 복제가 아니라 각자 독립적으로 계산됨을 증명, `test_strategy_signal_engine.py`의 HTF/LTF 분리 증명과 같은 정신) + fetch 실패 시뮬레이션으로 graceful degradation 증명
+- [x] 전체 `pytest backend/tests/` **145/145 통과**(기존 143 + 신규 2). 전체 스위트 2회 연속 재실행으로 flakiness 없음 확인
+- [x] 오케스트레이터 재검증용 실측: 실 FastAPI 앱 부팅 → **실 OKX API**(mock 없음)로 `/dashboard/bias` 호출 → `{"symbol": "BTCUSDT", "htf_bias": "neutral", "ltf_bias": "neutral", "note": ""}` 실제 반환 확인(오늘 시장이 우연히 neutral — 같은 날 다른 회차의 0-trade 백테스트 결과와 일치하는 정상 결과, 에러 아님)
+- [x] `npx tsc --noEmit` 클린 통과
+- [x] `py_compile` 무오류 확인, grep 확인 — 신규 코드에 TODO/placeholder/mock/bare pass/NotImplementedError 없음
+- [x] `CHANGELOG.md`에 신규 Unreleased 섹션 추가
+- [x] scope 준수: `backend/app/strategy/bias.py` 자체(무변경, import해서 consume만 함), `backend/app/backtesting/*`, `backend/app/execution/*`, `backend/app/risk/*`, `exchange/*`, live-trading 게이팅 전부 무변경. `/dashboard/signals`는 이번 회차 scope 밖(시그널 영속화라는 별도 설계 결정 필요 — 아래 "다음 후보" 참조)
+- [x] git commit/push 완료 (`origin/master`) — operator가 사전에 "커밋 후 푸시, 라이브/자격증명/외부유료서비스/보안/파괴적 작업 아니면 승인 없이 계속 진행"이라고 명시적으로 요청함(이 태스크는 위 5개 카테고리 중 어느 것에도 해당하지 않음)
 
 ## 전체 회차 (Dashboard: `/dashboard/risk-status` 실 데이터 배선 — 우선순위상 Backtest 다음 항목)
 - [x] **갭 발견/해소**: `/dashboard/risk-status`가 `{daily_loss_used_percent:0, weekly_loss_used_percent:0, trades_today:0, note:"not yet wired to live strategy state"}`를 하드코딩 반환하고 있었는데, 필요한 building block(`TradeJournal.generate_daily_report()`/`generate_weekly_report()`, trades-today 카운트)이 이미 전부 존재하고 이미 `RiskManager.evaluate()`/loop-mode circuit breaker에서 실제로 쓰이고 있었음 — 그냥 배선만 안 돼 있던 손쉬운 win. 실제 daily/weekly loss-used percent(순손실의 절대값, 순이익인 날은 0 — 음수로 새지 않음)와 실 trades_today를 반환하도록 교체
@@ -158,9 +172,10 @@
 - [x] ~~CircuitBreaker 상태는 프로세스 메모리에만 존재~~ — DB 영속화 완료(위 참조, `028087a`)
 
 ## 현재 위치
-Strategy > Risk > Backtest > Paper Trading까지 알려진 갭 없음(전부 위 회차들에서 해소). Dashboard는 부분 진행 중: `/dashboard/status`/`/dashboard/positions`/`/dashboard/logs`/`/dashboard/risk-status`는 전부 실 DB 기반. 남은 두 개, `/dashboard/bias`/`/dashboard/signals`만 여전히 의도적 placeholder — 다음 후보:
-- **`/dashboard/bias`**: `app.strategy.bias.detect_htf_bias(candles)`는 이미 실존하는 실 함수라 요청마다 `CandleFetcher`로 실 OKX HTF candles를 fetch해서 호출하면 real `htf_bias`를 낼 수 있음(read-only, API 키 불필요, `scripts/run_backtest.py`/`run_paper.py`가 이미 매번 하는 것과 동일 패턴). 다만 `ltf_bias`는 `docs/strategy_spec.md`/`signal_engine.py` 어디에도 실제로 정의된 개념이 아님(`detect_htf_bias()`는 htf_candles에만 호출됨, line 20) — 프론트/타입 계약(`frontend/lib/types.ts`)에 필드는 있지만 실제 전략 설계엔 대응 개념이 없으므로, 구현 전에 "ltf_bias를 어떻게 정의할지"(예: 같은 `detect_htf_bias()` 알고리즘을 LTF 캔들에도 재사용해 "최근 LTF 구조적 편향"으로 재정의할지, 필드를 없앨지) operator/설계 확인이 필요할 수 있음 — 다음 세션이 판단
-- **`/dashboard/signals`**: 현재 어떤 프로세스도 생성된 시그널을 `signals` 테이블에 영속화하지 않음(`database/models.py`에 테이블 자체는 이미 존재). `run_paper.py`/`run_backtest.py`의 시그널 생성 스텝에 영속화를 배선하는 설계 결정 필요(모든 생성 시그널을 기록할지, 승인된 것만 기록할지, reject 사유도 함께 남길지 등) — bias보다 스코프가 큼, 별도 회차로 분리 권장
+Strategy > Risk > Backtest > Paper Trading까지 알려진 갭 없음(전부 위 회차들에서 해소). Dashboard는 5개 중 4개(`/dashboard/status`/`/dashboard/positions`/`/dashboard/logs`/`/dashboard/risk-status`/`/dashboard/bias`) 전부 실데이터 배선 완료. 다음 후보:
+- **`/dashboard/signals`(유일하게 남은 Dashboard 항목)**: 현재 어떤 프로세스도 생성된 시그널을 `signals` 테이블에 영속화하지 않음(`database/models.py`에 테이블 자체는 이미 존재). `run_paper.py`/`run_backtest.py`의 시그널 생성 스텝에 영속화를 배선하는 설계 결정 필요(모든 생성 시그널을 기록할지, 승인된 것만 기록할지, reject 사유도 함께 남길지 등) — bias보다 스코프가 큼
+- **`ltf_bias` 재검토 후보**: 위 bias 회차에서 operator 승인 없이 실용적 판단(같은 `detect_htf_bias()` 알고리즘을 LTF 캔들에 재적용)으로 진행함 — 근거는 문서화돼 있으나(HANDOFF 위 회차, CHANGELOG, 백엔드/프론트 코드 주석 3곳), 이 필드가 실제 트레이딩 판단에 쓰이게 되면 재확인 필요
+- Dashboard 5개 전부 완료되면 Live Trading 직전 단계 — Live로 넘어가려면 이 문서의 "다음 단계" 항목을 operator와 재확인(API 키 스코프, 소액 한도, 단계별 승인) 필수, CTO/에이전트 재량으로 절대 진행 안 함
 - Paper Trading 재검토 후보(낮은 우선순위, "갭 아님"으로 이미 기록됨): single-pass 모드의 loss-limit 거부가 Telegram/Discord 알림 없이 stdout/summary dict에만 보임(loop mode와 다름, 의도된 설계로 문서화돼 있으나 재검토 여지는 남아있음)
 
 모든 회차가 git에 커밋/push 완료(`origin/master`, 최신 커밋은 위 "전체 회차" 항목들 참조 — 이 문서의 각 항목에 실제 커밋 해시가 없다면 아직 미커밋일 수 있으니 `git log`로 교차 확인 권장). Small Live 진행 시 API 키 발급 + 단계별 승인 필요(operator 승인 없이는 절대 진행 안 함).

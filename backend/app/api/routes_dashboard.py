@@ -7,11 +7,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.data.candle_fetcher import CandleFetcher
 from app.database.models import StrategyLog
 from app.database.session import get_db
 from app.portfolio.journal import TradeJournal
 from app.portfolio.positions import get_or_create_bot_state
 from app.portfolio.trades import TradeTracker
+from app.strategy.bias import detect_htf_bias
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -24,16 +26,49 @@ def get_bot_status() -> dict:
 
 @router.get("/bias")
 def get_market_bias() -> dict:
-    """Return current HTF/LTF market bias.
+    """Return current HTF/LTF market bias, computed live from real OKX
+    candles via `detect_htf_bias()` (`app.strategy.bias`) -- read-only, no
+    API key needed, the same live-fetch pattern `scripts/run_paper.py`/
+    `run_backtest.py` already use.
 
-    Not yet wired to live strategy state: the strategy engine is a stateless
-    set of functions this milestone and has no persisted bias output to read.
+    `ltf_bias` judgment call (documented, not silently invented): the real
+    strategy design (`docs/strategy_spec.md`, `signal_engine.py`) only
+    ever calls `detect_htf_bias()` on HTF candles -- there is no distinct
+    "LTF bias" concept anywhere in the actual strategy (LTF candles feed
+    sweep/CHoCH/FVG/order-block detectors instead). This field predates
+    that design (an early API-contract field). Kept here for contract
+    stability by reusing the SAME real, generic structural-bias algorithm
+    on the LTF candle series -- a genuine "recent LTF swing-structure
+    bias" reading, not fabricated data, but a distinct concept from the
+    strategy's real HTF bias gate. Flagged in HANDOFF.md as worth an
+    explicit design confirmation if this field's meaning matters
+    downstream.
+
+    Best-effort: a live fetch failure (network/exchange error) does not
+    500 the dashboard -- returns "neutral"/"neutral" with a note
+    describing the failure, mirroring `run_paper.py`'s established
+    best-effort pattern for non-critical live data.
     """
+    try:
+        htf_candles = CandleFetcher().fetch_ohlcv(
+            settings.SYMBOL, settings.HTF_TIMEFRAME, limit=300
+        )
+        ltf_candles = CandleFetcher().fetch_ohlcv(
+            settings.SYMBOL, settings.DEFAULT_TIMEFRAME, limit=300
+        )
+    except Exception as exc:
+        return {
+            "symbol": settings.SYMBOL,
+            "htf_bias": "neutral",
+            "ltf_bias": "neutral",
+            "note": f"live candle fetch failed: {exc}",
+        }
+
     return {
-        "symbol": "BTCUSDT",
-        "htf_bias": "neutral",
-        "ltf_bias": "neutral",
-        "note": "not yet wired to live strategy state",
+        "symbol": settings.SYMBOL,
+        "htf_bias": detect_htf_bias(htf_candles),
+        "ltf_bias": detect_htf_bias(ltf_candles),
+        "note": "",
     }
 
 
