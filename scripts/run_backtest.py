@@ -86,6 +86,7 @@ def run_backtest(
     htf_candles: list,
     use_breakeven: bool = False,
     use_breaker_block: bool = False,
+    use_partial_tp: bool = False,
 ) -> Any:
     """Replay `ltf_candles`/`htf_candles` once through the real
     Strategy/Risk/Backtest engines."""
@@ -99,6 +100,7 @@ def run_backtest(
         slippage_percent=0.02,
         use_breakeven=use_breakeven,
         use_breaker_block=use_breaker_block,
+        use_partial_tp=use_partial_tp,
     )
 
 
@@ -201,6 +203,25 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--partial-tp",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable partial take-profit (opt-in, default off): "
+            "PARTIAL_TP_PORTION (default 50%%) of the position closes once "
+            "price has moved PARTIAL_TP_TRIGGER_R (default 1R) in favor; "
+            "the remaining size continues to the original stop_loss/"
+            "take_profit. app.execution.order_manager.OrderManager."
+            "handle_partial_tp() has existed and been unit-tested since "
+            "Milestone 3 but was never wired into any trade path until "
+            "this flag. See app.backtesting.backtest_engine's "
+            "PARTIAL_TP_TRIGGER_R/PARTIAL_TP_PORTION docstrings and "
+            "docs/strategy_coverage_audit.md -- A/B-testable, not a proven "
+            "improvement; run the same --symbol/--timeframe/--candles/"
+            "--periods with and without this flag and compare."
+        ),
+    )
+    parser.add_argument(
         "--output",
         default=str(DEFAULT_OUTPUT_PATH),
         help=(
@@ -231,6 +252,7 @@ def main() -> int:
 
     print(f"Break-even stop management: {'ENABLED' if args.breakeven else 'disabled'}")
     print(f"Breaker Block entries: {'ENABLED' if args.breaker_block else 'disabled'}")
+    print(f"Partial take-profit: {'ENABLED' if args.partial_tp else 'disabled'}")
     print(f"Fetched {len(candles)} candles for {args.symbol}/{args.timeframe}.")
     if len(candles) < total_requested:
         print(
@@ -288,6 +310,7 @@ def main() -> int:
                 htf_candles,
                 use_breakeven=args.breakeven,
                 use_breaker_block=args.breaker_block,
+                use_partial_tp=args.partial_tp,
             )
         except Exception as exc:  # unexpected engine failure is a genuine failure
             print(f"ERROR: backtest engine raised an exception on period {period_num}: {exc}")

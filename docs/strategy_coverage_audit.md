@@ -45,7 +45,7 @@ gated).
 | 17 | Place entry order | Implemented (PaperBroker); LiveBroker fully stubbed | Tested (paper path) | LiveBroker is `NotImplementedError` throughout | N/A — Live is explicitly gated, out of scope | None | N/A (Live) |
 | 18 | Place SL/TP, exit checking | Implemented via `check_exit`/backtest scan-forward, incl. slippage on both entry and exit | Tested | Fixed levels only for the whole trade lifetime — no dynamic/volatility-based stop adjustment | None | None | MEDIUM |
 | 19 | **Handle break-even move** (`OrderManager.move_to_breakeven`) | **Implemented but NEVER called anywhere outside its own module** — no live/paper/backtest trade has ever had its stop moved to break-even | Unit tested in isolation only (pure function correctness); zero integration coverage | Never triggers automatically during an open trade in paper OR backtest | Assumes moving to break-even after a favorable move improves risk-adjusted returns — **completely unverified empirically** | None — this is unambiguous dead code, and `docs/architecture.md` explicitly lists it as a core Execution Engine responsibility | **HIGH** |
-| 20 | **Handle partial TP** (`OrderManager.handle_partial_tp`) | **Implemented but NEVER called anywhere outside its own module** — same status as #19 | Unit tested in isolation only | Every trade is currently all-or-nothing (full size until stop or full TP); no scaled exits exist anywhere in the real pipeline | Same as #19 | Same as #19 | **HIGH** |
+| 20 | **Handle partial TP** (`OrderManager.handle_partial_tp`) | **UPDATE (post-audit): wired into `BacktestEngine._simulate_trade(use_partial_tp=False)`, opt-in, A/B tested.** Result: NEGATIVE -- reduced PnL in all 6 of 6 real out-of-sample periods tested (aggregate -31.4%). Mechanistic cause: this strategy's fixed 2:1 RR + high win rate in the tested sample means locking in 50% at 1R trades away upside on winners without protecting losers (which mostly never reach +1R before reversing to stop). See CHANGELOG.md/HANDOFF.md/ENGINEERING_DECISIONS.md #12 for full evidence and the ordering rationale (partial-TP checked before take_profit in a candle, not after). Kept opt-in, actively not recommended for the current strategy shape | Unit + end-to-end tests now exist (`test_backtest_engine.py`) proving disabled/enabled/protection/same-candle-ordering/short-mirror behavior | None remaining at the wiring level; the negative result itself may be strategy-shape-specific (different RR/win-rate profile could flip it) | Assumed locking in early profit reduces risk -- tested, and for THIS strategy's profile it net reduces returns instead | Resolved: now wired, matching architecture.md's "Handle partial TP" responsibility | LOW (wired + tested; negative result documented, not a gap) |
 | 21 | Handle exchange errors / cancel unsafe orders | Implemented (`safety_checks.verify_safe_to_trade`, `CandleFetcher` raises `ConnectionError`/`RuntimeError` rather than swallowing) | Tested | Live-specific exchange error handling deferred with `LiveBroker` | N/A — Live gated | None | N/A (Live) |
 
 ## Portfolio / Journal Engine
@@ -65,25 +65,39 @@ gated).
 | 27 | All 5 `/dashboard/*` real-data endpoints | Implemented (this session) | Tested | `run_backtest.py`-generated signals are not persisted (deliberate scope boundary, `Signal` has no `mode` column) | Documented | None | LOW |
 | 28 | Deep-history candle pagination (`CandleFetcher`) | Implemented (this session) | Tested | None | None | None | LOW |
 
-## Summary: highest-impact gaps
+## Summary: highest-impact gaps — ALL THREE RESOLVED
 
 Three items were originally marked **HIGH** and shared the same shape —
 real logic that already existed, was unit-tested in isolation, and was
-**completely disconnected from the live decision loop**:
+**completely disconnected from the live decision loop**. All three are
+now wired and A/B tested against the same 6 real out-of-sample periods
+(BTCUSDT/ETHUSDT 15m), with three genuinely different outcomes:
 
 1. ~~Breaker Block detection (never wired into signal generation)~~ —
-   **RESOLVED**: wired, A/B tested (opt-in `--breaker-block`), zero
-   measured effect on 6 real out-of-sample periods, diagnosed why (see
-   row #7 above and `ENGINEERING_DECISIONS.md` #11). Kept opt-in.
+   **RESOLVED, NEUTRAL**: wired (opt-in `--breaker-block`), zero
+   measured effect on all 6 periods, diagnosed why (see row #7 above and
+   `ENGINEERING_DECISIONS.md` #11). Kept opt-in.
 2. ~~Break-even stop management (never wired into trade exit handling)~~ —
-   **RESOLVED**: wired, A/B tested (opt-in `--breakeven`), +13.5%
-   aggregate PnL and 5/6 → 6/6 profitable periods on the same 6 periods.
-   Kept opt-in (backtest-only so far; not yet wired into paper trading).
-3. **Partial take-profit (never wired into trade exit handling)** —
-   still open, now the last of the three. See `ROADMAP.md` item #1 for
-   why it's sequenced after the other two (structurally more complex to
-   A/B-test cleanly — splits PnL into two legs rather than changing a
-   single exit point).
+   **RESOLVED, POSITIVE**: wired (opt-in `--breakeven`), +13.5%
+   aggregate PnL and 5/6 → 6/6 profitable periods. Kept opt-in
+   (backtest-only so far; not yet wired into paper trading, see
+   `ROADMAP.md` item #2 — this is the one with an actual case for
+   eventually promoting to paper trading).
+3. ~~Partial take-profit (never wired into trade exit handling)~~ —
+   **RESOLVED, NEGATIVE**: wired (opt-in `--partial-tp`), reduced PnL in
+   ALL 6 of 6 periods (aggregate -31.4%), mechanistic cause identified
+   (this strategy's fixed 2:1 RR + high win rate in-sample means partial
+   exits trade away winner upside without protecting losers). Kept
+   opt-in, actively not recommended for the current strategy shape (see
+   row #20 above and `ENGINEERING_DECISIONS.md` #12).
+
+The fact that identical A/B methodology applied to three similar-looking
+"wire up dead code" changes produced three different verdicts (neutral /
+positive / negative) is itself the main lesson: **assuming any of these
+would help without measuring would have been wrong at least twice out of
+three times.** See `ROADMAP.md` for what's next (expanding out-of-sample
+periods to different market regimes is now the highest-value item,
+since all three verdicts above rest on the same single ~31-day window).
 
 Break-even was implemented first because it was the cleanest to
 validate: unlike the other two, it changes ONLY exit management, not

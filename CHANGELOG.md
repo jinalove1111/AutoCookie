@@ -4,6 +4,77 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Partial take-profit wired and A/B tested (measured NEGATIVE, kept optional)
+
+### Added
+- `BacktestEngine`'s `_simulate_trade()` now supports a two-leg exit: when
+  `use_partial_tp=True` (opt-in, default `False`), `PARTIAL_TP_PORTION`
+  (50%) of the position closes once price moves `PARTIAL_TP_TRIGGER_R`
+  (1R) in favor, at its own price/fee; the remaining size continues to
+  the ORIGINAL stop_loss/take_profit. Ordering within a candle:
+  stop-loss first (worst case, unchanged), THEN the partial-TP trigger
+  (if not yet triggered), THEN take_profit -- deliberately in that order
+  because the partial trigger price is always closer to entry than
+  take_profit for any RR > 1, so a candle that reaches take_profit
+  necessarily passed through the partial trigger too; checking it first
+  lets a single candle that jumps straight to take_profit still
+  correctly bank the partial leg at its own nearer price.
+  `use_partial_tp` is completely independent of `use_breakeven` (not
+  combined in this round's test -- one variable at a time). Trade
+  records gain `partial_tp_triggered`/`partial_tp_exit_price`/
+  `partial_tp_pnl`. Threaded through `BacktestEngine.run(...,
+  use_partial_tp=False)` and `scripts/run_backtest.py --partial-tp`, same
+  pattern as `--breakeven`/`--breaker-block`.
+- This is the last of the three HIGH-priority `docs/strategy_coverage_audit.md`
+  findings (`OrderManager.handle_partial_tp()` existed and was
+  unit-tested since Milestone 3 but was never called from any trade
+  path) -- all three are now wired and A/B tested.
+
+### Verified
+- `pytest backend/tests/` 185/185 passing (5 new: disabled-by-default
+  contrast, enabled locks in profit then still reaches the real
+  take_profit, enabled protects against a later full loss, the
+  same-candle-jump-still-banks-the-partial-leg-first proof, short-
+  direction mirror).
+- Real end-to-end A/B, live OKX data, the IDENTICAL 6 out-of-sample
+  periods used for break-even and Breaker Block (BTCUSDT/ETHUSDT 15m, 3
+  periods each): **partial-TP reduced total PnL in EVERY SINGLE
+  period tested, 6 of 6, no exceptions.**
+
+  | | BTCUSDT P1 | P2 | P3 | ETHUSDT P1 | P2 | P3 |
+  |---|---|---|---|---|---|---|
+  | Without | -$48.64 | +$165.81 | +$184.62 | +$148.51 | +$60.04 | +$308.75 |
+  | With | -$56.43 | +$111.63 | +$135.58 | +$106.83 | +$24.85 | +$239.81 |
+
+  Aggregate: **$819.09 -> $562.27 (-31.4%)**. Win rate and
+  profitable/unprofitable classification were UNCHANGED in every period
+  (partial-TP doesn't change whether a trade ultimately wins or loses,
+  only how much) -- it purely reduced magnitude.
+
+### Why this makes mechanistic sense (not a fluke, a real strategy-shape interaction)
+- This strategy has a fixed `_RR = 2.0` (`entry_model.py`) and, in this
+  sample, a high win rate (many trades already run the full distance to
+  the real take_profit). Locking in half the position at 1R trades away
+  half of a 2R winner's upside on every one of those winners, while
+  rarely helping the losers (a trade heading to a full stop-loss loss
+  usually never reaches +1R in the first place, so there's nothing to
+  partially lock in). In a strategy that mostly wins and mostly wins big
+  relative to its stop, "let it run" structurally beats "cash in early."
+  A strategy with a lower win rate or a smaller RR target might show the
+  opposite result -- this is sample- and strategy-shape-dependent, not a
+  universal verdict on partial take-profit as a technique.
+
+### Decision: kept opt-in, evidence points against enabling it for THIS strategy
+- Per operator instruction ("if it does not improve performance, document
+  the evidence and keep it optional"): this is the clearest negative
+  result of the three audit items tested this session -- not neutral
+  (Breaker Block) or positive (break-even), but consistently worse across
+  every single tested period. `--partial-tp` remains available (in case
+  the strategy's RR/win-rate profile changes later, or for a genuinely
+  different strategy plugged in behind the same interface), but is
+  actively NOT recommended for the current strategy shape, is NOT the
+  default, and is NOT wired into `scripts/run_paper.py`.
+
 ## [Unreleased] - Breaker Block wired into signal generation (A/B tested, no measurable backtest effect -- kept optional)
 
 ### Added

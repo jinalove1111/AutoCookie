@@ -1,6 +1,28 @@
 # HANDOFF — JadeCap Automated Trading Bot
 
-## 상태: (야간 CTO 세션, founder 부재) 감사에서 발견한 HIGH 항목 3개 중 2번째, Breaker Block을 `SignalEngine`에 실제로 연결 + A/B 검증 완료 — `detect_breaker_block()`이 Milestone 2부터 존재/단위테스트까지 있었지만 signal 생성에서 한 번도 호출된 적 없던 죽은 코드였음. `--breaker-block` opt-in으로 배선하고 break-even 검증에 썼던 것과 동일한 6개 독립 기간(BTCUSDT/ETHUSDT 15m)에 A/B 재실행한 결과 **트레이드/PnL/승률 전부 완전히 동일**(변화 0). 다만 "그냥 안 됨"이 아니라 **원인까지 진단**: 실 데이터 walk-forward 재스캔에서 breaker block이 실제로 자주 탐지되고(970 스텝 중 124회 raw, 29회 unmitigated) 신호 자체를 바꾼 적도 2회 있었지만, 그 2번 모두 BacktestEngine의 "동시 1개 트레이드만" 동시성 가드 때문에 이미 다른 트레이드가 열려있던 구간이라 실제 백테스트에는 전혀 반영되지 않았음 — "기능이 고장남"이 아니라 "이번 표본에서 발현될 기회가 없었음"이라는 정직한 결론. operator 지시("성능 개선 안 되면 증거만 남기고 optional 유지")에 따라 opt-in 유지, paper trading에도 연결 안 함. Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+## 상태: (야간 CTO 세션, founder 부재) 감사에서 발견한 HIGH 항목 3개 전부 완료 — Partial TP까지 배선 + A/B 검증 완료. **이번 결과는 명확한 부정적 결과**: break-even/breaker-block 검증에 썼던 것과 동일한 6개 독립 기간(BTCUSDT/ETHUSDT 15m)에서 partial-tp가 **6개 기간 전부에서 PnL을 악화시킴**(합산 $819.09→$562.27, -31.4%), 예외 없음. 원인도 명확: 이 전략은 RR=2.0 고정 + 이 표본에서 승률이 높아서(많은 트레이드가 끝까지 TP 도달), 1R에서 절반을 미리 청산하면 승리 트레이드의 upside 절반을 매번 포기하는데 패배 트레이드는 애초에 1R까지도 못 가는 경우가 많아 방어 효과가 거의 없음 — "이 전략처럼 승률 높고 RR 고정인 경우 partial-TP가 구조적으로 불리하다"는 실측 기반 결론. opt-in 유지, 기본값 전환 안 함, paper에도 연결 안 함. 감사에서 발견된 3개 HIGH 항목(breaker block=중립, break-even=긍정, partial-tp=부정) 전부 A/B 검증 완료. Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+
+## 전체 회차 (Partial Take-Profit 완전 배선 + A/B 검증 — 감사 HIGH 항목 3개 중 마지막, "계속하라" 지시에 따라 이어서 진행)
+- [x] `BacktestEngine._simulate_trade()`에 2-leg exit 지원 추가: `use_partial_tp=True`(opt-in) 시 `PARTIAL_TP_PORTION`(50%)이 `PARTIAL_TP_TRIGGER_R`(1R) 도달 시 자체 가격/수수료로 청산되고, 나머지는 원래 stop_loss/take_profit으로 계속 진행. 캔들 내 체크 순서: stop_loss(최악 우선, 기존 유지) → **partial-TP 트리거**(아직 미발동 시) → take_profit — partial 트리거가가 항상 take_profit보다 진입가에 가까우므로(RR>1인 한) take_profit에 도달하는 캔들은 반드시 partial 트리거도 지나쳤을 것이라는 논리로, 단일 캔들이 곧장 take_profit까지 점프해도 partial leg를 먼저 정확히 banking하도록 설계
+- [x] `use_partial_tp`는 `use_breakeven`과 완전히 독립(이번 회차는 병행 테스트 안 함 — "한 번에 한 변수만" 원칙 유지). trade record에 `partial_tp_triggered`/`partial_tp_exit_price`/`partial_tp_pnl` 필드 추가
+- [x] `BacktestEngine.run(..., use_partial_tp=False)` → `scripts/run_backtest.py --partial-tp`까지 전체 체인 배선(break-even/breaker-block과 동일 패턴)
+- [x] 신규 테스트 5종: 기본값 비활성 대조 / 활성 시 이익 확정 후 나머지가 실제 take_profit까지 도달 / 활성 시 나머지가 손절되어도 전체 손실보다 낫다는 보호 효과 증명 / **단일 캔들이 곧장 take_profit까지 점프해도 partial leg를 먼저 banking하는 순서 증명** / short 방향 대칭
+- [x] 전체 `pytest backend/tests/` **185/185 통과**(기존 180 + 신규 5). 재실행으로 flakiness 없음 확인
+- [x] **오케스트레이터 재검증용 실측(A/B, 가장 중요)**: break-even/breaker-block 검증에 썼던 것과 완전히 동일한 6개 기간(BTCUSDT/ETHUSDT 15m, 각 3개)으로 `--partial-tp` on/off 재실행:
+
+  | | BTC P1 | P2 | P3 | ETH P1 | P2 | P3 |
+  |---|---|---|---|---|---|---|
+  | Off | -$48.64 | +$165.81 | +$184.62 | +$148.51 | +$60.04 | +$308.75 |
+  | On | -$56.43 | +$111.63 | +$135.58 | +$106.83 | +$24.85 | +$239.81 |
+
+  **6개 기간 전부 악화, 예외 없음** — 합산 $819.09→$562.27(-31.4%). 승률/수익-손실 분류 자체는 기간마다 변화 없음(partial-tp는 "이겼나 졌나"를 안 바꾸고 "얼마나"만 줄임)
+- [x] **원인까지 명확히 설명(operator 지시 "research before implementation, evidence over assumption" 반영)**: 이 전략은 `entry_model.py`의 `_RR=2.0` 고정값 + 이 표본에서의 높은 승률(많은 트레이드가 실제로 끝까지 TP 도달) 조합 — 1R에서 절반을 미리 파는 것은 "TP까지 가는" 트레이드마다 그 upside의 절반을 포기시키는데, 패배하는 트레이드는 애초에 1R 근처도 못 가고 바로 stop을 맞는 경우가 대부분이라 방어 효과가 거의 없음. "승률 높고 RR 고정인 전략에서는 partial-TP가 구조적으로 불리하다"는 것이 이번 실측이 보여준 명확한 인과 — 다른 승률/RR 프로필의 전략이라면 반대 결과가 나올 수 있음(전략 특정적 결론이지 partial-TP 기법 자체에 대한 보편적 결론 아님)
+- [x] `py_compile` 무오류 확인, grep 확인 — 신규 코드에 TODO/placeholder/mock/bare pass/NotImplementedError 없음
+- [x] `CHANGELOG.md`에 신규 Unreleased 섹션 추가(전체 A/B 표 + 원인 분석 포함)
+- [x] **operator 지시 "성능 개선 안 되면 증거만 남기고 optional 유지" 준수 — 이번엔 명확히 부정적인 결과**: 6개 기간 전부 악화이므로 opt-in 유지는 물론, 향후에도 이 전략에는 추천하지 않는다고 명시적으로 기록. `run_paper.py`에도 연결 안 함
+- [x] **감사(`docs/strategy_coverage_audit.md`)에서 발견된 HIGH 항목 3개 전부 A/B 검증 완료**: breaker block(중립, 발현 기회 없었음) / break-even(긍정, +13.5%, 5/6→6/6) / partial-tp(부정, -31.4%, 6/6 전부 악화) — 셋 다 실 데이터로 검증했고 결과가 셋 다 다름(중립/긍정/부정), 이것이 "가정하지 말고 실측하라"는 원칙이 실제로 작동한 증거
+- [x] scope 준수: `backend/app/strategy/*`(무변경), `backend/app/risk/*`(무변경), `backend/app/execution/*`(무변경 — `OrderManager.handle_partial_tp()` 재사용 안 하고 `BacktestEngine` 안에 독립 구현, break-even 때와 동일한 설계 판단), `scripts/run_paper.py`(무변경), Dashboard/live 게이팅 전부 무변경
+- [x] git commit/push 완료 (`origin/master`) — operator가 "계속하라, CTO처럼 사고하라, API 자격증명/라이브 승인/보안/외부유료서비스 아니면 계속 진행"이라고 명시적으로 재확인함(이 태스크는 그 어느 카테고리에도 해당하지 않음)
 
 ## 전체 회차 (Breaker Block 완전 배선 + A/B 검증 — 로드맵 1순위 항목, "계속하라" 지시에 따라 이어서 진행)
 - [x] `detect_breaker_block()`에 `retest_index`(원 order block의 base 캔들 인덱스인 기존 `index`와 별개, 실제로 breaker로 확정시킨 리테스트 캔들의 인덱스) 신규 반환 — mitigation 체크가 base 캔들이 아니라 리테스트 확정 캔들 "이후"부터 시작해야 함(`impulse_index` 추가 때와 동일한 이유)
@@ -262,11 +284,10 @@
 - [x] ~~CircuitBreaker 상태는 프로세스 메모리에만 존재~~ — DB 영속화 완료(위 참조, `028087a`)
 
 ## 현재 위치
-Strategy > Risk > Backtest > Paper Trading > Dashboard 전 계층의 배관 갭은 전부 해소됨. 감사(`docs/strategy_coverage_audit.md`)에서 발견한 HIGH 항목 3개 중 2개를 A/B 검증까지 완료: **break-even**(6개 기간 +13.5%, 5/6→6/6 수익 — 긍정적, opt-in 유지) / **Breaker Block**(6개 기간 전부 변화 0, 원인까지 진단 완료 — 중립, opt-in 유지). 남은 1개는 Partial TP. **다음 최고-ROI 후보 (우선순위순)**:
-- **Partial TP 배선 (감사에서 발견한 마지막 HIGH 항목, 다음 최우선 후보)**: `OrderManager.handle_partial_tp()` — 실 로직 존재, 격리 단위테스트 있음, 실제 트레이딩 루프 어디에서도 미사용. break-even/breaker-block과 동일한 A/B 방법론 적용 필요. 구조적으로 더 복잡함(PnL을 두 leg로 분할, 남은 포지션의 새 타겟을 어떻게 정할지 결정 필요) — break-even/breaker-block이 끝난 지금이 적기
-- **`run_paper.py`(실 paper trading)에 break-even 연결 여부 결정**: backtest A/B가 긍정적이므로 유력 후보. `TradeTracker`에 현재 `update_stop_loss` 같은 메서드가 없음 — DB에 저장된 open position의 stop_loss를 갱신하는 새 경로 설계 필요
-- **다른 시장 레짐에 걸친 기간 확보**: 지금까지의 모든 백테스트 기간(break-even/breaker-block 검증 전부 포함)이 같은 ~31일 달력 구간 안에서만 나뉜 것 — `--candles`를 늘리거나(`--candles 3000 --periods 6` 등) 시간이 지난 뒤 재실행. Breaker Block처럼 "이 표본에서 기회가 없었을 뿐"인 기능이 다른 표본에서는 다르게 나올 수 있음을 이번 회차가 직접 보여줌
-- **`_LOOKBACK`/`_IMPULSE_MULT`/`_STOP_BUFFER`/`_RR`/`BREAKEVEN_TRIGGER_R` 파라미터 재검토**: 파라미터 스윕을 한다면 **반드시** `--periods`로 나눈 일부 기간에서만 스윕하고 나머지는 최종 확인에만 사용
+Strategy > Risk > Backtest > Paper Trading > Dashboard 전 계층의 배관 갭은 전부 해소됨. 감사(`docs/strategy_coverage_audit.md`)에서 발견한 HIGH 항목 3개 **전부** A/B 검증 완료: **break-even**(6개 기간 +13.5%, 5/6→6/6 수익 — 긍정적, opt-in 유지) / **Breaker Block**(6개 기간 전부 변화 0 — 중립, 원인 진단 완료, opt-in 유지) / **Partial TP**(6개 기간 전부 악화, -31.4% — 부정적, opt-in 유지하되 이 전략엔 비추천, 원인 진단 완료). 감사 항목 자체는 이제 전부 처리됨. **다음 최고-ROI 후보 (우선순위순)**:
+- **다른 시장 레짐에 걸친 기간 확보 (최우선 후보로 승격)**: 지금까지의 모든 백테스트 기간(break-even/breaker-block/partial-tp 검증 전부 포함)이 같은 ~31일 달력 구간 안에서만 나뉜 것 — `--candles`를 늘리거나(`--candles 3000 --periods 6` 등) 시간이 지난 뒤 재실행. Breaker Block의 "이 표본에서 기회가 없었을 뿐"이라는 결론과 Partial TP의 "이 전략의 승률/RR 프로필에서는 불리함"이라는 결론 둘 다 표본 의존적일 수 있음 — 다른 레짐에서 재검증하면 셋 다 다른 결론이 나올 수도 있음
+- **`run_paper.py`(실 paper trading)에 break-even 연결 여부 결정**: 감사 3개 항목 중 유일하게 긍정적 결과(backtest A/B 기준). `TradeTracker`에 현재 `update_stop_loss` 같은 메서드가 없음 — DB에 저장된 open position의 stop_loss를 갱신하는 새 경로 설계 필요
+- **`_LOOKBACK`/`_IMPULSE_MULT`/`_STOP_BUFFER`/`_RR`/`BREAKEVEN_TRIGGER_R`/`PARTIAL_TP_TRIGGER_R`/`PARTIAL_TP_PORTION` 파라미터 재검토**: 파라미터 스윕을 한다면 **반드시** `--periods`로 나눈 일부 기간에서만 스윕하고 나머지는 최종 확인에만 사용
 - **더 다양한/독립적인 심볼**: 지금까지 BTCUSDT/ETHUSDT만 확인(상관성 높음)
 - **scope 경계**: `/dashboard/signals`는 `run_paper.py`에서만 배선(`run_backtest.py`는 의도적으로 안 건드림)
 - **`ltf_bias` 재검토 후보**: 실제 트레이딩 판단에 쓰이게 되면 재확인 필요

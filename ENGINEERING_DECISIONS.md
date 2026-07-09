@@ -287,3 +287,40 @@ null aggregate result). Accepted because a coverage-audit/research
 project's entire value proposition is evidence quality, not
 throughput — an unexplained null result is much weaker evidence than an
 explained one.
+
+---
+
+## 12. Partial-TP checked BEFORE take-profit within a candle, not after
+
+**Decision**: in `BacktestEngine._simulate_trade()`, the per-candle check
+order is: original stop-loss (worst case) → partial-TP trigger (if not
+yet triggered) → take_profit → break-even trigger. Partial-TP
+deliberately comes BEFORE take_profit, not after.
+
+**Why**: `PARTIAL_TP_TRIGGER_R` (1R) is always closer to entry than
+`take_profit` (`RR * 1R`, and `_RR = 2.0` in this codebase) for any
+RR > 1. That means any real, monotonic price path that reaches
+take_profit necessarily passed through the partial-TP trigger price
+first. If the code checked take_profit before the partial trigger, a
+single candle whose range happened to span both levels would close the
+FULL size at take_profit and skip the partial leg entirely — silently
+wrong, since in reality the partial trigger would have executed on the
+way there. Checking partial-TP first ensures a same-candle jump straight
+to take_profit still correctly banks the partial leg at its own, nearer
+price before the remaining size continues to take_profit.
+
+**Alternative considered**: treat a same-candle multi-level touch as
+ambiguous and resolve conservatively in the "worse" direction, the same
+policy already used for stop-loss-vs-take-profit ambiguity. Rejected
+here specifically — unlike stop-vs-target (where either order is
+physically plausible and unknowable from OHLC), partial-trigger-then-
+target is not actually ambiguous: the price LEVELS themselves guarantee
+the ordering (partial trigger is strictly between entry and target), so
+assuming it is not a favorable-case guess, it's a certainty derivable
+from the trade's own parameters.
+
+**Trade-off accepted**: none — this ordering is not a probabilistic
+assumption like the SL-vs-TP one, it's a deterministic consequence of
+`PARTIAL_TP_TRIGGER_R < RR`. (If a future change ever made
+`PARTIAL_TP_TRIGGER_R >= RR` for some configuration, this ordering
+argument would no longer hold and would need to be revisited.)

@@ -29,6 +29,25 @@ MIN_CANDLES = 31  # need index 30 available (30 candles of prior LTF history)
 # as it can protect against a full loss on a reversal).
 BREAKEVEN_TRIGGER_R = 1.0
 
+# Partial take-profit trigger/portion. `PARTIAL_TP_TRIGGER_R = 1.0` (close
+# part of the position once price has moved 1R in favor -- same trigger
+# distance as BREAKEVEN_TRIGGER_R, though the two are independent,
+# separately-toggled features, not coupled) and `PARTIAL_TP_PORTION = 0.5`
+# (close half the position) are both the simplest, most common retail-SMC
+# convention -- not backtested/tuned, same disclosed-default spirit as
+# every other constant in this module. Only takes effect when
+# `BacktestEngine.run(..., use_partial_tp=True)` -- see that parameter's
+# docstring for why this is opt-in: `OrderManager.handle_partial_tp()`
+# (Execution layer) has existed since Milestone 3 but was never wired
+# into any live/paper/backtest trade path (see
+# docs/strategy_coverage_audit.md) -- this is the first real,
+# empirically-tested integration of it, and it is NOT yet proven to
+# improve results (locking in a partial profit early reduces give-back
+# risk on a reversal, but also caps upside on a trade that would have run
+# all the way to the full take_profit anyway).
+PARTIAL_TP_TRIGGER_R = 1.0
+PARTIAL_TP_PORTION = 0.5
+
 # MIN_CANDLES sizing note (deliberate, not an oversight): MIN_CANDLES is sized
 # only for LTF history and is NOT enough runway to ever have real (non-empty)
 # HTF history for realistic timeframe ratios -- e.g. DEFAULT_TIMEFRAME=5m /
@@ -154,6 +173,7 @@ class BacktestEngine:
         slippage_percent: float = 0.02,
         use_breakeven: bool = False,
         use_breaker_block: bool = False,
+        use_partial_tp: bool = False,
     ) -> "BacktestResult":
         """Replays historical LTF candles (with a time-aligned, no-lookahead
         HTF slice at each step) through the Strategy Engine and Risk Engine
@@ -175,6 +195,17 @@ class BacktestEngine:
         what it does. Default `False` here for the identical reason as
         `use_breakeven`: A/B testing a genuinely new behavior, not a
         silent default change.
+
+        `use_partial_tp` (default `False`, opt-in): when `True`, once a
+        trade has moved `PARTIAL_TP_TRIGGER_R` (default 1R) in favor,
+        `PARTIAL_TP_PORTION` (default 50%) of the position closes at that
+        price -- see those constants' docstrings. The remaining size
+        continues toward the ORIGINAL stop_loss/take_profit, completely
+        independently of `use_breakeven` (the two features are not
+        coupled; combining them is possible but not what this round's
+        A/B test evaluates -- see docs/strategy_coverage_audit.md and
+        ENGINEERING_DECISIONS.md for why every new strategy behavior is
+        tested one variable at a time).
 
         Walk-forward, expanding window, one trade open at a time (no
         overlap): starts at index MIN_CANDLES - 1 so LTF signal generation
@@ -292,6 +323,7 @@ class BacktestEngine:
                 slippage_percent,
                 size,
                 use_breakeven=use_breakeven,
+                use_partial_tp=use_partial_tp,
             )
             trades.append(trade)
             equity_curve.append(account_balance)
@@ -316,6 +348,7 @@ class BacktestEngine:
         slippage_percent: float,
         size: float,
         use_breakeven: bool = False,
+        use_partial_tp: bool = False,
     ) -> tuple[dict, int, float]:
         """Fills entry (with unfavorable slippage), scans forward for SL/TP, and
         returns (trade_record, exit_index, updated_account_balance).
@@ -343,6 +376,23 @@ class BacktestEngine:
         breakeven-then-saved outcome -- there is no way to know the real
         intra-candle sequencing from OHLC alone, so this never assumes
         the favorable order.
+
+        `use_partial_tp`: when `True`, `PARTIAL_TP_PORTION` of `size`
+        closes at the `PARTIAL_TP_TRIGGER_R`-favorable price (its own
+        leg, own fee), and the REMAINING size continues toward the
+        original stop_loss/take_profit unchanged. Checked in this order
+        within a candle: original stop-loss first (worst case, as
+        always), THEN the partial-TP trigger (if not yet triggered), THEN
+        take_profit -- deliberately in that order (not stop -> TP ->
+        partial) because `PARTIAL_TP_TRIGGER_R` (1R) is always closer to
+        entry than `take_profit` (RR * 1R) for any RR > 1, so a candle
+        whose range reaches take_profit necessarily passed through the
+        partial-TP trigger price along any real (monotonic) path -- this
+        lets a single candle that jumps straight to take_profit still
+        correctly bank the partial leg at its own nearer price first,
+        rather than skipping it. `use_partial_tp`/`use_breakeven` are
+        independent, uncoupled features (this round's A/B test evaluates
+        partial-TP alone, not combined with break-even).
         """
         entry_price = getattr(signal, "entry_price")
         stop_loss = getattr(signal, "stop_loss")
@@ -359,8 +409,16 @@ class BacktestEngine:
             if is_long
             else (entry_fill - BREAKEVEN_TRIGGER_R * risk_per_unit)
         )
+        partial_tp_trigger_price = (
+            (entry_fill + PARTIAL_TP_TRIGGER_R * risk_per_unit)
+            if is_long
+            else (entry_fill - PARTIAL_TP_TRIGGER_R * risk_per_unit)
+        )
         effective_stop = stop_loss
         breakeven_triggered = False
+        partial_tp_triggered = False
+        partial_size = 0.0
+        partial_exit_price: float | None = None
 
         exit_price = None
         exit_index = len(ltf_candles) - 1
@@ -380,6 +438,25 @@ class BacktestEngine:
                 exit_price = effective_stop
                 exit_index = j
                 break
+
+            # Partial-TP trigger check happens AFTER the stop check but
+            # BEFORE the take_profit check -- see this method's docstring
+            # for why that specific ordering: PARTIAL_TP_TRIGGER_R (1R) is
+            # always closer to entry than take_profit for any RR > 1, so a
+            # candle that reaches take_profit necessarily passed through
+            # the partial trigger price too. Checking it first lets a
+            # single candle that jumps straight to take_profit still
+            # correctly bank the partial leg at its own nearer price.
+            if use_partial_tp and not partial_tp_triggered and risk_per_unit > 0:
+                triggered_this_candle = (
+                    (is_long and high is not None and high >= partial_tp_trigger_price)
+                    or (not is_long and low is not None and low <= partial_tp_trigger_price)
+                )
+                if triggered_this_candle:
+                    partial_size = size * PARTIAL_TP_PORTION
+                    partial_exit_price = partial_tp_trigger_price
+                    partial_tp_triggered = True
+
             if hit_tp:
                 exit_price = take_profit
                 exit_index = j
@@ -407,10 +484,29 @@ class BacktestEngine:
         # position size, in account-currency units -- not a percentage of
         # account_balance. This is the correct financial model once `size`
         # is a real, risk-bounded position rather than "the whole account".
+        #
+        # Two-leg PnL when a partial-TP fired: `remaining_size` (size minus
+        # whatever partial_size already closed) is what actually rides to
+        # `exit_price`, not the full `size` -- and the partial leg's own
+        # raw PnL/fee (computed at ITS OWN price, `partial_exit_price`) is
+        # added on top. When `partial_tp_triggered` is False (feature
+        # disabled or never triggered), `partial_size` stays 0.0 and
+        # `remaining_size` reduces to exactly `size` -- byte-for-byte the
+        # original single-leg formula.
+        remaining_size = size - partial_size
+
         if is_long:
-            raw_pnl = size * (exit_price - entry_fill)
+            remaining_raw_pnl = remaining_size * (exit_price - entry_fill)
         else:
-            raw_pnl = size * (entry_fill - exit_price)
+            remaining_raw_pnl = remaining_size * (entry_fill - exit_price)
+
+        if partial_tp_triggered:
+            if is_long:
+                partial_raw_pnl = partial_size * (partial_exit_price - entry_fill)
+            else:
+                partial_raw_pnl = partial_size * (entry_fill - partial_exit_price)
+        else:
+            partial_raw_pnl = 0.0
 
         # Fees must scale with the ACTUAL notional traded at each leg, not
         # a flat percent-of-account-equity approximation like before --
@@ -418,14 +514,16 @@ class BacktestEngine:
         # fees as if it were the full account, silently overstating costs
         # (or, before this fix, silently understating PnL magnitude via the
         # old formula's coupling to account_balance). Entry-leg notional is
-        # `size * entry_fill` (the actual, slippage-adjusted fill price);
-        # exit-leg notional is `size * exit_price` (whatever price closed
-        # the trade -- SL, TP, or final candle close). `fee_percent` is
-        # applied once per leg, mirroring a typical per-side taker fee.
+        # `size * entry_fill` (the actual, slippage-adjusted fill price,
+        # ALWAYS the full size -- one entry transaction regardless of how
+        # many exit legs follow); each exit leg's notional is that leg's
+        # own size times its own exit price. `fee_percent` is applied once
+        # per leg, mirroring a typical per-side taker fee.
         fee_rate = fee_percent / 100
         entry_fee = fee_rate * size * entry_fill
-        exit_fee = fee_rate * size * exit_price
-        pnl = raw_pnl - entry_fee - exit_fee
+        remaining_fee = fee_rate * remaining_size * exit_price
+        partial_fee = fee_rate * partial_size * partial_exit_price if partial_tp_triggered else 0.0
+        pnl = partial_raw_pnl + remaining_raw_pnl - entry_fee - partial_fee - remaining_fee
         account_balance += pnl
 
         trade = {
@@ -437,5 +535,8 @@ class BacktestEngine:
             "direction": direction,
             "size": size,
             "breakeven_triggered": breakeven_triggered,
+            "partial_tp_triggered": partial_tp_triggered,
+            "partial_tp_exit_price": partial_exit_price,
+            "partial_tp_pnl": (partial_raw_pnl - partial_fee) if partial_tp_triggered else None,
         }
         return trade, exit_index, account_balance

@@ -490,6 +490,140 @@ def test_simulate_trade_breakeven_mirrors_correctly_for_short_direction():
     assert trade["breakeven_triggered"] is True
 
 
+# --- Partial take-profit (use_partial_tp, opt-in -- see
+# docs/strategy_coverage_audit.md and PARTIAL_TP_TRIGGER_R/PARTIAL_TP_PORTION's
+# docstrings for why this is A/B tested, not default-on) ---
+
+
+def test_simulate_trade_partial_tp_disabled_by_default_no_partial_leg():
+    """Baseline/contrast: with use_partial_tp left at its default (False),
+    price reaching the 1R level and then reversing to the ORIGINAL stop
+    must produce a normal full-size loss -- no partial leg recorded.
+    """
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=115.0, direction="long")
+    candle0 = _c(100, 100, 100, 100, BASE_TS)
+    candle1 = _c(100, 106, 99, 105, BASE_TS + LTF_STEP)  # reaches 1R (105) -- irrelevant when disabled
+    candle2 = _c(99, 99, 94, 95, BASE_TS + LTF_STEP * 2)  # reverses to original stop_loss (95)
+    ltf_candles = [candle0, candle1, candle2]
+
+    trade, exit_index, _ = BacktestEngine()._simulate_trade(
+        signal, ltf_candles, 0, account_balance=10000.0, fee_percent=0.0,
+        slippage_percent=0.0, size=1.0,
+    )
+
+    assert exit_index == 2
+    assert trade["exit_price"] == 95.0
+    assert trade["pnl"] == pytest.approx(1.0 * (95.0 - 100.0))  # full size, full loss
+    assert trade["partial_tp_triggered"] is False
+    assert trade["partial_tp_exit_price"] is None
+    assert trade["partial_tp_pnl"] is None
+
+
+def test_simulate_trade_partial_tp_enabled_locks_in_profit_then_continues_to_full_tp():
+    """With use_partial_tp=True: half the position closes at the 1R level
+    (105), and the remaining half continues to the real take_profit
+    (115) on a later candle -- combined PnL is the sum of both legs.
+    """
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=115.0, direction="long")
+    candle0 = _c(100, 100, 100, 100, BASE_TS)
+    candle1 = _c(100, 106, 99, 105, BASE_TS + LTF_STEP)  # triggers partial TP at 105
+    candle2 = _c(110, 116, 109, 115, BASE_TS + LTF_STEP * 2)  # remaining half reaches take_profit=115
+    ltf_candles = [candle0, candle1, candle2]
+
+    trade, exit_index, _ = BacktestEngine()._simulate_trade(
+        signal, ltf_candles, 0, account_balance=10000.0, fee_percent=0.0,
+        slippage_percent=0.0, size=1.0, use_partial_tp=True,
+    )
+
+    assert exit_index == 2
+    assert trade["exit_price"] == 115.0  # remaining leg's exit -- the real take_profit
+    assert trade["partial_tp_triggered"] is True
+    assert trade["partial_tp_exit_price"] == 105.0
+    assert trade["partial_tp_pnl"] == pytest.approx(0.5 * (105.0 - 100.0))  # 2.5
+    expected_pnl = 0.5 * (105.0 - 100.0) + 0.5 * (115.0 - 100.0)  # 2.5 + 7.5 = 10.0
+    assert trade["pnl"] == pytest.approx(expected_pnl)
+    # Contrast: without partial TP, the same full-size move to take_profit
+    # would have realized size * (115 - 100) = 15.0 -- strictly MORE than
+    # the 10.0 here. Partial TP trades some upside for earlier lock-in.
+    assert trade["pnl"] < 1.0 * (115.0 - 100.0)
+
+
+def test_simulate_trade_partial_tp_protects_against_a_later_full_loss():
+    """The other side of the trade-off: if price reverses to the ORIGINAL
+    stop_loss for the remaining half AFTER a partial has already locked in
+    profit, combined PnL is much better than a full-size loss would have
+    been (though not necessarily net-positive) -- this is the real
+    protective value of partial-TP.
+    """
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=115.0, direction="long")
+    candle0 = _c(100, 100, 100, 100, BASE_TS)
+    candle1 = _c(100, 106, 99, 105, BASE_TS + LTF_STEP)  # triggers partial TP at 105
+    candle2 = _c(99, 99, 94, 95, BASE_TS + LTF_STEP * 2)  # remaining half reverses to stop_loss=95
+    ltf_candles = [candle0, candle1, candle2]
+
+    trade, exit_index, _ = BacktestEngine()._simulate_trade(
+        signal, ltf_candles, 0, account_balance=10000.0, fee_percent=0.0,
+        slippage_percent=0.0, size=1.0, use_partial_tp=True,
+    )
+
+    assert exit_index == 2
+    assert trade["exit_price"] == 95.0  # remaining leg stopped out
+    assert trade["partial_tp_triggered"] is True
+    expected_pnl = 0.5 * (105.0 - 100.0) + 0.5 * (95.0 - 100.0)  # 2.5 - 2.5 = 0.0
+    assert trade["pnl"] == pytest.approx(expected_pnl)
+    # Contrast: a full-size stop-out (no partial TP) would have lost 5.0 --
+    # strictly WORSE than this trade's breakeven-ish 0.0 outcome.
+    assert trade["pnl"] > 1.0 * (95.0 - 100.0)
+
+
+def test_simulate_trade_partial_tp_same_candle_jump_still_banks_partial_leg_first():
+    """A SINGLE candle whose range reaches both the 1R partial-trigger
+    price (105) AND the real take_profit (115) must still bank the
+    partial leg at its own nearer price (105), not skip straight to
+    closing the full size at take_profit -- see this method's docstring
+    for why checking partial-TP before take_profit is the economically
+    correct ordering (rather than an arbitrary implementation detail).
+    """
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=115.0, direction="long")
+    candle0 = _c(100, 100, 100, 100, BASE_TS)
+    candle1 = _c(100, 116, 99, 115, BASE_TS + LTF_STEP)  # single candle spans both 105 and 115
+    ltf_candles = [candle0, candle1]
+
+    trade, exit_index, _ = BacktestEngine()._simulate_trade(
+        signal, ltf_candles, 0, account_balance=10000.0, fee_percent=0.0,
+        slippage_percent=0.0, size=1.0, use_partial_tp=True,
+    )
+
+    assert exit_index == 1
+    assert trade["partial_tp_triggered"] is True
+    assert trade["partial_tp_exit_price"] == 105.0
+    assert trade["exit_price"] == 115.0
+    expected_pnl = 0.5 * (105.0 - 100.0) + 0.5 * (115.0 - 100.0)
+    assert trade["pnl"] == pytest.approx(expected_pnl)
+
+
+def test_simulate_trade_partial_tp_mirrors_correctly_for_short_direction():
+    """Short-direction mirror -- proves the trigger/partial-size logic
+    isn't long-only."""
+    signal = _FakeSignal(entry_price=100.0, stop_loss=105.0, take_profit=85.0, direction="short")
+    candle0 = _c(100, 100, 100, 100, BASE_TS)
+    candle1 = _c(100, 101, 94, 95, BASE_TS + LTF_STEP)  # low=94 <= 1R trigger (95)
+    candle2 = _c(90, 91, 84, 85, BASE_TS + LTF_STEP * 2)  # remaining half reaches take_profit=85
+    ltf_candles = [candle0, candle1, candle2]
+
+    trade, exit_index, _ = BacktestEngine()._simulate_trade(
+        signal, ltf_candles, 0, account_balance=10000.0, fee_percent=0.0,
+        slippage_percent=0.0, size=1.0, use_partial_tp=True,
+    )
+
+    assert exit_index == 2
+    assert trade["partial_tp_triggered"] is True
+    assert trade["partial_tp_exit_price"] == 95.0
+    assert trade["exit_price"] == 85.0
+    expected_pnl = 0.5 * (100.0 - 95.0) + 0.5 * (100.0 - 85.0)  # 2.5 + 7.5 = 10.0
+    assert trade["pnl"] == pytest.approx(expected_pnl)
+
+
 class _FakeApprovedRiskDecision:
     approved = True
     reasons: list = []
