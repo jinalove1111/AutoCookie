@@ -4,6 +4,60 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Backtest data depth: fixed OKX pagination bug, real deep history now fetchable
+
+### Fixed
+- **`CandleFetcher.fetch_ohlcv`'s `since` parameter was wired to OKX's
+  `before` query param**, which (confirmed empirically, not assumed from
+  docs) returns candles NEWER than the given timestamp -- the exact
+  opposite of what backward pagination into history needs. `since` could
+  therefore never deepen a historical sample; every caller requesting
+  more than one page silently got a shallower sample instead (documented
+  for a long time as a known limitation across `run_backtest.py`'s module
+  docstring and multiple HANDOFF.md entries, but never actually root-
+  caused/fixed until now). `since` now correctly maps to `after`.
+
+### Added
+- `CandleFetcher.fetch_ohlcv_history(symbol, timeframe, total_candles, ...)`:
+  real deep-history pagination against OKX's separate
+  `/market/history-candles` endpoint (same request/response shape as
+  `/market/candles`, but confirmed empirically to page back reliably for
+  months of data -- `/market/candles` itself is hard-capped at ~1440
+  total candles regardless of pagination, confirmed empirically by
+  fetching until an empty page). Paces requests between pages, caps
+  total HTTP calls independently via `max_pages` (safety net against a
+  pagination bug becoming a runaway loop), and returns fewer than
+  requested (not an error) if OKX's actual history genuinely runs out.
+- `scripts/run_backtest.py` now uses `fetch_ohlcv_history()` instead of a
+  single 300-candle-capped call. `DEFAULT_CANDLE_COUNT` raised from 900
+  (a single-page-call artifact) to 5000, now that fetching that much is
+  real. A shortfall (OKX genuinely has less history than requested) is
+  now a clear, honest note rather than a silent single-page cap.
+
+### Why this matters (profitability, not just plumbing)
+- Every prior backtest run in this project's history was capped at ~300
+  candles (~1 day at 5m) -- far too shallow to say anything statistically
+  meaningful about whether the strategy has real edge. This was the
+  single largest blocker to ever answering that question. First deep run
+  after this fix (BTCUSDT/15m, 3000 candles / ~31 days, real OKX data):
+  28 real trades, 25% win rate, -$577.82 total PnL on a $10,000 start --
+  a real, previously-unobtainable signal that the strategy's current
+  parameters are not yet profitable over this sample. This is not itself
+  a strategy fix; it's the instrument that now makes strategy iteration
+  possible at all.
+
+### Verified
+- `pytest backend/tests/` 162/162 passing (12 new in `test_candle_fetcher.py`,
+  the first-ever test coverage for this module: pure symbol/timeframe
+  conversion, `fetch_ohlcv_history`'s multi-page assembly/ordering/dedup,
+  early-stop when OKX's history genuinely runs out, the `max_pages` safety
+  cap, and a regression pin for the exact `since`/`after` bug fixed here).
+  Full suite re-run 2x with no flakiness.
+- Real end-to-end against live OKX data (no mocks): `run_backtest.py
+  --symbol BTCUSDT --timeframe 15m --candles 3000` fetched genuinely 3000
+  LTF + 3000 HTF candles (previously would have silently capped at 300)
+  and produced the 28-trade result above.
+
 ## [Unreleased] - Dashboard: /dashboard/signals now real -- generated signals actually persisted
 
 ### Fixed

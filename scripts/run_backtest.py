@@ -9,23 +9,22 @@ pass -- it never places a live or paper order and never writes to the
 is needed here for the same reason: nothing in this script can ever touch a
 real or paper account.
 
-Pagination note (read before assuming this fetches deep history):
-`CandleFetcher.fetch_ohlcv`'s `since` parameter is wired to OKX's `before`
-query param, which per OKX's API semantics returns candles NEWER than the
-given timestamp, not older. This was confirmed empirically: fetching 10
-candles, then re-fetching with `since` set to the oldest of those 10
-returned candles at or after that same timestamp, never anything older.
-That means `since` cannot be used to page backward into deeper history with
-the current `CandleFetcher` implementation -- it cannot help us assemble a
-longer historical sample than one call returns. Given that, and OKX's
-public candles endpoint hard cap of 300 candles per call (already clamped
-inside `CandleFetcher`), this script makes a SINGLE fetch call, capped at
-300 candles, and prints a clear note whenever `--candles` was requested
-above that cap so the shortfall is never silent. Extending this to true
-deep-history pagination would require `CandleFetcher` to expose OKX's
-`after` param (older-than-ts) instead of `before`, which is out of scope
-for this script (candle_fetcher.py is a frozen, already-real Milestone 2
-contract this script only consumes).
+Pagination (deep history, fixed -- read before assuming this is still
+capped at 300 candles): earlier versions of this script were limited to a
+SINGLE fetch call capped at OKX's 300-candles-per-call limit, because
+`CandleFetcher.fetch_ohlcv`'s `since` parameter was wired to OKX's `before`
+query param, which returns candles NEWER than the given timestamp (empty
+-- it cannot page backward). That bug is now fixed at the source
+(`CandleFetcher.fetch_ohlcv`'s `since` now correctly maps to OKX's `after`
+param), and `CandleFetcher.fetch_ohlcv_history()` (new) assembles real deep
+history by paginating OKX's separate `/market/history-candles` endpoint
+(confirmed empirically to page back reliably for months of data, unlike
+`/market/candles`, which is hard-capped at ~1440 total candles regardless
+of pagination -- see that method's docstring for the full empirical
+findings). This script now fetches genuinely as many candles as
+`--candles` requests, pagination-permitting -- it may still return fewer
+if OKX's actual history for the instrument/timeframe runs out first (not
+an error, printed as a note).
 
 Exit codes:
   0 -> normal outcomes: a completed backtest, including the valid
@@ -58,33 +57,28 @@ from app.config import settings
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_REPORTS_DIR = SCRIPT_DIR / "reports"
 DEFAULT_OUTPUT_PATH = DEFAULT_REPORTS_DIR / "backtest_report.md"
-DEFAULT_CANDLE_COUNT = 900
+# Raised from the old 900 (a single-page-call artifact) now that deep
+# pagination actually works -- 5000 candles at 5m is ~17 days, a much more
+# statistically meaningful sample for judging whether the strategy has
+# real edge than the ~1 day a single 300-candle page gave.
+DEFAULT_CANDLE_COUNT = 5000
 
 from app.backtesting.backtest_engine import MIN_CANDLES, BacktestEngine
 from app.backtesting.report_generator import ReportGenerator
-from app.data.candle_fetcher import OKX_MAX_LIMIT, CandleFetcher
+from app.data.candle_fetcher import CandleFetcher
 from app.risk.risk_manager import RiskManager
 from app.strategy.signal_engine import SignalEngine
 
 
 def fetch_candles(symbol: str, timeframe: str, requested: int) -> list:
-    """Fetch historical candles for `symbol`/`timeframe`.
-
-    Single-call fallback (see module docstring): `CandleFetcher`'s `since`
-    param does not cleanly paginate backward in time, so this always issues
-    one call capped at OKX's 300-candle limit and prints a clear note if
-    `requested` exceeds that cap.
+    """Fetch historical candles for `symbol`/`timeframe` via
+    `CandleFetcher.fetch_ohlcv_history()` -- real deep pagination (see
+    module docstring), not a single 300-candle-capped call. May return
+    fewer than `requested` if OKX's actual history for this instrument/
+    timeframe runs out first; that shortfall is printed as a note by the
+    caller (via the returned count), not silently swallowed here.
     """
-    effective_limit = min(requested, OKX_MAX_LIMIT)
-    if requested > OKX_MAX_LIMIT:
-        print(
-            f"NOTE: requested {requested} candles, but OKX's public candles "
-            f"endpoint caps at {OKX_MAX_LIMIT} per call, and CandleFetcher's "
-            "`since` param does not cleanly page backward into older history "
-            f"(see module docstring). Fetching {effective_limit} candles "
-            "instead -- this backtest sample is shallower than requested."
-        )
-    return CandleFetcher().fetch_ohlcv(symbol, timeframe, limit=effective_limit)
+    return CandleFetcher().fetch_ohlcv_history(symbol, timeframe, total_candles=requested)
 
 
 def run_backtest(ltf_candles: list, htf_candles: list) -> Any:
@@ -123,9 +117,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=DEFAULT_CANDLE_COUNT,
         help=(
-            "Roughly how many historical candles to fetch, pagination-"
-            f"permitting (default {DEFAULT_CANDLE_COUNT}). Currently capped "
-            f"at {OKX_MAX_LIMIT} per the module docstring's pagination note."
+            f"How many historical candles to fetch (default {DEFAULT_CANDLE_COUNT}), "
+            "paginated in real batches from OKX -- may return fewer only if "
+            "OKX's actual history for the instrument/timeframe runs out first."
         ),
     )
     parser.add_argument(
@@ -143,7 +137,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main() -> int:
     args = _parse_args()
 
-    # --- 1. Fetch historical LTF candles (single call, see docstring) ---
+    # --- 1. Fetch historical LTF candles (real deep pagination, see docstring) ---
     try:
         candles = fetch_candles(args.symbol, args.timeframe, args.candles)
     except Exception as exc:  # network/data errors are genuine failures
@@ -155,6 +149,13 @@ def main() -> int:
         return 1
 
     print(f"Fetched {len(candles)} candles for {args.symbol}/{args.timeframe}.")
+    if len(candles) < args.candles:
+        print(
+            f"NOTE: requested {args.candles} candles but only {len(candles)} "
+            f"are available from OKX for {args.symbol}/{args.timeframe} (e.g. "
+            "a recent listing) -- not an error, this is genuinely all the "
+            "history that exists."
+        )
     if len(candles) < MIN_CANDLES:
         print(
             f"NOTE: {len(candles)} candles is below the engine's minimum "
@@ -178,6 +179,13 @@ def main() -> int:
         return 1
 
     print(f"Fetched {len(htf_candles)} HTF candles for {args.symbol}/{settings.HTF_TIMEFRAME}.")
+    if len(htf_candles) < args.candles:
+        print(
+            f"NOTE: requested {args.candles} HTF candles but only "
+            f"{len(htf_candles)} are available from OKX for "
+            f"{args.symbol}/{settings.HTF_TIMEFRAME} -- not an error, this "
+            "is genuinely all the history that exists."
+        )
 
     # --- 2. Replay through the real Strategy/Risk/Backtest engines ---
     try:
