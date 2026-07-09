@@ -8,9 +8,19 @@ Milestone 4: the single pass has been factored out into `run_once()` and
 wrapped with an opt-in repeatable-loop CLI (`--iterations` /
 `--interval-seconds`). Running the script with NO CLI args is unchanged from
 Milestone 3 -- same single pass, same prints, same exit codes. Loop mode
-reuses one `CircuitBreaker` instance across iterations, feeds it into
-`RiskManager().evaluate(...)`, sends Telegram/Discord alerts on executed
-trades, and trips the breaker if a daily-loss drawdown check fails.
+reuses one `PersistentCircuitBreaker` instance across iterations, feeds it
+into `RiskManager().evaluate(...)`, sends Telegram/Discord alerts on
+executed trades, and trips the breaker if a daily-loss drawdown check
+fails.
+
+Milestone 4 follow-up (capital-protection): the loop-mode breaker is now
+DB-backed (`app.risk.circuit_breaker.PersistentCircuitBreaker`, persisted
+via `app.portfolio.positions.{load,save}_circuit_breaker_state`). On loop
+startup, any prior tripped state is loaded from the DB and applied to the
+in-memory breaker immediately; every trip()/reset() call persists
+synchronously. This closes the gap where a process restart (crash,
+redeploy, cron respawn) mid-trip previously came back untripped and
+silently resumed trading.
 
 Zero live orders are ever placed here: ExecutionEngine is wired to a
 PaperBroker by default, and TRADING_MODE defaults to "paper". The safety
@@ -71,8 +81,12 @@ from app.execution.execution_engine import ExecutionEngine
 from app.notifications.discord import send_discord_alert
 from app.notifications.telegram import send_telegram_alert
 from app.portfolio.journal import TradeJournal
+from app.portfolio.positions import (
+    load_circuit_breaker_state,
+    save_circuit_breaker_state,
+)
 from app.portfolio.trades import TradeTracker
-from app.risk.circuit_breaker import CircuitBreaker
+from app.risk.circuit_breaker import CircuitBreaker, PersistentCircuitBreaker
 from app.risk.drawdown_guard import DrawdownGuard
 from app.risk.position_sizing import calculate_position_size
 from app.risk.risk_manager import RiskManager
@@ -102,7 +116,9 @@ def _count_trades_opened_today(tracker: TradeTracker) -> int:
     )
 
 
-def _check_drawdown_and_maybe_trip(circuit_breaker: CircuitBreaker) -> None:
+def _check_drawdown_and_maybe_trip(
+    circuit_breaker: CircuitBreaker | PersistentCircuitBreaker,
+) -> None:
     """Approximate today's realized PnL% from the journal and trip `circuit_breaker`
     if the daily loss limit has been breached.
 
@@ -138,7 +154,9 @@ def _check_drawdown_and_maybe_trip(circuit_breaker: CircuitBreaker) -> None:
         send_discord_alert(message)
 
 
-def run_once(circuit_breaker: CircuitBreaker | None = None) -> dict[str, Any]:
+def run_once(
+    circuit_breaker: CircuitBreaker | PersistentCircuitBreaker | None = None,
+) -> dict[str, Any]:
     """Run exactly one paper-trading pass through the full pipeline.
 
     Returns a summary dict describing the outcome:
@@ -365,9 +383,24 @@ def main() -> int:
         return summary["exit_code"]
 
     # --- Loop mode ---
-    # One CircuitBreaker instance is created here and reused (never
-    # recreated) across every run_once() call for the lifetime of the loop.
-    circuit_breaker = CircuitBreaker()
+    # One PersistentCircuitBreaker instance is created here and reused
+    # (never recreated) across every run_once() call for the lifetime of
+    # the loop. Its constructor loads any prior persisted trip from the DB
+    # (app.portfolio.positions.load_circuit_breaker_state) and applies it
+    # immediately, so a respawned process (crash, redeploy, cron respawn)
+    # resumes with the breaker correctly tripped rather than silently
+    # resuming trading. Every subsequent trip()/reset() call persists the
+    # new state synchronously via save_circuit_breaker_state.
+    circuit_breaker = PersistentCircuitBreaker(
+        state_loader=load_circuit_breaker_state,
+        state_saver=save_circuit_breaker_state,
+    )
+    if circuit_breaker.is_tripped():
+        print(
+            "Loop startup: circuit breaker restored from prior persisted "
+            f"state -- tripped=True, reason={circuit_breaker.reason!r}, "
+            f"tripped_at={circuit_breaker.tripped_at}."
+        )
     completed = 0
     try:
         for i in range(args.iterations):

@@ -136,6 +136,11 @@ class BotState(Base):
     weekly_pnl: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     current_drawdown: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     trading_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    circuit_breaker_tripped: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    circuit_breaker_reason: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    circuit_breaker_tripped_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
