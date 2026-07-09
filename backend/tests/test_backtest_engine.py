@@ -256,11 +256,12 @@ class _FakeSignal:
     tool, same spirit as this file's direct `_advance_htf_cursor` tests.
     """
 
-    def __init__(self, entry_price, stop_loss, take_profit, direction):
+    def __init__(self, entry_price, stop_loss, take_profit, direction, rr=None):
         self.entry_price = entry_price
         self.stop_loss = stop_loss
         self.take_profit = take_profit
         self.direction = direction
+        self.rr = rr
 
 
 def test_simulate_trade_size_matches_calculate_position_size_independently():
@@ -373,7 +374,7 @@ class _FakeRiskManager:
     has its own dedicated tests).
     """
 
-    def evaluate(self, signal, trades_today=0):
+    def evaluate(self, signal, trades_today=0, daily_pnl_percent=0.0, weekly_pnl_percent=0.0):
         return _FakeApprovedRiskDecision()
 
 
@@ -451,3 +452,139 @@ def test_run_skips_degenerate_zero_size_signal_without_recording_a_fake_trade():
     # per remaining LTF index), not that generate_signal was only called once
     # then something else short-circuited the loop.
     assert signal_engine.call_count == len(ltf_candles) - (MIN_CANDLES - 1)
+
+
+# --- Daily/weekly loss-limit wiring (previously never passed to
+# RiskManager.evaluate() at all -- silently defaulted to 0.0, so a backtest
+# could keep opening trades through a day that would have tripped paper/
+# live's real loss-limit reject) -------------------------------------------
+
+
+def test_day_bounds_and_week_bounds_match_tradejournal_convention():
+    """Direct unit-level proof that `_day_bounds`/`_week_bounds` compute the
+    exact same UTC-calendar-day / ISO-calendar-week boundaries as
+    `TradeJournal.generate_daily_report()`/`generate_weekly_report()` (see
+    that module's docstrings) -- cross-checked here against independently
+    hand-computed boundaries, not against the journal implementation
+    itself, so this isn't a vacuous tautology.
+    """
+    from app.backtesting.backtest_engine import _day_bounds, _week_bounds
+
+    # 2026-01-14 is a Wednesday; its ISO week runs Mon 2026-01-12 through
+    # Sun 2026-01-18 (same fixture dates used in
+    # test_risk_daily_weekly_real_integration.py for the same reason).
+    ts = datetime(2026, 1, 14, 15, 30, 0, tzinfo=timezone.utc)
+
+    day_start, day_end = _day_bounds(ts)
+    assert day_start == datetime(2026, 1, 14, 0, 0, 0, tzinfo=timezone.utc)
+    assert day_end == datetime(2026, 1, 14, 23, 59, 59, 999999, tzinfo=timezone.utc)
+
+    week_start, week_end = _week_bounds(ts)
+    assert week_start == datetime(2026, 1, 12, 0, 0, 0, tzinfo=timezone.utc)
+    assert week_end == datetime(2026, 1, 18, 23, 59, 59, 999999, tzinfo=timezone.utc)
+
+
+def test_realized_pnl_in_window_only_counts_trades_closed_inside_bounds():
+    from app.backtesting.backtest_engine import _realized_pnl_in_window
+
+    trades = [
+        {"pnl": -100.0, "closed_at": datetime(2026, 1, 14, 5, 0, tzinfo=timezone.utc)},
+        {"pnl": 50.0, "closed_at": datetime(2026, 1, 14, 23, 59, 59, tzinfo=timezone.utc)},
+        # Outside the window on either side -- must be excluded.
+        {"pnl": -999.0, "closed_at": datetime(2026, 1, 13, 23, 59, 59, tzinfo=timezone.utc)},
+        {"pnl": -999.0, "closed_at": datetime(2026, 1, 15, 0, 0, 1, tzinfo=timezone.utc)},
+        # Still open (no closed_at) -- must be excluded, same convention as
+        # TradeJournal's realized-PnL-window query.
+        {"pnl": -999.0, "closed_at": None},
+    ]
+    start = datetime(2026, 1, 14, 0, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 1, 14, 23, 59, 59, 999999, tzinfo=timezone.utc)
+
+    assert _realized_pnl_in_window(trades, start, end) == -50.0
+
+
+def _candles_with_one_crash(n_pad: int) -> list[dict]:
+    """`n_pad` flat candles (safe -- never trigger the fixed signal's SL=90/
+    TP=200), then one crash candle (low=80, triggers stop_loss immediately),
+    then one more flat candle so the walk-forward loop gets a chance to
+    evaluate a SECOND signal on the same UTC day after the first trade
+    closes.
+    """
+    ts = BASE_TS
+    candles = []
+    for _ in range(n_pad):
+        candles.append(_c(100, 100, 100, 100, ts))
+        ts += LTF_STEP
+    candles.append(_c(100, 100, 80, 85, ts))  # crash: hits stop_loss=90
+    ts += LTF_STEP
+    candles.append(_c(100, 100, 100, 100, ts))  # lets the loop attempt one more signal
+    return candles
+
+
+def test_run_daily_loss_limit_blocks_further_trades_same_day(monkeypatch):
+    """A real stop-loss hit that alone breaches `MAX_DAILY_LOSS_PERCENT` must
+    cause the REAL `RiskManager` to reject a second, otherwise-perfectly
+    valid signal offered later the same UTC day -- proving `run()` now
+    passes genuine `daily_pnl_percent` instead of the old silent 0.0
+    default (which could never reject on loss alone, only on
+    `trades_today`/RR/missing-SL-TP).
+    """
+    # Low enough that a single default-sized stop-loss hit (~0.25% risk)
+    # reliably breaches it, isolating this test to the daily-loss check --
+    # MAX_TRADES_PER_DAY stays at its default (2), well above the 1 trade
+    # actually opened here, so it cannot be the cause of any rejection.
+    #
+    # Patches the SAME `settings` object imported at this file's top level
+    # (not a freshly re-imported module instance) -- other test files in
+    # this suite use fresh_app_env/migrated_db fixtures that purge `app.*`
+    # from sys.modules for DB isolation, so an `import
+    # app.backtesting.backtest_engine` done fresh inside a test body can
+    # silently bind to a DIFFERENT re-imported settings singleton than the
+    # one `BacktestEngine`/`RiskManager` (imported at collection time, this
+    # file's top) actually use internally -- patching that copy would be a
+    # silent no-op depending on suite execution order (this is exactly what
+    # broke on the first version of this test: it passed in isolation but
+    # failed inside the full suite).
+    monkeypatch.setattr(settings, "MAX_DAILY_LOSS_PERCENT", 0.1)
+
+    signal = _FakeSignal(entry_price=100.0, stop_loss=90.0, take_profit=200.0, direction="long", rr=10.0)
+    signal_engine = _FakeSignalEngineFixedSignal(signal)
+    ltf_candles = _candles_with_one_crash(n_pad=MIN_CANDLES)
+
+    result = BacktestEngine().run(
+        ltf_candles, [], signal_engine, RiskManager(), account_balance=10000.0
+    )
+
+    # First trade opens and is stopped out; the second offered signal (same
+    # UTC day, real RiskManager, real daily_pnl_percent now below
+    # -0.1%) must be rejected -- proving only ONE trade executes even
+    # though generate_signal fired again.
+    assert signal_engine.call_count == 2
+    assert result.total_trades == 1
+    assert result.trades[0]["pnl"] < 0
+    assert (result.trades[0]["pnl"] / 10000.0) * 100 < -0.1  # premise: the loss really breaches it
+
+
+def test_run_small_daily_loss_within_limit_does_not_block_further_trades(monkeypatch):
+    """Contrast case (same setup as the test above, default
+    `MAX_DAILY_LOSS_PERCENT`, which the small default-sized loss does NOT
+    breach): the second signal must still be approved and executed --
+    proving the daily-loss wiring doesn't just reject everything
+    unconditionally once any loss has occurred.
+    """
+    assert settings.MAX_DAILY_LOSS_PERCENT == 1.0  # premise: default, unmodified
+
+    signal = _FakeSignal(entry_price=100.0, stop_loss=90.0, take_profit=200.0, direction="long", rr=10.0)
+    signal_engine = _FakeSignalEngineFixedSignal(signal)
+    ltf_candles = _candles_with_one_crash(n_pad=MIN_CANDLES)
+
+    result = BacktestEngine().run(
+        ltf_candles, [], signal_engine, RiskManager(), account_balance=10000.0
+    )
+
+    assert signal_engine.call_count == 2
+    # Both offered signals executed: the first is stopped out, and the
+    # second -- opened on the loop's very last candle -- is left open at
+    # the end of the series (no more candles to scan for an exit), so
+    # _simulate_trade closes it out at that final candle's close price.
+    assert result.total_trades == 2

@@ -4,6 +4,7 @@ BACKTEST_MODE only. Never places live orders, never imports execution/.
 """
 
 from dataclasses import dataclass, field
+from datetime import datetime, time, timedelta, timezone
 from typing import Any
 
 from app.backtesting.performance import calculate_max_drawdown, calculate_win_rate
@@ -75,6 +76,54 @@ def _advance_htf_cursor(htf_candles: list, htf_cursor: int, ltf_timestamp: Any) 
     return htf_cursor
 
 
+def _day_bounds(ts: datetime) -> tuple[datetime, datetime]:
+    """UTC calendar day `[00:00:00.000000, 23:59:59.999999]` containing `ts`.
+
+    Mirrors `app.portfolio.journal.TradeJournal.generate_daily_report()`'s
+    boundary exactly (see docs/risk_rules.md's "Daily/weekly boundary
+    convention"), so a backtest's notion of "today" for loss-limit purposes
+    matches what paper/live trading will actually use.
+    """
+    day = ts.date()
+    return (
+        datetime.combine(day, time.min, tzinfo=timezone.utc),
+        datetime.combine(day, time.max, tzinfo=timezone.utc),
+    )
+
+
+def _week_bounds(ts: datetime) -> tuple[datetime, datetime]:
+    """ISO calendar week (Monday 00:00:00.000000 UTC through Sunday
+    23:59:59.999999 UTC) containing `ts`. Mirrors
+    `TradeJournal.generate_weekly_report()`'s boundary exactly.
+    """
+    monday = ts.date() - timedelta(days=ts.weekday())
+    sunday = monday + timedelta(days=6)
+    return (
+        datetime.combine(monday, time.min, tzinfo=timezone.utc),
+        datetime.combine(sunday, time.max, tzinfo=timezone.utc),
+    )
+
+
+def _realized_pnl_in_window(trades: list, start: datetime, end: datetime) -> float:
+    """Sum `pnl` over `trades` whose `closed_at` falls in `[start, end]`.
+
+    In-memory equivalent of `TradeJournal.generate_journal_report(start,
+    end)`'s realized-PnL-window query -- `trades` is the same list `run()`
+    accumulates, so this recomputes from the walk-forward's own ground
+    truth on every step rather than maintaining separate running
+    accumulators that could drift out of sync with day/week rollovers
+    (a trade's `exit_index` can land on a later day/week than the step
+    that opened it). Trade counts per backtest are small enough (bounded
+    by candle count) that rescanning `trades` on each step is not a
+    performance concern.
+    """
+    return sum(
+        t["pnl"]
+        for t in trades
+        if t.get("closed_at") is not None and start <= t["closed_at"] <= end
+    )
+
+
 class BacktestEngine:
     """Simulates strategy execution over historical data without placing live orders."""
 
@@ -102,10 +151,29 @@ class BacktestEngine:
         may be a genuinely separate, independently-fetched series (real
         usage) or empty/short (degrades safely to "neutral" HTF bias, no
         crash).
+
+        Daily/weekly loss-limit gap closed: `risk_manager.evaluate()` now
+        also receives real `daily_pnl_percent`/`weekly_pnl_percent`,
+        computed from THIS run's own `trades` list via `_realized_pnl_in_window`
+        against `_day_bounds`/`_week_bounds` (the same UTC-day/ISO-week
+        convention `TradeJournal` uses for paper/live -- see
+        docs/risk_rules.md). Previously these were never passed at all
+        (silently defaulting to 0.0 inside `RiskManager.evaluate()`), so a
+        backtest could keep opening trades through a day/week that would
+        have tripped paper/live's loss-limit reject -- making backtest
+        results a materially easier, non-representative test of the
+        strategy than what paper/live will actually run. The percent
+        denominator is `account_balance` as originally passed into `run()`
+        (fixed, not the compounding running balance used for position
+        sizing) -- deliberately mirrors `scripts/run_paper.py`'s
+        `PLACEHOLDER_ACCOUNT_BALANCE`-based `_pnl_to_percent()` (also a
+        fixed base, not compounding), so backtest's loss-limit percentages
+        stay comparable to paper's.
         """
         if len(ltf_candles) < MIN_CANDLES:
             return BacktestResult(total_trades=0, win_rate=0.0, total_pnl=0.0, max_drawdown=0.0)
 
+        starting_balance = account_balance
         trades: list = []
         equity_curve = [account_balance]
         trades_today = 0
@@ -114,14 +182,15 @@ class BacktestEngine:
 
         i = MIN_CANDLES - 1
         while i < len(ltf_candles):
-            day = str(_get(ltf_candles[i], "timestamp"))[:10]
+            ltf_timestamp = _get(ltf_candles[i], "timestamp")
+
+            day = str(ltf_timestamp)[:10]
             if day != current_day:
                 current_day = day
                 trades_today = 0
 
             symbol = _get(ltf_candles[i], "symbol") or "UNKNOWN"
 
-            ltf_timestamp = _get(ltf_candles[i], "timestamp")
             htf_cursor = _advance_htf_cursor(htf_candles, htf_cursor, ltf_timestamp)
             htf_slice = htf_candles[: htf_cursor + 1]
 
@@ -134,7 +203,21 @@ class BacktestEngine:
                 i += 1
                 continue
 
-            risk_decision = risk_manager.evaluate(signal, trades_today=trades_today)
+            day_start, day_end = _day_bounds(ltf_timestamp)
+            week_start, week_end = _week_bounds(ltf_timestamp)
+            daily_pnl_percent = (
+                _realized_pnl_in_window(trades, day_start, day_end) / starting_balance
+            ) * 100
+            weekly_pnl_percent = (
+                _realized_pnl_in_window(trades, week_start, week_end) / starting_balance
+            ) * 100
+
+            risk_decision = risk_manager.evaluate(
+                signal,
+                trades_today=trades_today,
+                daily_pnl_percent=daily_pnl_percent,
+                weekly_pnl_percent=weekly_pnl_percent,
+            )
             if not getattr(risk_decision, "approved", False):
                 i += 1
                 continue

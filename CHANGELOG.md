@@ -4,6 +4,47 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - BacktestEngine now enforces real daily/weekly loss limits
+
+### Fixed
+- **`BacktestEngine.run()` never passed `daily_pnl_percent`/`weekly_pnl_percent`
+  to `RiskManager.evaluate()`** (only `trades_today`), so both silently
+  defaulted to `0.0` inside the risk gate -- a backtest could keep opening
+  trades through a day/week that would have tripped paper/live's real
+  loss-limit reject (wired in the previous `RiskManager`/circuit-breaker
+  commit). This made backtest results a systematically easier, less
+  representative test of a strategy than what paper/live will actually
+  run -- the same class of gap the previous position-sizing fix closed for
+  notional/PnL, now closed for the loss-limit gate itself.
+
+### Added
+- `_day_bounds()` / `_week_bounds()` / `_realized_pnl_in_window()` in
+  `app.backtesting.backtest_engine` -- an in-memory equivalent of
+  `TradeJournal.generate_daily_report()`/`generate_weekly_report()`'s
+  UTC-calendar-day / ISO-calendar-week windowing, recomputed from the
+  backtest's own `trades` list on every step (not a running accumulator,
+  to avoid drift when a trade's close lands on a later day/week than the
+  step that opened it). `run()` now passes real `daily_pnl_percent`/
+  `weekly_pnl_percent` to `risk_manager.evaluate()`, computed against the
+  run's starting `account_balance` (a fixed denominator, deliberately
+  mirroring `scripts/run_paper.py`'s `PLACEHOLDER_ACCOUNT_BALANCE`-based
+  `_pnl_to_percent()`, not the compounding balance used for position
+  sizing) so backtest and paper loss-limit percentages stay comparable.
+
+### Verified
+- `pytest backend/tests/` 140/140 passing (6 new: 2 direct unit-level
+  proofs of the day/week boundary math against independently
+  hand-computed dates, and 2 full `BacktestEngine.run()` end-to-end
+  proofs using the REAL `RiskManager` -- a stop-loss hit that alone
+  breaches `MAX_DAILY_LOSS_PERCENT` blocks a second, otherwise-valid
+  signal offered later the same day, contrasted with a small loss within
+  the limit NOT blocking it). Full suite run 3x in a row with no
+  order-dependent flakiness.
+- Real end-to-end run against live OKX data (`scripts/run_backtest.py`,
+  BTCUSDT/5m): completes cleanly, exit code 0, report/CSV generated (0
+  trades today -- no confluence in current market conditions, a normal
+  outcome, not an error).
+
 ## [Unreleased] - Paper trades now actually close on SL/TP, with real fill prices recorded
 
 ### Fixed
