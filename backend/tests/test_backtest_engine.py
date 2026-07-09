@@ -514,7 +514,7 @@ class _FakeSignalEngineFixedSignal:
         self._signal = signal
         self.call_count = 0
 
-    def generate_signal(self, symbol, ltf_candles, htf_candles):
+    def generate_signal(self, symbol, ltf_candles, htf_candles, use_breaker_block=False):
         self.call_count += 1
         return self._signal
 

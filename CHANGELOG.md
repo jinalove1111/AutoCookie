@@ -4,6 +4,60 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Breaker Block wired into signal generation (A/B tested, no measurable backtest effect -- kept optional)
+
+### Added
+- `detect_breaker_block()` (`app/strategy/order_block.py`) now returns
+  `retest_index` (the candle that confirmed the flip) alongside the
+  existing `index` (the original order block's base candle) -- needed
+  for correct zone-mitigation-window checking, same reasoning as
+  `detect_order_block()`'s existing `impulse_index`.
+- `build_entry_model()` gains an optional 6th parameter `breaker_block`
+  (default `None`, every existing call site unaffected): a second zone
+  candidate alongside `order_block`, competing via the same "most recent
+  index wins" rule already governing FVG vs. OB.
+- `SignalEngine.generate_signal(..., use_breaker_block=False)` (opt-in):
+  when `True`, detects an unmitigated breaker block and offers it to
+  `build_entry_model`. `detect_breaker_block` has existed and been
+  unit-tested since Milestone 2 but was never called from signal
+  generation until now (see `docs/strategy_coverage_audit.md`).
+  Threaded through `BacktestEngine.run(..., use_breaker_block=False)`
+  and `scripts/run_backtest.py --breaker-block`, same opt-in pattern as
+  `--breakeven`.
+
+### Verified
+- `pytest backend/tests/` 180/180 passing (6 new: breaker-block-wins-
+  zone-selection unit tests in `test_strategy_entry_model.py`, and a
+  real end-to-end contrast pair in `test_strategy_signal_engine.py` --
+  a setup whose ONLY viable zone is a breaker block produces no signal
+  with the default `False`, and a real short signal with `True`).
+- Real end-to-end A/B, live OKX data, IDENTICAL 6 periods used for the
+  break-even comparison (BTCUSDT/ETHUSDT 15m, 3 periods each): **zero
+  difference** in trade count, PnL, or win rate in every single period,
+  with or without `--breaker-block`.
+- Diagnosed WHY (not just accepted the null result): a raw walk-forward
+  scan of the real BTCUSDT/15m/1000-candle sample found breaker blocks
+  ARE detected regularly (124 of 970 steps had a raw breaker-block
+  candidate, 29 unmitigated) and CAN change signal-level output (2 real
+  signal-level differences found when re-evaluating every step with the
+  flag on vs. off, independent of the backtest engine's concurrency
+  guard). But in the actual walk-forward backtest, both differing steps
+  fell within an already-open trade's window (`BacktestEngine`'s
+  one-trade-at-a-time guard skips signal generation while a trade is
+  open), so neither ever reached the point of opening a real trade.
+
+### Decision: kept opt-in, not proven to improve performance in this sample
+- Per operator instruction ("if it does not improve performance, document
+  the evidence and keep it optional"): the feature works correctly
+  (proven at the signal level) but produced **zero measurable backtest
+  effect** across all 6 tested periods. This is NOT evidence the feature
+  is broken or harmful -- it's evidence that, in this specific sample, it
+  never got the chance to matter. A different/larger sample, or a period
+  with more idle time between trades, could show a real difference in
+  either direction. `--breaker-block` remains available and validated
+  for the same A/B methodology going forward, but is NOT wired into
+  `scripts/run_paper.py` and is NOT made the default.
+
 ## [Unreleased] - Strategy coverage audit + break-even stop management (A/B tested)
 
 ### Added

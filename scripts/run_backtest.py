@@ -81,7 +81,12 @@ def fetch_candles(symbol: str, timeframe: str, requested: int) -> list:
     return CandleFetcher().fetch_ohlcv_history(symbol, timeframe, total_candles=requested)
 
 
-def run_backtest(ltf_candles: list, htf_candles: list, use_breakeven: bool = False) -> Any:
+def run_backtest(
+    ltf_candles: list,
+    htf_candles: list,
+    use_breakeven: bool = False,
+    use_breaker_block: bool = False,
+) -> Any:
     """Replay `ltf_candles`/`htf_candles` once through the real
     Strategy/Risk/Backtest engines."""
     return BacktestEngine().run(
@@ -93,6 +98,7 @@ def run_backtest(ltf_candles: list, htf_candles: list, use_breakeven: bool = Fal
         fee_percent=0.05,
         slippage_percent=0.02,
         use_breakeven=use_breakeven,
+        use_breaker_block=use_breaker_block,
     )
 
 
@@ -179,6 +185,22 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--breaker-block",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable Breaker Block as an additional entry-zone candidate "
+            "(opt-in, default off): app.strategy.order_block.detect_breaker_block() "
+            "has existed and been unit-tested since Milestone 2 but was never "
+            "wired into signal generation until this flag. See "
+            "app.strategy.signal_engine.SignalEngine.generate_signal's "
+            "use_breaker_block docstring and docs/strategy_coverage_audit.md "
+            "-- A/B-testable, not a proven improvement; run the same "
+            "--symbol/--timeframe/--candles/--periods with and without this "
+            "flag and compare."
+        ),
+    )
+    parser.add_argument(
         "--output",
         default=str(DEFAULT_OUTPUT_PATH),
         help=(
@@ -208,6 +230,7 @@ def main() -> int:
         return 1
 
     print(f"Break-even stop management: {'ENABLED' if args.breakeven else 'disabled'}")
+    print(f"Breaker Block entries: {'ENABLED' if args.breaker_block else 'disabled'}")
     print(f"Fetched {len(candles)} candles for {args.symbol}/{args.timeframe}.")
     if len(candles) < total_requested:
         print(
@@ -260,7 +283,12 @@ def main() -> int:
     results: list[Any] = []
     for period_num, ltf_chunk in enumerate(ltf_periods, start=1):
         try:
-            result = run_backtest(ltf_chunk, htf_candles, use_breakeven=args.breakeven)
+            result = run_backtest(
+                ltf_chunk,
+                htf_candles,
+                use_breakeven=args.breakeven,
+                use_breaker_block=args.breaker_block,
+            )
         except Exception as exc:  # unexpected engine failure is a genuine failure
             print(f"ERROR: backtest engine raised an exception on period {period_num}: {exc}")
             return 1

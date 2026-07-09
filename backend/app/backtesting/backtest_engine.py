@@ -153,6 +153,7 @@ class BacktestEngine:
         fee_percent: float = 0.05,
         slippage_percent: float = 0.02,
         use_breakeven: bool = False,
+        use_breaker_block: bool = False,
     ) -> "BacktestResult":
         """Replays historical LTF candles (with a time-aligned, no-lookahead
         HTF slice at each step) through the Strategy Engine and Risk Engine
@@ -165,6 +166,14 @@ class BacktestEngine:
         docstring. Default `False` preserves the exact prior behavior for
         every existing caller; this is a genuinely new, unproven behavior
         being A/B tested (see docs/strategy_coverage_audit.md), not a
+        silent default change.
+
+        `use_breaker_block` (default `False`, opt-in): threaded straight
+        through to `signal_engine.generate_signal(..., use_breaker_block=...)`
+        -- see that parameter's own docstring
+        (`app.strategy.signal_engine.SignalEngine.generate_signal`) for
+        what it does. Default `False` here for the identical reason as
+        `use_breakeven`: A/B testing a genuinely new behavior, not a
         silent default change.
 
         Walk-forward, expanding window, one trade open at a time (no
@@ -223,6 +232,7 @@ class BacktestEngine:
                 symbol=symbol,
                 ltf_candles=ltf_candles[: i + 1],
                 htf_candles=htf_slice,
+                use_breaker_block=use_breaker_block,
             )
             if signal is None:
                 i += 1

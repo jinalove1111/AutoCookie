@@ -60,6 +60,57 @@ def test_build_entry_model_prefers_order_block_over_older_fvg():
     assert model["entry_price"] == 120
 
 
+# --- Breaker block as an additional zone candidate (optional 6th param,
+# default None -- every test above omits it and is unaffected) ---
+
+
+def test_build_entry_model_uses_breaker_block_when_no_other_zone_present():
+    """A matching breaker block alone (no order block, no matching FVG)
+    must still produce a valid entry -- proving it's a genuine additional
+    zone source, not just a tie-breaker.
+    """
+    breaker_block = {"type": "bullish", "top": 105, "bottom": 103, "index": 7, "retest_index": 12}
+
+    model = build_entry_model("bullish", _SWEEP, None, [], None, breaker_block)
+
+    assert model is not None
+    assert model["zone"] == breaker_block
+    assert model["entry_price"] == 105
+
+
+def test_build_entry_model_breaker_block_competes_by_index_like_fvg_and_ob():
+    """A breaker block with a MORE recent index than an order block wins
+    zone selection, same "most recent index wins" rule already governing
+    FVG vs. OB.
+    """
+    order_block = {"type": "bullish", "top": 120, "bottom": 118, "index": 5}
+    breaker_block = {"type": "bullish", "top": 105, "bottom": 103, "index": 9, "retest_index": 12}
+
+    model = build_entry_model("bullish", _SWEEP, None, [], order_block, breaker_block)
+
+    assert model["zone"] == breaker_block  # index 9 > order_block's index 5
+    assert model["entry_price"] == 105
+
+
+def test_build_entry_model_ignores_breaker_block_with_older_index():
+    order_block = {"type": "bullish", "top": 120, "bottom": 118, "index": 10}
+    breaker_block = {"type": "bullish", "top": 105, "bottom": 103, "index": 3, "retest_index": 4}
+
+    model = build_entry_model("bullish", _SWEEP, None, [], order_block, breaker_block)
+
+    assert model["zone"] == order_block  # index 10 > breaker_block's index 3
+
+
+def test_build_entry_model_ignores_direction_mismatched_breaker_block():
+    """A bearish breaker block must not count toward a bullish-bias long
+    entry, same direction-matching discipline as FVG/OB."""
+    bearish_breaker = {"type": "bearish", "top": 105, "bottom": 103, "index": 7, "retest_index": 12}
+
+    model = build_entry_model("bullish", _SWEEP, None, [], None, bearish_breaker)
+
+    assert model is None
+
+
 # --- Regression tests: direction-matching confluence (the bug fixed here) ---
 #
 # Before this fix, `build_entry_model` only checked *presence* of a

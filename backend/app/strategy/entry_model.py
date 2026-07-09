@@ -29,14 +29,29 @@ def build_entry_model(
     choch: dict | None,
     fvg: list[dict],
     order_block: dict | None,
+    breaker_block: dict | None = None,
 ) -> dict | None:
-    """Combine bias/sweep/CHOCH/FVG/order-block signals into an entry candidate, or None.
+    """Combine bias/sweep/CHOCH/FVG/order-block(/breaker-block) signals into
+    an entry candidate, or None.
 
     Confluence rule: bias must not be neutral, AND at least one of
     sweep/choch must be present *and match the bias direction*, AND at
-    least one FVG or order block must agree with the bias direction. The
-    zone (FVG or OB) with the most recent index is chosen as the entry
-    zone.
+    least one FVG, order block, or breaker block must agree with the bias
+    direction. The zone (FVG, OB, or breaker) with the most recent index
+    is chosen as the entry zone.
+
+    `breaker_block` (optional, default `None` -- existing callers that
+    don't pass it get byte-for-byte the prior behavior) is a second,
+    independent zone candidate alongside `order_block`: in practice the
+    two are mutually exclusive at any given evaluation point (a breaker
+    only exists once its underlying order block has already been closed
+    through and retested -- see `detect_breaker_block`'s docstring -- at
+    which point `detect_order_block` no longer reports that same zone as
+    a fresh OB), but both are still passed through the same "most recent
+    index wins" selection as FVG/OB already are, rather than special-cased,
+    since a breaker's `type` is the FLIPPED polarity of its original OB
+    and may genuinely be the freshest/only zone available in either
+    direction at a given point.
 
     Direction-matching rationale (documented per project rule -- every
     strategy rule must have its "why" explicit, see docs/strategy_spec.md):
@@ -53,7 +68,7 @@ def build_entry_model(
     engine's own structural read.
 
     On success returns `{direction, entry_price, stop_loss, take_profit, rr,
-    zone}` — `zone` (the raw FVG/OB dict used) is included so callers (e.g.
+    zone}` — `zone` (the raw FVG/OB/breaker dict used) is included so callers (e.g.
     SignalEngine) can attach it to a signal without recomputing selection.
     """
     if bias not in ("bullish", "bearish"):
@@ -74,6 +89,10 @@ def build_entry_model(
     zone: dict | None = None
     if order_block is not None and order_block["type"] == wanted_type:
         zone = order_block
+
+    if breaker_block is not None and breaker_block["type"] == wanted_type:
+        if zone is None or breaker_block["index"] > zone["index"]:
+            zone = breaker_block
 
     matching_fvgs = [z for z in fvg if z["type"] == wanted_type]
     if matching_fvgs:

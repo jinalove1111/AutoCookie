@@ -99,6 +99,14 @@ def detect_breaker_block(candles: list) -> dict | None:
     A breaker block is a former order block whose zone gets fully closed
     through (price closes past the far side) and is then retested from the
     other side; the same zone shape is returned with `type` flipped.
+
+    Returned dict includes `retest_index` (the candle that confirmed the
+    retest, i.e. flipped this into a tradeable breaker) separate from
+    `index` (the ORIGINAL order block's base candle) -- needed by callers
+    doing zone-mitigation checking (see `app.strategy.utils.is_zone_mitigated`)
+    so the "has this breaker already been retested AGAIN since it formed"
+    window starts after the retest that confirmed it, not after the
+    original (long since irrelevant) order block candle.
     """
     ob = detect_order_block(candles)
     if ob is None:
@@ -125,8 +133,20 @@ def detect_breaker_block(candles: list) -> dict | None:
         high = cf(candles[m], "high")
         low = cf(candles[m], "low")
         if ob["type"] == "bullish" and high >= bottom:
-            return {"type": "bearish", "top": top, "bottom": bottom, "index": ob_index}
+            return {
+                "type": "bearish",
+                "top": top,
+                "bottom": bottom,
+                "index": ob_index,
+                "retest_index": m,
+            }
         if ob["type"] == "bearish" and low <= top:
-            return {"type": "bullish", "top": top, "bottom": bottom, "index": ob_index}
+            return {
+                "type": "bullish",
+                "top": top,
+                "bottom": bottom,
+                "index": ob_index,
+                "retest_index": m,
+            }
 
     return None

@@ -1,6 +1,20 @@
 # HANDOFF — JadeCap Automated Trading Bot
 
-## 상태: 전체 Strategy Coverage Audit 완료(`docs/strategy_coverage_audit.md`) 후 최고-ROI 항목(break-even stop management, 이미 구현돼 있었지만 한 번도 실제 트레이딩 루프에 연결된 적 없던 죽은 코드) 실장 + A/B 검증 완료 — `--breakeven` 옵션으로 동일한 6개 독립 기간(BTCUSDT/ETHUSDT 15m 각 3개)을 재실행: 합산 PnL $819.09→$929.49(+13.5%), 수익 기간 5/6→**6/6**(유일한 손실 기간이 수익으로 반전). 효과는 균일하지 않음(한 기간은 오히려 약화) — "최악 기간을 보호하는 대신 최상 기간의 일부를 희생"하는 break-even의 전형적 효과. 아직 실 paper trading에는 연결 안 함(opt-in 유지, 표본 6개로는 기본값 전환 근거 부족). Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+## 상태: (야간 CTO 세션, founder 부재) 감사에서 발견한 HIGH 항목 3개 중 2번째, Breaker Block을 `SignalEngine`에 실제로 연결 + A/B 검증 완료 — `detect_breaker_block()`이 Milestone 2부터 존재/단위테스트까지 있었지만 signal 생성에서 한 번도 호출된 적 없던 죽은 코드였음. `--breaker-block` opt-in으로 배선하고 break-even 검증에 썼던 것과 동일한 6개 독립 기간(BTCUSDT/ETHUSDT 15m)에 A/B 재실행한 결과 **트레이드/PnL/승률 전부 완전히 동일**(변화 0). 다만 "그냥 안 됨"이 아니라 **원인까지 진단**: 실 데이터 walk-forward 재스캔에서 breaker block이 실제로 자주 탐지되고(970 스텝 중 124회 raw, 29회 unmitigated) 신호 자체를 바꾼 적도 2회 있었지만, 그 2번 모두 BacktestEngine의 "동시 1개 트레이드만" 동시성 가드 때문에 이미 다른 트레이드가 열려있던 구간이라 실제 백테스트에는 전혀 반영되지 않았음 — "기능이 고장남"이 아니라 "이번 표본에서 발현될 기회가 없었음"이라는 정직한 결론. operator 지시("성능 개선 안 되면 증거만 남기고 optional 유지")에 따라 opt-in 유지, paper trading에도 연결 안 함. Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+
+## 전체 회차 (Breaker Block 완전 배선 + A/B 검증 — 로드맵 1순위 항목, "계속하라" 지시에 따라 이어서 진행)
+- [x] `detect_breaker_block()`에 `retest_index`(원 order block의 base 캔들 인덱스인 기존 `index`와 별개, 실제로 breaker로 확정시킨 리테스트 캔들의 인덱스) 신규 반환 — mitigation 체크가 base 캔들이 아니라 리테스트 확정 캔들 "이후"부터 시작해야 함(`impulse_index` 추가 때와 동일한 이유)
+- [x] `build_entry_model()`에 선택적 6번째 파라미터 `breaker_block=None` 추가(기존 호출부 전부 무변경 동작) — FVG/OB와 동일한 "가장 최근 index 우선" 규칙으로 경쟁
+- [x] `SignalEngine.generate_signal(..., use_breaker_block=False)` opt-in 추가 — `BacktestEngine.run(..., use_breaker_block=False)` → `scripts/run_backtest.py --breaker-block`까지 전체 체인 배선(break-even과 동일 패턴)
+- [x] 신규 테스트 6종: `test_strategy_entry_model.py`에 breaker block 단독으로 시그널 생성/index 경쟁/방향 불일치 거부 4종 + `test_strategy_signal_engine.py`에 **실제 end-to-end 대조쌍**(같은 셋업에서 `use_breaker_block=False`는 시그널 없음, `True`는 실제 short 시그널) 2종
+- [x] 전체 `pytest backend/tests/` **180/180 통과**(기존 174 + 신규 6). 재실행으로 flakiness 없음 확인
+- [x] **오케스트레이터 재검증용 실측(A/B, 가장 중요)**: break-even 검증에 썼던 것과 완전히 동일한 6개 기간(BTCUSDT/ETHUSDT 15m, 각 3개)으로 `--breaker-block` on/off 재실행 → **6개 기간 전부 트레이드 수/PnL/승률 완전히 동일**(BTC: 301.79/301.79, ETH: 517.30/517.30, 소수점까지 일치)
+- [x] **"안 됨"에서 멈추지 않고 원인 진단(operator 지시 "research before implementation, evidence over assumption" 반영)**: 실 BTCUSDT/15m/1000캔들에 대해 매 walk-forward 스텝마다 `detect_breaker_block()`을 직접 재실행 → 970스텝 중 124회 raw 탐지, 29회 unmitigated(즉 기능 자체는 활발하게 작동함, "탐지가 안 됨"이 아님). 추가로 매 스텝마다 `use_breaker_block=True`/`False` 양쪽으로 `generate_signal()`을 독립적으로 재실행해 비교 → **실제로 시그널이 달라진 지점이 2곳 존재**(step 629, 630 — long, entry_price가 다름) → 즉 기능은 정상 작동하고 실제로 다른 트레이드를 만들 수 있었음. 그런데 실제 `BacktestEngine.run()`의 walk-forward는 트레이드가 열려있는 동안 다음 스텝들을 건너뛰므로(exit_index+1로 점프), 이 2개 지점이 우연히 이미 열려있던 트레이드의 구간 안에 들어가 있어서 실제 백테스트에는 한 번도 도달하지 못함 — "이 표본에서는 발현 기회가 없었다"는 정확한 원인
+- [x] `py_compile` 무오류 확인, grep 확인 — 신규 코드에 TODO/placeholder/mock/bare pass/NotImplementedError 없음
+- [x] `CHANGELOG.md`에 신규 Unreleased 섹션 추가(진단 과정 전체 포함)
+- [x] **operator 지시 "성능 개선 안 되면 증거만 남기고 optional 유지" 그대로 준수**: 6개 기간 전부 변화 0이므로 "통계적으로 더 강해짐" 기준 미충족 — 기본값 변경 안 함, `run_paper.py`에도 연결 안 함. 근거(위 진단)는 CHANGELOG/HANDOFF 양쪽에 상세 기록
+- [x] scope 준수: `backend/app/risk/*`(무변경), `backend/app/execution/*`(무변경), `backend/app/portfolio/*`(무변경), `scripts/run_paper.py`(무변경), Dashboard/live 게이팅 전부 무변경
+- [x] git commit/push 완료 (`origin/master`) — operator가 "계속하라, CTO처럼 사고하라, API 자격증명/라이브 승인/보안/외부유료서비스 아니면 계속 진행"이라고 명시적으로 재확인함(이 태스크는 그 어느 카테고리에도 해당하지 않음)
 
 ## 전체 회차 (Strategy Coverage Audit + break-even stop management A/B 검증 — operator 지시: "기능 추가 금지, 먼저 감사부터")
 - [x] **감사 수행(코드 작성 전)**: `docs/architecture.md`의 6-layer 설계 + `docs/strategy_spec.md` + `docs/risk_rules.md`에 문서화된 모든 규칙을 실제 구현(`backend/app/`)과 테스트 커버리지에 대조하는 전체 매트릭스를 `docs/strategy_coverage_audit.md`로 작성(규칙/구현상태/테스트커버리지/누락로직/가정/모호성/우선순위 7개 컬럼, 28개 규칙 전부 검토)
@@ -248,12 +262,11 @@
 - [x] ~~CircuitBreaker 상태는 프로세스 메모리에만 존재~~ — DB 영속화 완료(위 참조, `028087a`)
 
 ## 현재 위치
-Strategy > Risk > Backtest > Paper Trading > Dashboard 전 계층의 배관(정확성/실데이터 배선) 갭은 전부 해소됨. "배관이 맞는가"에서 "전략이 실제로 수익성 있는가"로 초점 이동 후: 딥 백테스트 → zone 중복 재진입 버그 수정 → OOS 다중 기간 도구(`--periods`) → **전체 커버리지 감사(`docs/strategy_coverage_audit.md`) → break-even stop management A/B 검증(6개 기간 합산 +13.5%, 수익 기간 5/6→6/6)**까지 이어짐. `--breakeven`은 opt-in으로 유지(표본 6개로는 기본값 전환 근거 부족). **다음 최고-ROI 후보 (우선순위순)**:
-- **`BacktestEngine`의 breakeven 구현이 `OrderManager.move_to_breakeven()`을 재사용하지 않고 독립 구현한 이유(설계 판단, 오해 방지용 명시)**: `move_to_breakeven()`은 DB 스타일 "position" dict를 받아 새 dict를 반환하는 1회성 호출 계약이라(paper/live에서 "지금 breakeven으로 옮길까?"를 외부에서 결정해 호출하는 용도), `_simulate_trade()`의 캔들 단위 스캔 루프(매 캔들마다 트리거 여부를 内부적으로 판정) 안에 자연스럽게 맞지 않음 — 억지로 재사용하면 오히려 코드가 더 복잡해질 상황이라 판단해 동등한 로직을 `BacktestEngine` 안에 직접 구현. `OrderManager.move_to_breakeven()` 자체는 여전히 미사용(paper/live 연결은 아래 항목 참조)
-- **`run_paper.py`(실 paper trading)에 breakeven 연결 여부 결정 (다음 최우선 후보)**: 이번 회차는 `BacktestEngine`에서만 검증함 — operator 지시("Implement only that component")를 지키기 위해 paper 연결은 의도적으로 보류함. Backtest 결과가 긍정적이므로 다음 후보로는 유력하지만, paper trading은 `OrderManager.move_to_breakeven()`이라는 이미 존재하는(하지만 여전히 미사용인) 메서드를 실제로 호출하는 설계가 될 것 — DB에 저장된 open position의 stop_loss를 갱신하는 새 경로가 필요(`TradeTracker`에 현재 `update_stop_loss` 같은 메서드가 없음, 신규 설계 필요)
-- **다른 시장 레짐에 걸친 기간 확보**: 지금까지의 모든 백테스트 기간이 같은 ~31일 달력 구간 안에서만 나뉜 것 — `--candles`를 늘리거나(`--candles 3000 --periods 6` 등) 시간이 지난 뒤 재실행
-- **Breaker Block / Partial TP**: 감사에서 함께 발견된 나머지 2개 HIGH 항목 — 이번엔 손대지 않음(operator 지시 "구현은 1개만"). 다음 라운드 후보
-- **`_LOOKBACK`/`_IMPULSE_MULT`/`_STOP_BUFFER`/`_RR` 파라미터 재검토**: 파라미터 스윕을 한다면 **반드시** `--periods`로 나눈 일부 기간에서만 스윕하고 나머지는 최종 확인에만 사용(OOS 도구를 만든 이유 자체가 overfitting 방지임을 다음 세션이 기억할 것)
+Strategy > Risk > Backtest > Paper Trading > Dashboard 전 계층의 배관 갭은 전부 해소됨. 감사(`docs/strategy_coverage_audit.md`)에서 발견한 HIGH 항목 3개 중 2개를 A/B 검증까지 완료: **break-even**(6개 기간 +13.5%, 5/6→6/6 수익 — 긍정적, opt-in 유지) / **Breaker Block**(6개 기간 전부 변화 0, 원인까지 진단 완료 — 중립, opt-in 유지). 남은 1개는 Partial TP. **다음 최고-ROI 후보 (우선순위순)**:
+- **Partial TP 배선 (감사에서 발견한 마지막 HIGH 항목, 다음 최우선 후보)**: `OrderManager.handle_partial_tp()` — 실 로직 존재, 격리 단위테스트 있음, 실제 트레이딩 루프 어디에서도 미사용. break-even/breaker-block과 동일한 A/B 방법론 적용 필요. 구조적으로 더 복잡함(PnL을 두 leg로 분할, 남은 포지션의 새 타겟을 어떻게 정할지 결정 필요) — break-even/breaker-block이 끝난 지금이 적기
+- **`run_paper.py`(실 paper trading)에 break-even 연결 여부 결정**: backtest A/B가 긍정적이므로 유력 후보. `TradeTracker`에 현재 `update_stop_loss` 같은 메서드가 없음 — DB에 저장된 open position의 stop_loss를 갱신하는 새 경로 설계 필요
+- **다른 시장 레짐에 걸친 기간 확보**: 지금까지의 모든 백테스트 기간(break-even/breaker-block 검증 전부 포함)이 같은 ~31일 달력 구간 안에서만 나뉜 것 — `--candles`를 늘리거나(`--candles 3000 --periods 6` 등) 시간이 지난 뒤 재실행. Breaker Block처럼 "이 표본에서 기회가 없었을 뿐"인 기능이 다른 표본에서는 다르게 나올 수 있음을 이번 회차가 직접 보여줌
+- **`_LOOKBACK`/`_IMPULSE_MULT`/`_STOP_BUFFER`/`_RR`/`BREAKEVEN_TRIGGER_R` 파라미터 재검토**: 파라미터 스윕을 한다면 **반드시** `--periods`로 나눈 일부 기간에서만 스윕하고 나머지는 최종 확인에만 사용
 - **더 다양한/독립적인 심볼**: 지금까지 BTCUSDT/ETHUSDT만 확인(상관성 높음)
 - **scope 경계**: `/dashboard/signals`는 `run_paper.py`에서만 배선(`run_backtest.py`는 의도적으로 안 건드림)
 - **`ltf_bias` 재검토 후보**: 실제 트레이딩 판단에 쓰이게 되면 재확인 필요

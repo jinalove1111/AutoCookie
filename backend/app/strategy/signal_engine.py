@@ -13,7 +13,7 @@ from .entry_model import build_entry_model
 from .fvg import detect_fair_value_gap
 from .liquidity import detect_liquidity_sweep
 from .market_structure import detect_choch_mss
-from .order_block import detect_order_block
+from .order_block import detect_breaker_block, detect_order_block
 from .utils import cf, is_zone_mitigated
 
 
@@ -39,9 +39,25 @@ class SignalEngine:
     """Orchestrates bias/liquidity/structure/FVG/order-block analysis into a TradeSignal."""
 
     def generate_signal(
-        self, symbol: str, ltf_candles: list, htf_candles: list
+        self,
+        symbol: str,
+        ltf_candles: list,
+        htf_candles: list,
+        use_breaker_block: bool = False,
     ) -> "TradeSignal | None":
         """Analyze market structure for `symbol` and produce a TradeSignal, or None.
+
+        `use_breaker_block` (default `False`, opt-in -- see
+        docs/strategy_coverage_audit.md and docs/ROADMAP.md item #1):
+        when `True`, a detected, unmitigated breaker block
+        (`detect_breaker_block`) is offered to `build_entry_model` as a
+        second zone candidate alongside the order block. `detect_breaker_block`
+        has existed and been unit-tested since this project's Milestone 2
+        but was never wired into signal generation until this parameter
+        was added -- default `False` preserves the exact prior behavior
+        for every existing caller (`scripts/run_paper.py`,
+        `BacktestEngine.run()`'s own default) while this is A/B tested,
+        same discipline as `BacktestEngine`'s `use_breakeven`.
 
         `ltf_candles` and `htf_candles` must be genuinely distinct candle
         series (the project's `DEFAULT_TIMEFRAME` and `HTF_TIMEFRAME`
@@ -111,7 +127,24 @@ class SignalEngine:
         ):
             order_block = None
 
-        model = build_entry_model(bias, sweep, choch, fvg_zones, order_block)
+        # Breaker block mitigation window starts right after its RETEST
+        # candle (the one that confirmed the flip), not the original
+        # order block's base candle -- mirrors the order-block
+        # impulse_index reasoning above: the retest candle IS the
+        # event that made this zone tradeable, so mitigation can only
+        # happen strictly after it.
+        breaker_block = None
+        if use_breaker_block:
+            breaker_block = detect_breaker_block(ltf_candles)
+            if breaker_block is not None and is_zone_mitigated(
+                ltf_candles,
+                breaker_block["retest_index"] + 1,
+                breaker_block["top"],
+                breaker_block["bottom"],
+            ):
+                breaker_block = None
+
+        model = build_entry_model(bias, sweep, choch, fvg_zones, order_block, breaker_block)
         if model is None:
             return None
 

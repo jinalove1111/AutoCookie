@@ -161,3 +161,80 @@ def test_signal_engine_returns_none_when_no_confluence():
     # A flat, featureless series: no bias, no sweep/choch, no zones.
     candles = [candle(10, 11, 9, 10, f"t{i}") for i in range(20)]
     assert SignalEngine().generate_signal("BTCUSDT", candles, candles) is None
+
+
+# --- Breaker Block (opt-in via use_breaker_block, default False -- see
+# docs/strategy_coverage_audit.md / docs/ROADMAP.md item #1) ---
+
+
+def _bearish_breaker_setup_candles() -> list[dict]:
+    """LTF series with a real bullish order block (base + confirming
+    impulse) that is then closed through and retested from above --
+    flipping it into a real BEARISH breaker block (`detect_breaker_block`)
+    -- followed by a real buy_side liquidity sweep as the final candle.
+    Deliberately has NO other unmitigated bullish/bearish FVG or order
+    block: `detect_order_block` still finds the original (now-mitigated,
+    per `is_zone_mitigated`) bullish OB, and there are no FVG-forming
+    gaps anywhere in this series, so a signal can ONLY come from the
+    breaker block when `use_breaker_block=True` -- proving it's a real,
+    independent zone source, not incidental.
+    """
+    candles = [candle(100, 101, 100, 100.5, f"t{i}") for i in range(9)]
+    candles.append(candle(101, 101, 99, 99, "t9"))  # bearish base candle -> bullish OB [99, 101]
+    candles.append(candle(100, 111, 99, 110, "t10"))  # bullish impulse confirms the OB
+    candles.append(candle(99.4, 99.5, 98.5, 98.6, "t11"))  # closes through bottom (99)
+    candles.append(candle(98.6, 99.3, 98.5, 99.2, "t12"))  # retest -> confirms bearish breaker
+    # buy_side sweep: wicks above the swing high at 111 (the impulse
+    # candle itself) and closes back below it.
+    candles.append(candle(110, 112, 105, 110, "t13"))
+    return candles
+
+
+def test_signal_engine_default_ignores_breaker_block():
+    """Baseline/contrast: with `use_breaker_block` left at its default
+    (`False`), a setup whose ONLY viable zone is a breaker block must
+    produce no signal -- the original order block is independently
+    mitigated (per the existing OB mitigation check), and there is no
+    other zone available.
+    """
+    ltf_candles = _bearish_breaker_setup_candles()
+    htf_candles = _htf_bearish_candles()
+
+    signal = SignalEngine().generate_signal("BTCUSDT", ltf_candles, htf_candles)
+
+    assert signal is None
+
+
+def test_signal_engine_use_breaker_block_true_produces_a_real_short_signal():
+    """The SAME setup as the contrast test above, only `use_breaker_block=True`
+    -- must now produce a real short TradeSignal off the breaker block."""
+    ltf_candles = _bearish_breaker_setup_candles()
+    htf_candles = _htf_bearish_candles()
+
+    signal = SignalEngine().generate_signal(
+        "BTCUSDT", ltf_candles, htf_candles, use_breaker_block=True
+    )
+
+    assert isinstance(signal, TradeSignal)
+    assert signal.direction == "short"
+    assert signal.htf_bias == "bearish"
+    assert signal.sweep_type == "buy_side"
+    assert signal.entry_price == 99  # breaker block's bottom (short entry)
+    assert signal.stop_loss > signal.entry_price
+    assert signal.take_profit < signal.entry_price
+    assert signal.fvg_zone == {
+        "type": "bearish",
+        "top": 101,
+        "bottom": 99,
+        "index": 9,
+        "retest_index": 12,
+    }
+
+
+def _htf_bearish_candles() -> list[dict]:
+    """Real lower-highs/lower-lows zigzag (bearish bias, same shape
+    verified directly in test_strategy_bias.py), independent series from
+    the LTF fixture above."""
+    highs = [10, 11, 30, 11, 9, 11, 25, 11, 9, 11, 20, 11, 9]
+    lows = [8, 9, 15, 9, 6, 9, 18, 9, 3, 9, 22, 11, 12]
+    return [candle((h + l) / 2, h, l, (h + l) / 2, f"h{i}") for i, (h, l) in enumerate(zip(highs, lows))]

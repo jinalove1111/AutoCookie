@@ -22,7 +22,7 @@ gated).
 | 4 | CHOCH/MSS Detection + swept-index causality (`market_structure.py`) | Implemented | Unit + causality-specific tests | None major | Fixed `n=2` swing window; no multi-bar confirmation | None | LOW |
 | 5 | FVG Detection (`fvg.py`) | Implemented | Unit tested | No minimum gap-size threshold — any nonzero imbalance counts | Assumes any 3-candle gap is tradeable | Spec doesn't define a minimum size either | MEDIUM |
 | 6 | Order Block Detection (`order_block.py`) | Implemented, now returns `impulse_index` | Unit tested | Only the single most-recent OB is ever considered; `_LOOKBACK=10`/`_IMPULSE_MULT=1.5` explicitly documented as untuned | Untuned constants, disclosed in-code | None | MEDIUM |
-| 7 | **Breaker Block Detection** (`detect_breaker_block`) | **Implemented but NEVER called from `SignalEngine.generate_signal()`** — an entire alternate setup type sits completely unused | Unit tested in isolation only; zero integration coverage | `SignalEngine` has no path that ever produces a breaker-block-based signal | Assumes a mitigated OB that reverses (a "breaker") is a valid setup — never empirically checked | Spec section 5 explicitly lists Breaker Block as in-scope for the Strategy Engine, but the orchestrator never uses it | **HIGH** |
+| 7 | **Breaker Block Detection** (`detect_breaker_block`) | **UPDATE (post-audit): wired into `SignalEngine.generate_signal(use_breaker_block=False)`, opt-in, A/B tested.** Zero measured effect across 6 real out-of-sample periods (BTCUSDT/ETHUSDT 15m) -- diagnosed as "never got the chance to matter in this sample" (detector fires and can change signal output, but the 2 confirmed differing moments both fell inside an already-open trade's window), not "doesn't work." See CHANGELOG.md/HANDOFF.md/ENGINEERING_DECISIONS.md #11 for full evidence. Kept opt-in, not made default | Unit + end-to-end integration tests now exist (`test_strategy_entry_model.py`, `test_strategy_signal_engine.py`) | None remaining at the wiring level; needs a different/larger out-of-sample period to get a fair test | Assumes a mitigated OB that reverses (a "breaker") is a valid setup -- tested, inconclusive so far (not disproven, not proven) | Resolved: now wired, matching spec section 5 | LOW (wired + tested; re-test priority MEDIUM once more market regimes are available, see ROADMAP.md item #3) |
 | 8 | Zone Mitigation Filter (`utils.is_zone_mitigated`) | Implemented this session | Unit + end-to-end regression test | None major yet | Any wick overlap = mitigated (no partial-fill/percentage nuance) | None | LOW (just shipped, verified against real data) |
 | 9 | Entry Model / confluence combination (`entry_model.py`) | Implemented | Unit tested | Binary confluence only (no strength scoring); a signal with exactly 1 of 4 possible confluence factors is treated identically to one with all 4; RR is always a fixed 2.0, never derived from structure | `_RR=2.0`, `_STOP_BUFFER=0.001` both explicitly disclosed as "reasonable defaults, not tuned" | Spec section 6 says entry requires bias + sweep + CHOCH + FVG/OB to "have confluence" (reads as ALL); actual code requires bias + (sweep OR choch) + (FVG OR OB) — a real, never-resolved gap between spec wording and implementation | MEDIUM |
 | 10 | Signal Engine orchestration (`signal_engine.py`) | Implemented | Integration tested | None | None | None | LOW |
@@ -67,20 +67,30 @@ gated).
 
 ## Summary: highest-impact gaps
 
-Three items are marked **HIGH** and share the same shape — real logic
-that already exists, is unit-tested in isolation, and is **completely
-disconnected from the live decision loop**:
+Three items were originally marked **HIGH** and shared the same shape —
+real logic that already existed, was unit-tested in isolation, and was
+**completely disconnected from the live decision loop**:
 
-1. Breaker Block detection (never wired into signal generation)
-2. Break-even stop management (never wired into trade exit handling)
-3. Partial take-profit (never wired into trade exit handling)
+1. ~~Breaker Block detection (never wired into signal generation)~~ —
+   **RESOLVED**: wired, A/B tested (opt-in `--breaker-block`), zero
+   measured effect on 6 real out-of-sample periods, diagnosed why (see
+   row #7 above and `ENGINEERING_DECISIONS.md` #11). Kept opt-in.
+2. ~~Break-even stop management (never wired into trade exit handling)~~ —
+   **RESOLVED**: wired, A/B tested (opt-in `--breakeven`), +13.5%
+   aggregate PnL and 5/6 → 6/6 profitable periods on the same 6 periods.
+   Kept opt-in (backtest-only so far; not yet wired into paper trading).
+3. **Partial take-profit (never wired into trade exit handling)** —
+   still open, now the last of the three. See `ROADMAP.md` item #1 for
+   why it's sequenced after the other two (structurally more complex to
+   A/B-test cleanly — splits PnL into two legs rather than changing a
+   single exit point).
 
-Between these, break-even stop management is the cleanest to validate:
-unlike the other two, it changes ONLY exit management, not which trades
-get taken or how much size they use — holding entry logic completely
-constant makes a before/after backtest comparison a clean, controlled
-experiment (the other two either add new signal sources or split PnL
-into two legs, both confounding a single before/after comparison). It
-also directly maps to "improved risk management," one of the operator's
-explicitly approved justification categories. Selected as this round's
-implementation target.
+Break-even was implemented first because it was the cleanest to
+validate: unlike the other two, it changes ONLY exit management, not
+which trades get taken or how much size they use — holding entry logic
+completely constant makes a before/after backtest comparison a clean,
+controlled experiment. Breaker Block was implemented second (adds a new
+signal source, still a single clean before/after comparison since it
+doesn't touch exit logic). Partial TP remains, deliberately last, since
+splitting PnL into two legs is the most confounding of the three to
+compare cleanly.

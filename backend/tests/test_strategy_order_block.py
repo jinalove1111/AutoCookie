@@ -59,4 +59,10 @@ def test_detect_breaker_block_flips_type_after_close_through_and_retest():
 
     result = detect_breaker_block(candles)
 
-    assert result == {"type": "bearish", "top": 101, "bottom": 99, "index": 9}
+    assert result == {
+        "type": "bearish",
+        "top": 101,
+        "bottom": 99,
+        "index": 9,
+        "retest_index": 12,
+    }

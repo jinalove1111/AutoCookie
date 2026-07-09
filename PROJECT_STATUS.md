@@ -9,7 +9,8 @@ the "why" behind specific non-obvious engineering choices, see
 `ENGINEERING_DECISIONS.md`. For forward-looking prioritization, see
 `ROADMAP.md`.
 
-Last updated: 2026-07-10 (commit `630e751`).
+Last updated: 2026-07-10 (commit `630e751` + Breaker Block wiring, this
+session, night CTO mode).
 
 ## One-paragraph summary
 
@@ -32,9 +33,9 @@ approval — this is by design, not an oversight.
 | Layer | Status | Notes |
 |---|---|---|
 | Data (candle fetch) | ✅ Complete | Real OKX public API, deep pagination via `/market/history-candles` (fixed a long-standing 300-candle cap bug), no API key needed |
-| Strategy Engine | ✅ Complete, actively validated | Bias/sweep/CHOCH/FVG/OB/zone-mitigation/entry-model all real, all tested. Breaker Block detector exists but is **not yet wired into signal generation** (see `docs/strategy_coverage_audit.md`) |
+| Strategy Engine | ✅ Complete, actively validated | Bias/sweep/CHOCH/FVG/OB/zone-mitigation/entry-model all real, all tested. Breaker Block detection now wired in too (opt-in, `use_breaker_block`, A/B tested — see findings below) |
 | Risk Engine | ✅ Complete | RR floor, daily/weekly loss limits, trades/day cap, position sizing, DB-persisted circuit breaker — all enforced in both paper AND backtest |
-| Backtest Engine | ✅ Complete, actively used for research | Real fee/slippage/PnL, no-lookahead HTF cursor, multi-period out-of-sample splitting (`--periods`), opt-in break-even stop management (`--breakeven`, A/B validated) |
+| Backtest Engine | ✅ Complete, actively used for research | Real fee/slippage/PnL, no-lookahead HTF cursor, multi-period out-of-sample splitting (`--periods`), opt-in break-even stop management (`--breakeven`, A/B validated positive), opt-in Breaker Block entries (`--breaker-block`, A/B tested neutral) |
 | Paper Trading | ✅ Complete | Real open/close/PnL against live OKX data, no real capital. Break-even is NOT yet wired here (validated in backtest only so far) |
 | Portfolio/Journal | ✅ Complete | Real trade/signal persistence, daily/weekly/all-time reports |
 | Dashboard | ✅ Complete | All 5 endpoints (`status`, `positions`, `logs`, `risk-status`, `bias`, `signals`) real, DB/live-computed |
@@ -42,7 +43,7 @@ approval — this is by design, not an oversight.
 
 ## Test suite
 
-174 backend tests, 0 known failures, re-run 2x+ for flakiness on every
+180 backend tests, 0 known failures, re-run 2x+ for flakiness on every
 change in this session. Run: `cd backend && ./.venv/Scripts/python.exe -m pytest -q`
 (or the platform-appropriate venv path). No frontend test failures
 (`npx tsc --noEmit` clean as of the last frontend-touching change).
@@ -66,10 +67,18 @@ change in this session. Run: `cd backend && ./.venv/Scripts/python.exe -m pytest
   periods, mixed-but-net-positive effect (narrows outcome range more
   than it grows the total — the textbook effect).
 - **Full rule-by-rule coverage audit exists**: `docs/strategy_coverage_audit.md`.
-  Three items are implemented, unit-tested, but never wired into the
-  live decision loop: Breaker Block detection, break-even (now wired in
-  backtest, not yet in paper), partial take-profit (not yet wired
-  anywhere).
+  Found three items implemented, unit-tested, but never wired into the
+  live decision loop. Two are now wired and A/B tested (see below); one
+  (partial take-profit) remains unwired.
+- **Breaker Block wired and A/B tested (opt-in, `--breaker-block`):
+  measured ZERO effect** across the same 6 out-of-sample periods used
+  for break-even. Diagnosed why, not just accepted the null result: the
+  detector fires regularly and CAN change signal-level output (confirmed
+  directly — 2 real differences found scanning every walk-forward step),
+  but in this specific sample both differing moments fell inside an
+  already-open trade's window, so neither ever reached the backtest's
+  actual trade sequence. Kept opt-in; not proof the feature is useless,
+  proof it never got the chance to matter in this particular sample.
 
 ## Honest caveats (read before citing these results anywhere)
 

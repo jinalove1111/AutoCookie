@@ -220,3 +220,70 @@ case using the identical reasoning.
 than this pessimistic assumption produces — deliberately, since a
 backtest that's too optimistic is more dangerous than one that's overly
 cautious.
+
+---
+
+## 10. Every new strategy-behavior change ships as an opt-in flag, threaded end-to-end, before any default changes
+
+**Decision**: break-even (`use_breakeven`) and Breaker Block
+(`use_breaker_block`) both follow the identical pattern: a `False`-
+default parameter on `SignalEngine.generate_signal()`/`BacktestEngine.run()`,
+threaded through to a `scripts/run_backtest.py` CLI flag, so the exact
+same `--symbol`/`--timeframe`/`--candles`/`--periods` invocation can be
+re-run with only that one flag toggled for a clean A/B comparison.
+
+**Why**: this is the only way to make "compare before vs. after" (an
+explicit operator requirement) a literal, mechanical, repeatable
+operation rather than an informal eyeball comparison across separate
+runs that might differ in other ways. It also means a feature that
+turns out NOT to help (see decision #11 below) costs nothing to keep in
+the codebase — it's inert until explicitly requested, and remains
+available for re-testing against future, larger, or differently-timed
+samples without writing new code.
+
+**Alternative considered**: implement directly as new default behavior,
+then revert via `git` if a backtest comparison looked bad. Rejected —
+requires re-running the *entire* validation after implementation to
+decide "was this real," rather than being able to compare in one
+invocation-pair; also leaves no reusable, permanent lever for re-testing
+under different future conditions (a git-reverted feature is gone, an
+opt-in flag is dormant and instantly available again).
+
+**Trade-off accepted**: every new strategy behavior adds one more
+boolean parameter threaded through several layers (`SignalEngine` →
+`BacktestEngine` → CLI). Accepted as a small, mechanical cost against the
+alternative of ad-hoc, harder-to-reproduce comparisons.
+
+---
+
+## 11. A "no measurable effect" A/B result is documented as a finding, not silently discarded
+
+**Decision**: when Breaker Block's A/B backtest showed literally zero
+difference in trade count/PnL/win-rate across all 6 tested periods, the
+response was NOT to assume the feature doesn't work and move on
+silently. Instead: (a) directly scanned every walk-forward step of a
+real dataset to confirm the detector fires and CAN change output (it
+does — 124/970 raw detections, 29 unmitigated, 2 confirmed signal-level
+differences), then (b) determined precisely why those 2 differing
+moments never affected the actual backtest (both fell inside an
+already-open trade's window, per the one-trade-at-a-time concurrency
+guard).
+
+**Why**: "no effect measured" and "proven not to work" are different
+claims, and conflating them would either (a) wrongly discard a feature
+that might matter in a different sample, or (b) leave a future engineer
+unable to tell whether "we tried this and it failed" or "we tried this
+and got inconclusive results due to how the test sample happened to be
+shaped." The diagnostic step turns an ambiguous null result into a
+precise, falsifiable, reusable piece of evidence: "this feature is
+functionally correct; it needs a sample with more idle time between
+trades to get a fair test."
+
+**Trade-off accepted**: the diagnostic scan (re-running detection/signal
+generation at every step outside the normal backtest flow) is extra work
+beyond what the operator's instructions strictly required ("document the
+evidence and keep it optional" would have been satisfiable with just the
+null aggregate result). Accepted because a coverage-audit/research
+project's entire value proposition is evidence quality, not
+throughput — an unexplained null result is much weaker evidence than an
+explained one.
