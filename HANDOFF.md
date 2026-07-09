@@ -1,6 +1,20 @@
 # HANDOFF — JadeCap Automated Trading Bot
 
-## 상태: BacktestEngine이 이제 daily/weekly loss-limit을 실제로 집행함(직전 회차에 paper/live용으로 배선한 것과 동일한 게이트) — 백테스트가 paper/live가 실제로 겪을 손실 한도 halt를 더 이상 우회하지 않음. Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+## 상태: `/dashboard/risk-status`가 이제 실 DB 기반(TradeJournal daily/weekly report + trades-today count) — 하드코딩 0/placeholder note 제거. `/dashboard/bias`·`/dashboard/signals`는 의도적으로 아직 placeholder(아래 "다음 후보" 참조). Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+
+## 전체 회차 (Dashboard: `/dashboard/risk-status` 실 데이터 배선 — 우선순위상 Backtest 다음 항목)
+- [x] **갭 발견/해소**: `/dashboard/risk-status`가 `{daily_loss_used_percent:0, weekly_loss_used_percent:0, trades_today:0, note:"not yet wired to live strategy state"}`를 하드코딩 반환하고 있었는데, 필요한 building block(`TradeJournal.generate_daily_report()`/`generate_weekly_report()`, trades-today 카운트)이 이미 전부 존재하고 이미 `RiskManager.evaluate()`/loop-mode circuit breaker에서 실제로 쓰이고 있었음 — 그냥 배선만 안 돼 있던 손쉬운 win. 실제 daily/weekly loss-used percent(순손실의 절대값, 순이익인 날은 0 — 음수로 새지 않음)와 실 trades_today를 반환하도록 교체
+- [x] `PLACEHOLDER_ACCOUNT_BALANCE`를 `scripts/run_paper.py`의 로컬 상수에서 `settings.PLACEHOLDER_ACCOUNT_BALANCE`(`app/config.py`)로 이동 — `/dashboard/risk-status`와 `run_paper.py`가 PnL→퍼센트 변환에 정확히 같은 고정 분모를 공유하도록(각자 따로 값을 들고 있다 조용히 어긋나는 것 방지)
+- [x] `scripts/run_paper.py`의 private `_count_trades_opened_today()`를 `TradeTracker.count_trades_opened_today()`로 이동(로직 동일, 테스트는 `test_portfolio.py`로 이전+확장) — `/dashboard/risk-status`도 재사용
+- [x] 프론트엔드 `RiskStatusPanel.tsx`의 하드코딩된 "Not live yet" 배지 제거(데이터가 이제 실제로 live라 오해를 유발) + `frontend/lib/types.ts`의 `RiskStatus` 인터페이스 문서 주석을 "여전히 placeholder"에서 "실 데이터"로 갱신 + 소수점 표시(`.toFixed(2)`) 추가
+- [x] 신규 테스트 7종: `test_api_routes.py`에 fresh-DB 0-state 증명 1종 + 실 seed된 -$150 손실이 엔드포인트에 실제로 반영됨을 증명(1.5% 계산) + 같은 날 두 번째 트레이드로 순이익 전환 시 0%로 돌아옴을 증명(음수로 새지 않음을 확인) 2종 + `test_portfolio.py`에 `count_trades_opened_today()` 직접 단위 테스트 1종(오늘 열린 오픈+클로즈드 트레이드는 카운트, 어제 열린 트레이드는 제외)
+- [x] 전체 `pytest backend/tests/` **143/143 통과**(기존 136 + 신규 7). 전체 스위트 3회 연속 재실행으로 flakiness 없음 확인
+- [x] 오케스트레이터 재검증용 실측: 실 FastAPI 앱을 완전히 새로운 임시 SQLite DB로 부팅(실 `alembic upgrade head`) → `TradeTracker`로 실 -$150 클로즈드 트레이드 seed → `TestClient`로 실 `/dashboard/risk-status` 엔드포인트 호출 → `{"daily_loss_used_percent": 1.5, "weekly_loss_used_percent": 1.5, "trades_today": 1, "note": ""}` 실제 반환 확인(옛 하드코딩 0이 아님)
+- [x] `npx tsc --noEmit` 클린 통과(frontend 타입/컴포넌트 변경분)
+- [x] `py_compile` 무오류 확인(`app/config.py`, `app/api/routes_dashboard.py`, `app/portfolio/trades.py`, 신규/수정 테스트 파일 전부), grep 확인 — 신규 코드에 TODO/placeholder/mock/bare pass/NotImplementedError 없음(`/dashboard/bias`·`/dashboard/signals`는 의도적으로 여전히 placeholder라 그 두 엔드포인트 자체의 "not yet wired" 문구는 남아있음 — 정확함, 갭 아님)
+- [x] `CHANGELOG.md`에 신규 Unreleased 섹션 추가
+- [x] scope 준수: `backend/app/strategy/*`, `backend/app/backtesting/*`, `backend/app/execution/*`, `backend/app/risk/*`, `exchange/*`, live-trading 게이팅 전부 무변경(diff에 등장하지 않음). `/dashboard/bias`·`/dashboard/signals`도 이번 회차 scope 밖(각각 실시간 OKX fetch, signal 영속화라는 별도 설계 결정이 필요 — 아래 "다음 후보" 참조, 서두르지 않고 분리)
+- [x] git commit/push 완료 (`origin/master`) — operator가 사전에 "커밋 후 푸시, 라이브/자격증명/외부유료서비스/보안/파괴적 작업 아니면 승인 없이 계속 진행"이라고 명시적으로 요청함(이 태스크는 위 5개 카테고리 중 어느 것에도 해당하지 않음)
 
 ## 전체 회차 (BacktestEngine: daily/weekly loss-limit 실 집행 — Strategy>Risk>Backtest>Paper>Dashboard>Live 우선순위에 따른 다음 최고-ROI 항목)
 - [x] **operator의 우선순위 지시(Strategy Engine > Risk Engine > Backtest > Paper Trading > Dashboard > Live Trading)를 따라 최고-ROI 갭 재조사**: Strategy Engine(HTF/LTF 분리+confluence 방향 일치, 완료), Risk Engine(daily/weekly loss-limit + MAX_TRADES_PER_DAY + MIN_RR, 전부 집행됨, 완료)까지는 확인된 갭 없음. Backtest 계층에서 실 갭 발견: `BacktestEngine.run()`이 `risk_manager.evaluate()`에 `trades_today`만 넘기고 `daily_pnl_percent`/`weekly_pnl_percent`는 전혀 넘기지 않아(항상 묵시적 기본값 `0.0`) — 직전 회차에 paper/live용으로 실제 집행되게 만든 daily/weekly loss-limit이 백테스트에서는 애초에 평가조차 안 되고 있었음. 즉 백테스트는 paper/live보다 체계적으로 더 관대한(비대표적인) 손실 한도 조건으로 전략을 테스트하고 있었음 — 직전 포지션 사이징 수정(`0e52b5a`)이 해소한 것과 같은 종류의 "백테스트가 실제 운영을 대표하지 못하는" 문제
@@ -144,7 +158,12 @@
 - [x] ~~CircuitBreaker 상태는 프로세스 메모리에만 존재~~ — DB 영속화 완료(위 참조, `028087a`)
 
 ## 현재 위치
-Backtest/Paper 파이프라인이 이제 daily/weekly loss-limit 관점에서도 서로 대표성 있게 일치함: Strategy Engine(HTF/LTF 실분리 + confluence 방향 일치) → Risk Engine(실 daily/weekly loss-limit + MAX_TRADES_PER_DAY + MIN_RR 집행, Backtest/Paper 양쪽 모두 실제로 게이트 통과) → Backtest(실 RISK_PER_TRADE_PERCENT 사이징 + 실 loss-limit 집행, no-lookahead HTF) → Execution(실 체결가/수수료 노출) → Paper(포지션이 실제로 열리고 SL/TP 도달 시 실제로 닫히며 실 fill price 기준 PnL 기록, circuit breaker가 그 실현 손실을 실제로 봄). 모든 회차가 git에 커밋/push 완료(`origin/master`, 최신 커밋은 위 "전체 회차" 항목들 참조 — 이 문서의 각 항목에 실제 커밋 해시가 없다면 아직 미커밋일 수 있으니 `git log`로 교차 확인 권장). 다음 후보(우선순위: Strategy > Risk > Backtest > Paper Trading > Dashboard > Live — Strategy/Risk/Backtest 계층은 이 시점 기준 알려진 갭 없음, 다음은 Paper Trading 또는 Dashboard): (1) Paper Trading 후보 — `docs/risk_rules.md`에 이미 문서화된 대로 single-pass 모드의 loss-limit 거부가 stdout/summary dict에는 보이지만 Telegram/Discord 알림은 안 감(loop mode와 다름, "갭이 아니라 의도된 설계"로 기록돼 있었으나 재검토 후보로 남겨둠). (2) Dashboard 후보(더 유력) — `BiasCard`/`SignalsPanel`/`RiskStatusPanel`이 여전히 하드코딩 placeholder(`get_market_bias`/`get_recent_signals`/`get_risk_status` 백엔드 엔드포인트 자체가 아직 실전략 상태로 안 이어짐). Small Live 진행 시 API 키 발급 + 단계별 승인 필요(operator 승인 없이는 절대 진행 안 함).
+Strategy > Risk > Backtest > Paper Trading까지 알려진 갭 없음(전부 위 회차들에서 해소). Dashboard는 부분 진행 중: `/dashboard/status`/`/dashboard/positions`/`/dashboard/logs`/`/dashboard/risk-status`는 전부 실 DB 기반. 남은 두 개, `/dashboard/bias`/`/dashboard/signals`만 여전히 의도적 placeholder — 다음 후보:
+- **`/dashboard/bias`**: `app.strategy.bias.detect_htf_bias(candles)`는 이미 실존하는 실 함수라 요청마다 `CandleFetcher`로 실 OKX HTF candles를 fetch해서 호출하면 real `htf_bias`를 낼 수 있음(read-only, API 키 불필요, `scripts/run_backtest.py`/`run_paper.py`가 이미 매번 하는 것과 동일 패턴). 다만 `ltf_bias`는 `docs/strategy_spec.md`/`signal_engine.py` 어디에도 실제로 정의된 개념이 아님(`detect_htf_bias()`는 htf_candles에만 호출됨, line 20) — 프론트/타입 계약(`frontend/lib/types.ts`)에 필드는 있지만 실제 전략 설계엔 대응 개념이 없으므로, 구현 전에 "ltf_bias를 어떻게 정의할지"(예: 같은 `detect_htf_bias()` 알고리즘을 LTF 캔들에도 재사용해 "최근 LTF 구조적 편향"으로 재정의할지, 필드를 없앨지) operator/설계 확인이 필요할 수 있음 — 다음 세션이 판단
+- **`/dashboard/signals`**: 현재 어떤 프로세스도 생성된 시그널을 `signals` 테이블에 영속화하지 않음(`database/models.py`에 테이블 자체는 이미 존재). `run_paper.py`/`run_backtest.py`의 시그널 생성 스텝에 영속화를 배선하는 설계 결정 필요(모든 생성 시그널을 기록할지, 승인된 것만 기록할지, reject 사유도 함께 남길지 등) — bias보다 스코프가 큼, 별도 회차로 분리 권장
+- Paper Trading 재검토 후보(낮은 우선순위, "갭 아님"으로 이미 기록됨): single-pass 모드의 loss-limit 거부가 Telegram/Discord 알림 없이 stdout/summary dict에만 보임(loop mode와 다름, 의도된 설계로 문서화돼 있으나 재검토 여지는 남아있음)
+
+모든 회차가 git에 커밋/push 완료(`origin/master`, 최신 커밋은 위 "전체 회차" 항목들 참조 — 이 문서의 각 항목에 실제 커밋 해시가 없다면 아직 미커밋일 수 있으니 `git log`로 교차 확인 권장). Small Live 진행 시 API 키 발급 + 단계별 승인 필요(operator 승인 없이는 절대 진행 안 함).
 
 ## 설계 결정 메모
 - Backend: FastAPI + SQLAlchemy 2.0 + Alembic / Frontend: Next.js App Router + TypeScript (operator 확인, Milestone 1)

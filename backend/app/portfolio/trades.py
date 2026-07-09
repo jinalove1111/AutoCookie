@@ -109,3 +109,18 @@ class TradeTracker:
         with session_scope() as db:
             rows = db.execute(select(Trade).where(Trade.status == "closed")).scalars().all()
             return [_row_to_dict(row) for row in rows]
+
+    def count_trades_opened_today(self) -> int:
+        """Count open + closed trades whose `opened_at` falls on today's
+        UTC date -- used by `RiskManager.evaluate()`'s `trades_today`
+        (MAX_TRADES_PER_DAY) check and by `/dashboard/risk-status`, so both
+        share one real, DB-backed count instead of each computing (or
+        hardcoding) their own.
+        """
+        today = datetime.now(timezone.utc).date()
+        rows = self.get_open_positions() + self.get_closed_trades()
+        return sum(
+            1
+            for row in rows
+            if row.get("opened_at") is not None and row["opened_at"].date() == today
+        )

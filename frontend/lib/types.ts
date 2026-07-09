@@ -73,8 +73,11 @@ export interface SignalsResponse {
 }
 
 /**
- * GET /dashboard/risk-status — INTENTIONALLY still a placeholder on the backend.
- * Always includes `note`; numeric fields are not real risk-budget usage yet.
+ * GET /dashboard/risk-status — real, DB-backed risk-budget usage (via
+ * TradeJournal's daily/weekly reports and TradeTracker's trades-today
+ * count), the same figures RiskManager.evaluate()/the circuit breaker use.
+ * `note` is always present (kept for a stable API contract) but currently
+ * always an empty string.
  */
 export interface RiskStatus {
   daily_loss_used_percent: number;

@@ -131,41 +131,18 @@ from app.risk.position_sizing import calculate_position_size
 from app.risk.risk_manager import RiskManager
 from app.strategy.signal_engine import SignalEngine
 
-# No real account-balance source exists yet (Milestone 3 scope). Using a
-# fixed placeholder for position sizing until a real equity/balance feed
-# lands. Milestone 4 reuses the same placeholder to turn the journal's
-# total_pnl into an approximate daily/weekly PnL percentage for the
-# drawdown check and RiskManager.evaluate() (see _pnl_to_percent below).
-PLACEHOLDER_ACCOUNT_BALANCE = 10000.0
-
-
 def _pnl_to_percent(pnl: float) -> float:
     """Convert an absolute realized-PnL figure into a percent-of-account
-    figure, using `PLACEHOLDER_ACCOUNT_BALANCE` (see the note above -- the
-    same placeholder used for position sizing). Both
+    figure, using `settings.PLACEHOLDER_ACCOUNT_BALANCE` (no real
+    account-balance source exists yet -- see that setting's docstring in
+    app/config.py, which is also the shared base
+    `/dashboard/risk-status` uses, so the two stay comparable). Both
     `_check_drawdown_and_maybe_trip` and `run_once`'s `RiskManager.evaluate()`
     call need a percent, not an absolute PnL number; centralizing the
     conversion here keeps the two from silently drifting onto different
     formulas.
     """
-    return (pnl / PLACEHOLDER_ACCOUNT_BALANCE) * 100
-
-
-def _count_trades_opened_today(tracker: TradeTracker) -> int:
-    """Count open + closed trades whose opened_at falls on today's UTC date.
-
-    TradeTracker.get_open_positions()/get_closed_trades() have landed with
-    real DB-backed implementations, so we use them for a real trades_today
-    count (rather than a hardcoded 0) to feed RiskManager's
-    MAX_TRADES_PER_DAY check accurately.
-    """
-    today = datetime.now(timezone.utc).date()
-    rows = tracker.get_open_positions() + tracker.get_closed_trades()
-    return sum(
-        1
-        for row in rows
-        if row.get("opened_at") is not None and row["opened_at"].date() == today
-    )
+    return (pnl / settings.PLACEHOLDER_ACCOUNT_BALANCE) * 100
 
 
 def _compute_exit_pnl(position: dict, exit_price: float) -> float:
@@ -278,7 +255,7 @@ def _check_drawdown_and_maybe_trip(
     path's behavior. Best-effort: any failure computing either PnL figure is
     reported and treated as 0.0% (no breach) rather than aborting the
     iteration -- this is an approximate, not production-grade, risk check
-    (see PLACEHOLDER_ACCOUNT_BALANCE).
+    (see settings.PLACEHOLDER_ACCOUNT_BALANCE in app/config.py).
     """
     try:
         daily_report = TradeJournal().generate_daily_report()
@@ -499,7 +476,7 @@ def run_once(
     # not a hard failure) if this convenience query itself breaks, since a
     # broken count shouldn't block the core fetch/signal/risk/execute flow.
     try:
-        trades_today = _count_trades_opened_today(TradeTracker())
+        trades_today = TradeTracker().count_trades_opened_today()
     except Exception as exc:
         print(f"WARNING: could not compute trades_today ({exc}); defaulting to 0.")
         trades_today = 0
@@ -586,7 +563,7 @@ def run_once(
     # recorded as the actual applied fraction (not a 0.0 placeholder) since
     # `PaperBroker` already computes and exposes it via `fill_price`.
     size = calculate_position_size(
-        account_balance=PLACEHOLDER_ACCOUNT_BALANCE,
+        account_balance=settings.PLACEHOLDER_ACCOUNT_BALANCE,
         risk_percent=settings.RISK_PER_TRADE_PERCENT,
         entry=signal.entry_price,
         stop_loss=signal.stop_loss,

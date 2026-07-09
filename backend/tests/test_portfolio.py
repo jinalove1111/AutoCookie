@@ -64,6 +64,63 @@ def test_trade_tracker_close_trade_moves_between_lists(migrated_db):
     assert closed[0]["closed_at"] is not None
 
 
+def test_trade_tracker_count_trades_opened_today_counts_open_and_closed(migrated_db):
+    """Moved here (was a private `_count_trades_opened_today` helper in
+    scripts/run_paper.py) so /dashboard/risk-status can share the same
+    real, DB-backed count RiskManager's MAX_TRADES_PER_DAY check uses,
+    rather than each computing (or hardcoding) its own.
+    """
+    from app.portfolio.trades import TradeTracker
+
+    tracker = TradeTracker()
+    now = datetime.now(timezone.utc)
+    yesterday = now - timedelta(days=1)
+
+    # Opened today, still open -- counts.
+    tracker.record_trade(
+        {
+            "symbol": "BTCUSDT",
+            "direction": "long",
+            "entry_price": 100.0,
+            "stop_loss": 95.0,
+            "take_profit": 110.0,
+            "size": 1.0,
+            "mode": "paper",
+            "opened_at": now,
+        }
+    )
+    # Opened today, now closed -- still counts (opened_at, not status, is
+    # what matters for "how many trades did we open today").
+    closed_today_id = tracker.record_trade(
+        {
+            "symbol": "ETHUSDT",
+            "direction": "short",
+            "entry_price": 3000.0,
+            "stop_loss": 3100.0,
+            "take_profit": 2800.0,
+            "size": 1.0,
+            "mode": "paper",
+            "opened_at": now,
+        }
+    )
+    tracker.close_trade(closed_today_id, exit_price=2900.0, pnl=100.0, closed_at=now)
+    # Opened yesterday -- must NOT count toward today's total.
+    tracker.record_trade(
+        {
+            "symbol": "SOLUSDT",
+            "direction": "long",
+            "entry_price": 50.0,
+            "stop_loss": 48.0,
+            "take_profit": 55.0,
+            "size": 1.0,
+            "mode": "paper",
+            "opened_at": yesterday,
+        }
+    )
+
+    assert tracker.count_trades_opened_today() == 2
+
+
 def test_trade_tracker_close_trade_raises_for_unknown_id(migrated_db):
     import pytest
 

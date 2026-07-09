@@ -6,8 +6,10 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database.models import StrategyLog
 from app.database.session import get_db
+from app.portfolio.journal import TradeJournal
 from app.portfolio.positions import get_or_create_bot_state
 from app.portfolio.trades import TradeTracker
 
@@ -53,16 +55,30 @@ def get_open_positions() -> list:
 
 @router.get("/risk-status")
 def get_risk_status() -> dict:
-    """Return current risk budget usage.
+    """Return current risk budget usage, computed from real closed paper
+    trades via `TradeJournal`'s UTC-day/ISO-week windowed reports -- the
+    same real daily/weekly PnL% `RiskManager.evaluate()` and the loop-mode
+    circuit breaker already use (see docs/risk_rules.md). Percent
+    conversion uses `settings.PLACEHOLDER_ACCOUNT_BALANCE`, the same fixed
+    base `scripts/run_paper.py`'s `_pnl_to_percent()` uses, so this figure
+    stays comparable to what actually drove any loss-limit reject.
 
-    Not yet wired to live strategy state: the risk engine is a stateless set
-    of functions this milestone and has no persisted risk-budget output to read.
+    "Loss used" is the magnitude of a NEGATIVE daily/weekly PnL% (0 if
+    today/this week is net-positive so far -- a profit means none of the
+    loss budget has been consumed; this endpoint reports usage, not raw
+    PnL, so it never goes negative).
     """
+    daily_report = TradeJournal().generate_daily_report()
+    weekly_report = TradeJournal().generate_weekly_report()
+
+    daily_pnl_percent = (daily_report["total_pnl"] / settings.PLACEHOLDER_ACCOUNT_BALANCE) * 100
+    weekly_pnl_percent = (weekly_report["total_pnl"] / settings.PLACEHOLDER_ACCOUNT_BALANCE) * 100
+
     return {
-        "daily_loss_used_percent": 0,
-        "weekly_loss_used_percent": 0,
-        "trades_today": 0,
-        "note": "not yet wired to live strategy state",
+        "daily_loss_used_percent": max(0.0, -daily_pnl_percent),
+        "weekly_loss_used_percent": max(0.0, -weekly_pnl_percent),
+        "trades_today": TradeTracker().count_trades_opened_today(),
+        "note": "",
     }
 
 

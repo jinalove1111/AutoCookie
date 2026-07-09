@@ -18,27 +18,16 @@ export default function RiskStatusPanel() {
 
       {!loading && !error && risk && (
         <>
-          <span
-            style={{
-              display: "inline-block",
-              background: "#eee",
-              border: "1px solid #ccc",
-              borderRadius: 4,
-              padding: "2px 8px",
-              fontSize: 12,
-              marginBottom: 8,
-            }}
-          >
-            Not live yet
-          </span>
           <p style={{ margin: "4px 0" }}>
-            Daily loss used: {risk.daily_loss_used_percent}%
+            Daily loss used: {risk.daily_loss_used_percent.toFixed(2)}%
           </p>
           <p style={{ margin: "4px 0" }}>
-            Weekly loss used: {risk.weekly_loss_used_percent}%
+            Weekly loss used: {risk.weekly_loss_used_percent.toFixed(2)}%
           </p>
           <p style={{ margin: "4px 0" }}>Trades today: {risk.trades_today}</p>
-          <p style={{ margin: "4px 0", fontSize: 12, opacity: 0.7 }}>{risk.note}</p>
+          {risk.note && (
+            <p style={{ margin: "4px 0", fontSize: 12, opacity: 0.7 }}>{risk.note}</p>
+          )}
         </>
       )}
     </section>

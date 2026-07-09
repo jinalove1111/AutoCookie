@@ -4,6 +4,41 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Dashboard: /dashboard/risk-status now real, DB-backed
+
+### Fixed
+- **`/dashboard/risk-status` hardcoded `0`/`0`/`0` with a "not yet wired"
+  note**, even though every building block it needs (`TradeJournal`'s
+  daily/weekly reports, a trades-today count) already existed and is
+  already used for real by `RiskManager.evaluate()`/the loop-mode circuit
+  breaker. Now computes real `daily_loss_used_percent`/
+  `weekly_loss_used_percent` (magnitude of a net loss for the UTC day/ISO
+  week, `0` on a net-positive day rather than a negative number) and real
+  `trades_today`. The frontend `RiskStatusPanel` also had a hardcoded
+  "Not live yet" badge, now removed since the data is live.
+
+### Changed
+- `PLACEHOLDER_ACCOUNT_BALANCE` moved from a local constant in
+  `scripts/run_paper.py` into `settings.PLACEHOLDER_ACCOUNT_BALANCE`
+  (`app/config.py`), so `/dashboard/risk-status` and `run_paper.py` share
+  the exact same fixed denominator for PnL-to-percent conversion instead
+  of each needing their own copy (or silently drifting onto different
+  bases).
+- `scripts/run_paper.py`'s private `_count_trades_opened_today()` moved to
+  `TradeTracker.count_trades_opened_today()` (same logic, same tests
+  extended) so `/dashboard/risk-status` can reuse it too.
+
+### Verified
+- `pytest backend/tests/` 143/143 passing (7 new: fresh-DB zero-state,
+  real-seeded-loss reflecting in the endpoint, a net-positive day
+  reporting 0% (not negative), and a direct `count_trades_opened_today()`
+  unit test). Full suite re-run 3x with no flakiness.
+- Real end-to-end: booted the actual FastAPI app against a fresh temp
+  SQLite DB, seeded a real -$150 closed trade via `TradeTracker`, hit the
+  live `/dashboard/risk-status` endpoint through `TestClient` -- returned
+  `daily_loss_used_percent: 1.5` (not the old hardcoded `0`).
+- `npx tsc --noEmit` clean (frontend type/contract changes).
+
 ## [Unreleased] - BacktestEngine now enforces real daily/weekly loss limits
 
 ### Fixed

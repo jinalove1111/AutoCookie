@@ -58,6 +58,14 @@ class Settings(BaseSettings):
     MAX_TRADES_PER_DAY: int = 2
     MIN_RR: float = 2
 
+    # No real account-balance source exists yet (see scripts/run_paper.py's
+    # module docstring) -- used as the fixed denominator for position
+    # sizing and for converting realized PnL into daily/weekly loss-limit
+    # percentages, consistently, across scripts/run_paper.py and the
+    # /dashboard/risk-status endpoint (both need the exact same base or
+    # their percentages would silently disagree).
+    PLACEHOLDER_ACCOUNT_BALANCE: float = 10000.0
+
     # --- Alerts ---
     ENABLE_TELEGRAM_ALERTS: bool = False
     TELEGRAM_BOT_TOKEN: str = ""

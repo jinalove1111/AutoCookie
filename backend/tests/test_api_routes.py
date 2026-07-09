@@ -7,6 +7,8 @@ here as a regression test.
 
 from __future__ import annotations
 
+import pytest
+
 
 def test_dashboard_status_returns_default_bot_state(client):
     response = client.get("/dashboard/status")
@@ -31,7 +33,12 @@ def test_dashboard_logs_empty_on_fresh_db(client):
     assert response.json() == []
 
 
-def test_dashboard_bias_and_signals_and_risk_status_placeholders(client):
+def test_dashboard_bias_and_signals_still_placeholders(client):
+    """Unlike /dashboard/risk-status (see below, now real -- wired in the
+    same round of Dashboard work), /bias and /signals remain intentional
+    placeholders: bias has no persisted live-strategy output to read, and
+    no running process persists generated signals to the signals table yet.
+    """
     bias = client.get("/dashboard/bias")
     assert bias.status_code == 200
     assert "note" in bias.json()
@@ -40,9 +47,81 @@ def test_dashboard_bias_and_signals_and_risk_status_placeholders(client):
     assert signals.status_code == 200
     assert signals.json()["signals"] == []
 
-    risk_status = client.get("/dashboard/risk-status")
-    assert risk_status.status_code == 200
-    assert "note" in risk_status.json()
+
+def test_dashboard_risk_status_zero_on_fresh_db(client):
+    """No trades at all yet -- both loss-used percentages and trades_today
+    must be a real, computed 0 (not a hardcoded placeholder 0 -- see the
+    seeded-loss test below for the case that actually distinguishes the
+    two).
+    """
+    response = client.get("/dashboard/risk-status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["daily_loss_used_percent"] == 0.0
+    assert body["weekly_loss_used_percent"] == 0.0
+    assert body["trades_today"] == 0
+    assert body["note"] == ""
+
+
+def test_dashboard_risk_status_reflects_real_seeded_loss(client):
+    """A real closed, losing paper trade seeded via TradeTracker (same
+    pattern as test_risk_daily_weekly_real_integration.py) must show up as
+    real daily/weekly loss-used percent -- not the old hardcoded 0 -- and
+    trades_today must reflect it too. Also proves a net-positive day
+    reports 0% loss used (not a negative number) via the second trade.
+    """
+    from datetime import datetime, timezone
+
+    from app.portfolio.trades import TradeTracker
+
+    tracker = TradeTracker()
+    now = datetime.now(timezone.utc)
+
+    # -$150 on the $10,000 PLACEHOLDER_ACCOUNT_BALANCE = -1.5%.
+    losing_id = tracker.record_trade(
+        {
+            "symbol": "BTCUSDT",
+            "direction": "long",
+            "entry_price": 100,
+            "stop_loss": 95,
+            "take_profit": 110,
+            "size": 1,
+            "mode": "paper",
+            "opened_at": now,
+        }
+    )
+    tracker.close_trade(losing_id, exit_price=85.0, pnl=-150.0, closed_at=now)
+
+    response = client.get("/dashboard/risk-status")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["daily_loss_used_percent"] == pytest.approx(1.5)
+    assert body["weekly_loss_used_percent"] == pytest.approx(1.5)
+    assert body["trades_today"] == 1
+
+    # A second, WINNING trade the same day -- net PnL today is now
+    # -150 + 300 = +150 (net positive) -- must report 0% loss used, not a
+    # negative percentage.
+    winning_id = tracker.record_trade(
+        {
+            "symbol": "BTCUSDT",
+            "direction": "long",
+            "entry_price": 100,
+            "stop_loss": 95,
+            "take_profit": 110,
+            "size": 1,
+            "mode": "paper",
+            "opened_at": now,
+        }
+    )
+    tracker.close_trade(winning_id, exit_price=130.0, pnl=300.0, closed_at=now)
+
+    response = client.get("/dashboard/risk-status")
+    body = response.json()
+    assert body["daily_loss_used_percent"] == 0.0
+    assert body["weekly_loss_used_percent"] == 0.0
+    assert body["trades_today"] == 2
 
 
 def test_trades_open_and_closed_empty_on_fresh_db(client):
