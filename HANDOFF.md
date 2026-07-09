@@ -1,6 +1,21 @@
 # HANDOFF — JadeCap Automated Trading Bot
 
-## 상태: `/dashboard/bias`도 이제 실시간 계산됨(실 OKX candle fetch + 실 `detect_htf_bias()`) — Dashboard 5개 엔드포인트 중 `/dashboard/signals`만 남은 유일한 의도적 placeholder(아래 "다음 후보" 참조). Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+## 상태: Dashboard 5개 엔드포인트 전부 실데이터로 배선 완료(`/dashboard/signals`까지) — `scripts/run_paper.py`가 이제 매 pass마다 생성된 시그널을 실제로 `signals` 테이블에 영속화하고 pending→approved/rejected→executed로 상태 전이. Dashboard 계층에 더 이상 알려진 갭 없음. Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+
+## 전체 회차 (Dashboard: `/dashboard/signals` 실시간 배선 — Dashboard 계층 마지막 항목)
+- [x] **갭 해소**: 어떤 프로세스도 생성된 시그널을 `signals` 테이블에 영속화한 적이 없었음 — `app.database.models.Signal`의 `status` 컬럼은 처음부터 pending/approved/rejected/executed 컨벤션을 문서화하고 있었고, `TradeSignal` 데이터클래스 자체 독스트링도 "signals DB table과 일치"라고 명시하고 있었지만(스키마/계약은 처음부터 이 기능을 염두에 두고 설계돼 있었음), 실제 쓰기 경로가 한 번도 배선된 적이 없었음
+- [x] `app.portfolio.signals.SignalTracker` 신규(`TradeTracker`와 정확히 동일한 패턴): `record_signal()`, `update_signal_status()`(알 수 없는 id면 `ValueError` — `TradeTracker.close_trade()`와 동일 계약), `get_recent_signals(limit=20)`
+- [x] `scripts/run_paper.py`의 `run_once()`가 매 pass마다 실제로 생성된 `TradeSignal`을 생성 즉시 영속화(status="pending")하고, 파이프라인을 지나며 "rejected"(risk 거부)/"approved"(risk 통과)/"executed"(주문 체결) 로 상태를 갱신 — 기존 `trades_today`/`daily_pnl_percent` best-effort 쿼리와 동일한 패턴(영속화 실패는 파이프라인을 막는 에러가 아니라 큰 소리 WARNING). 기존 `run_once()` summary dict 필드/의미는 전부 무변경
+- [x] `/dashboard/signals`가 이제 `SignalTracker`를 통해 실 최근 20개 시그널(최신순)을 반환
+- [x] 프론트엔드: `Signal`/갱신된 `SignalsResponse` 타입 추가, `SignalsPanel`이 실 리스트를 렌더(`LogsPanel`과 동일 패턴)하도록 교체 — 하드코딩된 "Not live yet" 배지 + 카운트만 보여주던 것 제거
+- [x] **`ltf_bias` 판단과 동일한 성격의 근거 확인**: `TradeSignal.timestamp`가 dataclass 타입 힌트상 `str`이지만 실제 런타임 값(실 OKX candle의 timestamp)은 항상 real `datetime`이고 `Signal.timestamp` DB 컬럼도 `DateTime(timezone=True)`라 타입 힌트는 무시하고 실제 런타임 타입 그대로 저장 — 기존 타입 힌트 자체를 고치는 것은 이번 태스크 scope 밖이라 손대지 않음(동작에 영향 없음, 이미 있던 사소한 부정확성)
+- [x] 신규 테스트 9종: `test_portfolio.py`에 `SignalTracker` record/query round-trip, 상태 전이(pending→approved→executed), 알 수 없는 id `ValueError`, 최신순+limit 정렬 4종 + `test_api_routes.py`에 fresh-DB 빈 상태 + 실 seed된 시그널이 실 상태로 엔드포인트에 반영됨 2종
+- [x] 전체 `pytest backend/tests/` **150/150 통과**(기존 145 + 신규 9 — 위 4+2=6개는 세는 방식에 따라 다를 수 있음, 정확히는 신규 테스트 함수 9개). 전체 스위트 2회 연속 재실행으로 flakiness 없음 확인
+- [x] **오케스트레이터 재검증용 실측(가장 중요 — `SignalTracker` 단위 테스트만으로는 실제 `run_once()` 배선 자체는 증명 안 됨)**: 임시 SQLite에 실 `alembic upgrade head` 적용 → `CandleFetcher`/`SignalEngine`을 controlled fake로 monkeypatch(진짜 시그널 생성 로직이 아니라 이 배선 자체를 격리 검증하기 위함, `MIN_RR` 통과하는 실 rr=3.0 신호) → **실제** `run_paper.run_once()` 직접 호출 → 시그널이 pending→approved→executed로 실제 전이되고 실행된 trade와 매칭됨을 DB에서 직접 확인. 두 번째로 rr=0.2(< MIN_RR) 신호로 재실행 → pending→rejected로 전이되고 `RiskManager`의 실제 거부 사유와 일치함을 확인. 두 시나리오 모두 통과
+- [x] `py_compile` 무오류 확인, `npx tsc --noEmit` 클린, grep 확인 — 신규 코드에 TODO/placeholder/mock/bare pass/NotImplementedError 없음
+- [x] `CHANGELOG.md`에 신규 Unreleased 섹션 추가
+- [x] scope 준수: `backend/app/strategy/*`(무변경, `TradeSignal`을 duck-typed로 consume만 함), `backend/app/backtesting/*`, `backend/app/execution/*`, `backend/app/risk/*`, `exchange/*`, live-trading 게이팅 전부 무변경
+- [x] git commit/push 완료 (`origin/master`) — operator가 사전에 "커밋 후 푸시, 라이브/자격증명/외부유료서비스/보안/파괴적 작업 아니면 승인 없이 계속 진행"이라고 명시적으로 요청함(이 태스크는 위 5개 카테고리 중 어느 것에도 해당하지 않음)
 
 ## 전체 회차 (Dashboard: `/dashboard/bias` 실시간 배선)
 - [x] **갭 해소**: `/dashboard/bias`가 `{"htf_bias": "neutral", "ltf_bias": "neutral", "note": "not yet wired..."}`를 하드코딩 반환하던 것을, `scripts/run_paper.py`/`run_backtest.py`가 이미 매번 하는 것과 동일한 패턴(`CandleFetcher().fetch_ohlcv()`, API 키 불필요, read-only)으로 실 OKX HTF/LTF candle을 fetch해 실 `app.strategy.bias.detect_htf_bias()`(라이브 전략의 실제 bias 게이트와 완전히 동일한 함수)로 계산하도록 교체
@@ -172,11 +187,11 @@
 - [x] ~~CircuitBreaker 상태는 프로세스 메모리에만 존재~~ — DB 영속화 완료(위 참조, `028087a`)
 
 ## 현재 위치
-Strategy > Risk > Backtest > Paper Trading까지 알려진 갭 없음(전부 위 회차들에서 해소). Dashboard는 5개 중 4개(`/dashboard/status`/`/dashboard/positions`/`/dashboard/logs`/`/dashboard/risk-status`/`/dashboard/bias`) 전부 실데이터 배선 완료. 다음 후보:
-- **`/dashboard/signals`(유일하게 남은 Dashboard 항목)**: 현재 어떤 프로세스도 생성된 시그널을 `signals` 테이블에 영속화하지 않음(`database/models.py`에 테이블 자체는 이미 존재). `run_paper.py`/`run_backtest.py`의 시그널 생성 스텝에 영속화를 배선하는 설계 결정 필요(모든 생성 시그널을 기록할지, 승인된 것만 기록할지, reject 사유도 함께 남길지 등) — bias보다 스코프가 큼
-- **`ltf_bias` 재검토 후보**: 위 bias 회차에서 operator 승인 없이 실용적 판단(같은 `detect_htf_bias()` 알고리즘을 LTF 캔들에 재적용)으로 진행함 — 근거는 문서화돼 있으나(HANDOFF 위 회차, CHANGELOG, 백엔드/프론트 코드 주석 3곳), 이 필드가 실제 트레이딩 판단에 쓰이게 되면 재확인 필요
-- Dashboard 5개 전부 완료되면 Live Trading 직전 단계 — Live로 넘어가려면 이 문서의 "다음 단계" 항목을 operator와 재확인(API 키 스코프, 소액 한도, 단계별 승인) 필수, CTO/에이전트 재량으로 절대 진행 안 함
+Strategy > Risk > Backtest > Paper Trading > Dashboard 전 계층에 알려진 갭 없음 — Dashboard 5개(`/dashboard/status`/`/dashboard/positions`/`/dashboard/logs`/`/dashboard/risk-status`/`/dashboard/bias`/`/dashboard/signals`) 전부 실데이터 배선 완료. operator가 지정한 우선순위(Strategy > Risk > Backtest > Paper Trading > Dashboard > Live)상 Live 직전까지 전부 완료된 상태 — **다음 실질적 진전은 Live Trading 뿐이고, 이는 operator의 명시적 단계별 승인 없이는 절대 진행하지 않음** (아래 참조). 그 전까지의 저위험 재검토 후보:
+- **scope 경계(오해 방지용 명시)**: `/dashboard/signals`는 `run_paper.py`(paper 실행)에서만 배선함 — `run_backtest.py`는 의도적으로 안 건드림. 백테스트 시그널은 시뮬레이션 산출물이고 이미 자체 CSV/markdown 리포트로 export되고 있으며, `Signal` 테이블엔 `Trade`와 달리 `mode` 컬럼이 없어 backtest 시그널을 같은 테이블에 섞으면 라이브 대시보드가 실제 paper 시그널과 시뮬레이션 시그널을 구분 못 하게 됨 — 필요해지면 `mode` 컬럼 추가부터 시작해야 하는 별도 설계 결정
+- **`ltf_bias` 재검토 후보**: bias 회차에서 operator 승인 없이 실용적 판단(같은 `detect_htf_bias()` 알고리즘을 LTF 캔들에 재적용)으로 진행함 — 근거는 문서화돼 있으나(HANDOFF, CHANGELOG, 백엔드/프론트 코드 주석), 이 필드가 실제 트레이딩 판단에 쓰이게 되면 재확인 필요
 - Paper Trading 재검토 후보(낮은 우선순위, "갭 아님"으로 이미 기록됨): single-pass 모드의 loss-limit 거부가 Telegram/Discord 알림 없이 stdout/summary dict에만 보임(loop mode와 다름, 의도된 설계로 문서화돼 있으나 재검토 여지는 남아있음)
+- **Live Trading으로 넘어갈 때**: 반드시 operator와 재확인 — 실 OKX API 키(출금 권한 없음) 발급, 소액 한도, 단계별 승인 없이는 `LiveBroker`/`exchange/okx_client.py`·`orangex_client.py`의 `NotImplementedError` 스텁에 단 한 줄도 손대지 않음. API 키 발급 자체가 operator 승인 필요 카테고리("API credentials")에 해당하므로 CTO/에이전트 재량으로 절대 시작하지 않음
 
 모든 회차가 git에 커밋/push 완료(`origin/master`, 최신 커밋은 위 "전체 회차" 항목들 참조 — 이 문서의 각 항목에 실제 커밋 해시가 없다면 아직 미커밋일 수 있으니 `git log`로 교차 확인 권장). Small Live 진행 시 API 키 발급 + 단계별 승인 필요(operator 승인 없이는 절대 진행 안 함).
 

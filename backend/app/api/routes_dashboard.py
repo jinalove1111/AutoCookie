@@ -12,6 +12,7 @@ from app.database.models import StrategyLog
 from app.database.session import get_db
 from app.portfolio.journal import TradeJournal
 from app.portfolio.positions import get_or_create_bot_state
+from app.portfolio.signals import SignalTracker
 from app.portfolio.trades import TradeTracker
 from app.strategy.bias import detect_htf_bias
 
@@ -74,12 +75,15 @@ def get_market_bias() -> dict:
 
 @router.get("/signals")
 def get_recent_signals() -> dict:
-    """Return recent generated signals.
-
-    Not yet wired to live strategy state: signal generation is not persisted
-    to the signals table by any running process this milestone.
+    """Return the ~20 most recently generated signals (newest first),
+    real and DB-backed via `SignalTracker` -- `scripts/run_paper.py` now
+    persists every genuinely generated `TradeSignal` as soon as it's
+    produced (status "pending"), then updates that status to "rejected"/
+    "approved"/"executed" as it moves through Risk Engine approval and
+    Execution, so `status` here reflects each signal's real outcome, not
+    just that it was generated.
     """
-    return {"signals": [], "note": "not yet wired to live strategy state"}
+    return {"signals": SignalTracker().get_recent_signals(limit=20), "note": ""}
 
 
 @router.get("/positions")

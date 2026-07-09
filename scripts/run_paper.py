@@ -124,6 +124,7 @@ from app.portfolio.positions import (
     load_circuit_breaker_state,
     save_circuit_breaker_state,
 )
+from app.portfolio.signals import SignalTracker
 from app.portfolio.trades import TradeTracker
 from app.risk.circuit_breaker import CircuitBreaker, PersistentCircuitBreaker
 from app.risk.drawdown_guard import DrawdownGuard
@@ -325,6 +326,15 @@ def run_once(
     first, and a Telegram/Discord alert fires after any successfully
     persisted trade.
 
+    Dashboard follow-up (signal persistence): every genuinely generated
+    signal (`signal_found` True) is now persisted via `SignalTracker()` as
+    soon as it's generated (status="pending"), then updated to "rejected"/
+    "approved"/"executed" as it moves through this function -- best-effort,
+    same pattern as trades_today/daily_pnl_percent above (a broken
+    persistence call is a loud WARNING, never a pipeline-blocking error).
+    This is what `/dashboard/signals` now reads from; none of the returned
+    summary dict's fields/semantics change.
+
     Milestone 4 follow-up #3 (paper trades actually closing -- see this
     module's own trade-persistence step and `_check_and_close_open_positions`
     above): EVERY call of `run_once()` -- single-pass AND each loop-mode
@@ -469,6 +479,22 @@ def run_once(
 
     summary["signal_found"] = True
 
+    # Persist the signal as soon as it's generated (Dashboard follow-up):
+    # `app.database.models.Signal`'s status column has always documented a
+    # pending/approved/rejected/executed convention, and TradeSignal's own
+    # docstring says it "matches the signals DB table", but nothing ever
+    # actually wrote one -- /dashboard/signals returned a hardcoded empty
+    # placeholder. Best-effort, same pattern as trades_today/daily_pnl_percent
+    # above: a broken persistence call must not block the real fetch/risk/
+    # execute pipeline, so failures are a loud WARNING (not a hard error),
+    # and `signal_id` stays `None` (status updates below are skipped) rather
+    # than raising.
+    signal_id: int | None = None
+    try:
+        signal_id = SignalTracker().record_signal(signal)
+    except Exception as exc:
+        print(f"WARNING: could not persist signal ({exc}).")
+
     # --- 3. Risk-evaluate the signal ---
     # Real trades_today count (extra-credit path): derived from
     # TradeTracker.get_open_positions()/get_closed_trades(), both of which
@@ -525,9 +551,19 @@ def run_once(
             print(f"  - {reason}")
         summary["approved"] = False
         summary["error"] = "; ".join(risk_decision.reasons)
+        if signal_id is not None:
+            try:
+                SignalTracker().update_signal_status(signal_id, "rejected")
+            except Exception as exc:
+                print(f"WARNING: could not update signal status to 'rejected' ({exc}).")
         return summary
 
     summary["approved"] = True
+    if signal_id is not None:
+        try:
+            SignalTracker().update_signal_status(signal_id, "approved")
+        except Exception as exc:
+            print(f"WARNING: could not update signal status to 'approved' ({exc}).")
 
     # --- 4. Execute the approved signal (paper only) ---
     try:
@@ -545,6 +581,11 @@ def run_once(
         return summary
 
     summary["executed"] = True
+    if signal_id is not None:
+        try:
+            SignalTracker().update_signal_status(signal_id, "executed")
+        except Exception as exc:
+            print(f"WARNING: could not update signal status to 'executed' ({exc}).")
 
     # --- 5. Persist the executed trade ---
     # entry_price now records `result.fill_price` (the broker's real,

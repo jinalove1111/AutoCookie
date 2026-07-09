@@ -33,16 +33,54 @@ def test_dashboard_logs_empty_on_fresh_db(client):
     assert response.json() == []
 
 
-def test_dashboard_signals_still_a_placeholder(client):
-    """Unlike /dashboard/bias and /dashboard/risk-status (both now real),
-    /signals remains an intentional placeholder: no running process
-    persists generated signals to the signals table yet (a separate,
-    larger design decision -- see HANDOFF.md).
+def test_dashboard_signals_empty_on_fresh_db(client):
+    response = client.get("/dashboard/signals")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["signals"] == []
+    assert body["note"] == ""
+
+
+def test_dashboard_signals_reflects_real_seeded_signal_and_status(client):
+    """A real signal seeded via SignalTracker (mirroring what
+    scripts/run_paper.py now does on every real pass) must show up through
+    the live endpoint, newest first, with its real status -- not the old
+    hardcoded empty placeholder.
     """
-    signals = client.get("/dashboard/signals")
-    assert signals.status_code == 200
-    assert signals.json()["signals"] == []
-    assert "note" in signals.json()
+    from datetime import datetime, timezone
+
+    from app.portfolio.signals import SignalTracker
+
+    class _FakeTradeSignal:
+        def __init__(self, symbol, direction, rr, ts):
+            self.symbol = symbol
+            self.direction = direction
+            self.timestamp = ts
+            self.htf_bias = "bullish"
+            self.sweep_type = "sell_side"
+            self.choch_detected = True
+            self.fvg_zone = None
+            self.entry_price = 100.0
+            self.stop_loss = 95.0
+            self.take_profit = 110.0
+            self.rr = rr
+            self.status = "pending"
+
+    now = datetime.now(timezone.utc)
+    tracker = SignalTracker()
+    signal_id = tracker.record_signal(
+        _FakeTradeSignal(symbol="BTCUSDT", direction="long", rr=3.0, ts=now)
+    )
+    tracker.update_signal_status(signal_id, "executed")
+
+    response = client.get("/dashboard/signals")
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["signals"]) == 1
+    assert body["signals"][0]["id"] == signal_id
+    assert body["signals"][0]["symbol"] == "BTCUSDT"
+    assert body["signals"][0]["status"] == "executed"
+    assert body["note"] == ""
 
 
 def _bias_candle(high: float, low: float, ts) -> dict:

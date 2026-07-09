@@ -69,12 +69,32 @@ export interface Bias {
   note: string;
 }
 
+/** Real Signal row shape (see backend app/database/models.py::Signal). */
+export interface Signal {
+  id: number;
+  symbol: string;
+  direction: "long" | "short" | string;
+  timestamp: string;
+  htf_bias: string;
+  sweep_type: string | null;
+  choch_detected: boolean;
+  fvg_zone: Record<string, unknown> | null;
+  entry_price: number;
+  stop_loss: number;
+  take_profit: number;
+  rr: number;
+  status: "pending" | "approved" | "rejected" | "executed" | string;
+  created_at: string;
+}
+
 /**
- * GET /dashboard/signals — INTENTIONALLY still a placeholder on the backend.
- * Always includes `note`; `signals` is currently always an empty array.
+ * GET /dashboard/signals — real, DB-backed via SignalTracker.
+ * scripts/run_paper.py persists every genuinely generated signal as soon
+ * as it's produced, then updates `status` as it moves through Risk Engine
+ * approval and Execution, so `status` reflects each signal's real outcome.
  */
 export interface SignalsResponse {
-  signals: unknown[];
+  signals: Signal[];
   note: string;
 }
 

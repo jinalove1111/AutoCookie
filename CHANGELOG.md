@@ -4,6 +4,49 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Dashboard: /dashboard/signals now real -- generated signals actually persisted
+
+### Fixed
+- **No process ever persisted a generated signal to the `signals` table**,
+  even though `app.database.models.Signal`'s `status` column has always
+  documented a pending/approved/rejected/executed convention, and
+  `TradeSignal`'s own docstring says it "matches the signals DB table" --
+  the write path was simply never built. `/dashboard/signals` returned a
+  hardcoded `{signals: [], note: "not yet wired..."}`.
+
+### Added
+- `app.portfolio.signals.SignalTracker` (new module, mirrors
+  `TradeTracker`'s exact pattern): `record_signal()`, `update_signal_status()`
+  (raises `ValueError` for an unknown id, same contract as
+  `TradeTracker.close_trade()`), `get_recent_signals(limit=20)`.
+- `scripts/run_paper.py`'s `run_once()` now persists every genuinely
+  generated `TradeSignal` as soon as it's produced (status "pending"),
+  then updates that status to "rejected" (risk-declined), "approved" (risk
+  passed), or "executed" (order placed) as it moves through the pipeline
+  -- best-effort throughout (a broken persistence call is a loud WARNING,
+  never a pipeline-blocking error, same pattern as the existing
+  trades_today/daily_pnl_percent best-effort queries). No existing
+  `run_once()` summary field/semantic changes.
+- `/dashboard/signals` now returns the real ~20 most recent signals
+  (newest first) via `SignalTracker`.
+- Frontend: `Signal`/updated `SignalsResponse` types, `SignalsPanel` now
+  renders the real list (mirrors `LogsPanel`'s pattern) instead of a
+  hardcoded "Not live yet" badge + count.
+
+### Verified
+- `pytest backend/tests/` 150/150 passing (9 new: `SignalTracker`
+  record/query round-trip, status transitions, unknown-id rejection,
+  newest-first + limit ordering; `/dashboard/signals` fresh-DB empty state
+  and a real seeded signal reflecting its real status through the live
+  endpoint). Full suite re-run 2x with no flakiness.
+- Real end-to-end, twice: drove the ACTUAL `run_paper.run_once()` (not
+  just `SignalTracker` in isolation) against a real temp SQLite DB with a
+  controlled fake signal -- (1) an approved signal persists through
+  pending -> approved -> executed, matching the resulting trade, and (2)
+  a signal with `rr` below `MIN_RR` persists through pending -> rejected,
+  matching `RiskManager`'s real rejection reason.
+
+## [Unreleased] - Dashboard: /dashboard/bias now real, live-computed
 ## [Unreleased] - Dashboard: /dashboard/bias now real, live-computed
 
 ### Fixed

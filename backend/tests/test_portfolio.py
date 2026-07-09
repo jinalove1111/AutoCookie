@@ -131,6 +131,81 @@ def test_trade_tracker_close_trade_raises_for_unknown_id(migrated_db):
         tracker.close_trade(999999, exit_price=100.0, pnl=0.0)
 
 
+class _FakeTradeSignal:
+    """Duck-typed stand-in for app.strategy.signal_engine.TradeSignal --
+    SignalTracker.record_signal() only reads attributes, matching the real
+    dataclass's field names exactly (see that class's own docstring: "matches
+    the signals DB table").
+    """
+
+    def __init__(self, ts, status="pending", direction="long", rr=2.5):
+        self.symbol = "BTCUSDT"
+        self.direction = direction
+        self.timestamp = ts
+        self.htf_bias = "bullish"
+        self.sweep_type = "sell_side"
+        self.choch_detected = True
+        self.fvg_zone = {"top": 101.0, "bottom": 100.0}
+        self.entry_price = 100.0
+        self.stop_loss = 95.0
+        self.take_profit = 110.0
+        self.rr = rr
+        self.status = status
+
+
+def test_signal_tracker_record_and_query_round_trip(migrated_db):
+    from app.portfolio.signals import SignalTracker
+
+    now = datetime.now(timezone.utc)
+    signal_id = SignalTracker().record_signal(_FakeTradeSignal(ts=now))
+
+    assert isinstance(signal_id, int)
+
+    recent = SignalTracker().get_recent_signals()
+    assert len(recent) == 1
+    assert recent[0]["id"] == signal_id
+    assert recent[0]["symbol"] == "BTCUSDT"
+    assert recent[0]["status"] == "pending"
+    assert recent[0]["rr"] == 2.5
+    assert recent[0]["fvg_zone"] == {"top": 101.0, "bottom": 100.0}
+
+
+def test_signal_tracker_update_status_transitions(migrated_db):
+    from app.portfolio.signals import SignalTracker
+
+    tracker = SignalTracker()
+    signal_id = tracker.record_signal(_FakeTradeSignal(ts=datetime.now(timezone.utc)))
+
+    tracker.update_signal_status(signal_id, "approved")
+    assert tracker.get_recent_signals()[0]["status"] == "approved"
+
+    tracker.update_signal_status(signal_id, "executed")
+    assert tracker.get_recent_signals()[0]["status"] == "executed"
+
+
+def test_signal_tracker_update_status_raises_for_unknown_id(migrated_db):
+    import pytest
+
+    from app.portfolio.signals import SignalTracker
+
+    with pytest.raises(ValueError, match="not found"):
+        SignalTracker().update_signal_status(999999, "rejected")
+
+
+def test_signal_tracker_get_recent_signals_newest_first_and_limited(migrated_db):
+    from app.portfolio.signals import SignalTracker
+
+    tracker = SignalTracker()
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    for i in range(5):
+        tracker.record_signal(_FakeTradeSignal(ts=base + timedelta(minutes=i)))
+
+    recent = tracker.get_recent_signals(limit=3)
+    assert len(recent) == 3
+    # Newest (highest offset) timestamp first.
+    assert recent[0]["timestamp"] > recent[1]["timestamp"] > recent[2]["timestamp"]
+
+
 def test_position_tracker_delegates_to_trade_tracker(migrated_db):
     from app.portfolio.positions import PositionTracker
     from app.portfolio.trades import TradeTracker

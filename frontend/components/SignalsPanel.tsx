@@ -16,28 +16,24 @@ export default function SignalsPanel() {
         <p style={{ color: "#b00" }}>Backend unreachable: {error}</p>
       )}
 
-      {!loading && !error && signals && (
-        <>
-          <span
-            style={{
-              display: "inline-block",
-              background: "#eee",
-              border: "1px solid #ccc",
-              borderRadius: 4,
-              padding: "2px 8px",
-              fontSize: 12,
-              marginBottom: 8,
-            }}
-          >
-            Not live yet
-          </span>
-          <p style={{ margin: "4px 0" }}>
-            {signals.signals.length === 0
-              ? "No signals recorded."
-              : `${signals.signals.length} signal(s).`}
-          </p>
-          <p style={{ margin: "4px 0", fontSize: 12, opacity: 0.7 }}>{signals.note}</p>
-        </>
+      {!loading && !error && signals && signals.signals.length === 0 && (
+        <p>No signals recorded yet.</p>
+      )}
+
+      {!loading && !error && signals && signals.signals.length > 0 && (
+        <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 8 }}>
+          {signals.signals.map((signal) => (
+            <li key={signal.id} style={{ borderBottom: "1px solid #eee", paddingBottom: 4 }}>
+              <div style={{ fontSize: 12, opacity: 0.7 }}>
+                {signal.timestamp} · {signal.symbol} · {signal.status}
+              </div>
+              <div>
+                <strong>{signal.direction}</strong> — entry {signal.entry_price}, RR{" "}
+                {signal.rr.toFixed(2)}
+              </div>
+            </li>
+          ))}
+        </ul>
       )}
     </section>
   );
