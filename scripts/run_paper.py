@@ -22,6 +22,44 @@ synchronously. This closes the gap where a process restart (crash,
 redeploy, cron respawn) mid-trip previously came back untripped and
 silently resumed trading.
 
+Milestone 4 follow-up #2 (capital-protection, real daily/weekly PnL):
+previously, `_check_drawdown_and_maybe_trip()` derived its "daily" PnL from
+`TradeJournal().generate_journal_report()` -- an ALL-TIME, unfiltered
+aggregate (mislabeled as daily), and `RiskManager().evaluate()` was never
+passed `daily_pnl_percent`/`weekly_pnl_percent` at all (both silently
+defaulted to 0.0, so the per-signal daily/weekly loss checks in
+`DrawdownGuard` were dead code that could never reject a trade). Both call
+sites now use `TradeJournal().generate_daily_report()` /
+`generate_weekly_report()` (real UTC-calendar-day / ISO-calendar-week
+scoped realized-PnL queries -- see `app/portfolio/journal.py`), converted
+to percent-of-account via `_pnl_to_percent()`. `_check_drawdown_and_maybe_trip`
+now trips the breaker on EITHER a daily OR a weekly breach (deliberate
+choice, documented inline at the call site: a slower-building weekly loss
+deserves the same alert-and-halt treatment as a same-day spike, since this
+function is the only Telegram/Discord-alerting integration point in loop
+mode -- relying on RiskManager's per-signal rejection alone would silently
+reject every future signal without ever notifying the operator).
+
+Is real daily/weekly RiskManager rejection sufficient protection for
+SINGLE-PASS mode (`run_once()` called with no `circuit_breaker`, e.g. one
+cron-triggered process per pass, with no persistent breaker at all)?
+Conclusion: YES, for blocking further trades once a loss limit is real and
+breached -- `daily_pnl_percent`/`weekly_pnl_percent` are now computed fresh
+from the real DB on every single-pass invocation (not from in-process
+memory), so protection does not depend on any state surviving between
+process invocations; a losing streak keeps getting correctly re-detected
+and re-rejected on every future pass for as long as it remains within the
+UTC-day/ISO-week window, with no reliance on a circuit breaker being
+"remembered". Remaining GAP, flagged (not fixed -- would require wiring
+notifications into the rejection branch of `run_once`, additive scope
+beyond this change): a single-pass rejection due to a real daily/weekly
+loss breach is currently silent from an alerting standpoint -- it prints to
+stdout and is visible in the returned summary dict/exit code, but no
+Telegram/Discord alert fires (unlike loop mode's
+`_check_drawdown_and_maybe_trip`). An operator running single-pass mode via
+cron with no active log-watching would not be proactively notified that
+trading has been (correctly) blocked by a real loss limit.
+
 Zero live orders are ever placed here: ExecutionEngine is wired to a
 PaperBroker by default, and TRADING_MODE defaults to "paper". The safety
 guard below is defense-in-depth in case TRADING_MODE/LIVE_TRADING_ENABLED
@@ -95,8 +133,21 @@ from app.strategy.signal_engine import SignalEngine
 # No real account-balance source exists yet (Milestone 3 scope). Using a
 # fixed placeholder for position sizing until a real equity/balance feed
 # lands. Milestone 4 reuses the same placeholder to turn the journal's
-# total_pnl into an approximate daily PnL percentage for the drawdown check.
+# total_pnl into an approximate daily/weekly PnL percentage for the
+# drawdown check and RiskManager.evaluate() (see _pnl_to_percent below).
 PLACEHOLDER_ACCOUNT_BALANCE = 10000.0
+
+
+def _pnl_to_percent(pnl: float) -> float:
+    """Convert an absolute realized-PnL figure into a percent-of-account
+    figure, using `PLACEHOLDER_ACCOUNT_BALANCE` (see the note above -- the
+    same placeholder used for position sizing). Both
+    `_check_drawdown_and_maybe_trip` and `run_once`'s `RiskManager.evaluate()`
+    call need a percent, not an absolute PnL number; centralizing the
+    conversion here keeps the two from silently drifting onto different
+    formulas.
+    """
+    return (pnl / PLACEHOLDER_ACCOUNT_BALANCE) * 100
 
 
 def _count_trades_opened_today(tracker: TradeTracker) -> int:
@@ -119,20 +170,32 @@ def _count_trades_opened_today(tracker: TradeTracker) -> int:
 def _check_drawdown_and_maybe_trip(
     circuit_breaker: CircuitBreaker | PersistentCircuitBreaker,
 ) -> None:
-    """Approximate today's realized PnL% from the journal and trip `circuit_breaker`
-    if the daily loss limit has been breached.
+    """Compute today's AND this week's real realized PnL% from the journal
+    (UTC-calendar-day / ISO-calendar-week scoped -- see
+    `app.portfolio.journal.TradeJournal.generate_daily_report`/
+    `generate_weekly_report`) and trip `circuit_breaker` if EITHER the
+    daily or the weekly loss limit has been breached.
+
+    Design call (documented, not left implicit): this trips on a weekly
+    breach too, not just daily. Reasoning: this function is the only
+    Telegram/Discord-alerting integration point in loop mode. Relying on
+    RiskManager's per-signal `weekly_pnl_percent` rejection alone (see
+    `run_once` below) would still correctly BLOCK every future signal once
+    a weekly loss limit is breached, but it would do so silently -- no
+    alert would ever fire, unlike the same-day-spike case. A slower-building
+    weekly loss deserves the same alert-and-halt treatment as a same-day
+    spike, so both breaches trip the same persistent circuit breaker here.
 
     Only called in loop mode (a live `circuit_breaker` instance is supplied);
     never called on the default single-pass path, so it cannot change that
-    path's behavior. Best-effort: any failure computing the PnL estimate is
+    path's behavior. Best-effort: any failure computing either PnL figure is
     reported and treated as 0.0% (no breach) rather than aborting the
-    iteration -- this is an approximate, not production-grade, risk check.
+    iteration -- this is an approximate, not production-grade, risk check
+    (see PLACEHOLDER_ACCOUNT_BALANCE).
     """
     try:
-        report = TradeJournal().generate_journal_report()
-        daily_pnl_percent = (
-            report.get("total_pnl", 0.0) / PLACEHOLDER_ACCOUNT_BALANCE
-        ) * 100
+        daily_report = TradeJournal().generate_daily_report()
+        daily_pnl_percent = _pnl_to_percent(daily_report.get("total_pnl", 0.0))
     except Exception as exc:
         print(
             f"WARNING: could not compute daily PnL for drawdown check ({exc}); "
@@ -140,15 +203,33 @@ def _check_drawdown_and_maybe_trip(
         )
         daily_pnl_percent = 0.0
 
-    if not DrawdownGuard().check_daily_loss(
-        daily_pnl_percent, settings.MAX_DAILY_LOSS_PERCENT
-    ):
-        reason = "daily loss limit breached"
-        circuit_breaker.trip(reason)
-        message = (
-            f"Circuit breaker tripped: {reason} (daily PnL "
-            f"{daily_pnl_percent:.2f}%, limit {settings.MAX_DAILY_LOSS_PERCENT}%)"
+    try:
+        weekly_report = TradeJournal().generate_weekly_report()
+        weekly_pnl_percent = _pnl_to_percent(weekly_report.get("total_pnl", 0.0))
+    except Exception as exc:
+        print(
+            f"WARNING: could not compute weekly PnL for drawdown check ({exc}); "
+            "defaulting to 0.0%."
         )
+        weekly_pnl_percent = 0.0
+
+    guard = DrawdownGuard()
+    breaches: list[str] = []
+    if not guard.check_daily_loss(daily_pnl_percent, settings.MAX_DAILY_LOSS_PERCENT):
+        breaches.append(
+            f"daily loss limit breached (daily PnL {daily_pnl_percent:.2f}%, "
+            f"limit {settings.MAX_DAILY_LOSS_PERCENT}%)"
+        )
+    if not guard.check_weekly_loss(weekly_pnl_percent, settings.MAX_WEEKLY_LOSS_PERCENT):
+        breaches.append(
+            f"weekly loss limit breached (weekly PnL {weekly_pnl_percent:.2f}%, "
+            f"limit {settings.MAX_WEEKLY_LOSS_PERCENT}%)"
+        )
+
+    if breaches:
+        reason = "; ".join(breaches)
+        circuit_breaker.trip(reason)
+        message = f"Circuit breaker tripped: {reason}"
         print(f"ALERT: {message}")
         send_telegram_alert(message)
         send_discord_alert(message)
@@ -251,9 +332,37 @@ def run_once(
         print(f"WARNING: could not compute trades_today ({exc}); defaulting to 0.")
         trades_today = 0
 
+    # Real daily/weekly realized-PnL% (capital-protection follow-up #2):
+    # previously these were never passed here at all, so RiskManager's
+    # DrawdownGuard daily/weekly checks silently defaulted to 0.0% and could
+    # never reject a trade. Runs in BOTH single-pass and loop mode (this
+    # code path is shared), unlike the circuit-breaker drawdown check above,
+    # which is loop-mode only -- see the module docstring's "is that
+    # sufficient for single-pass mode?" note for why this alone is judged
+    # adequate protection for the single-pass path. Best-effort, same
+    # fallback-to-0.0 pattern as trades_today above: a broken PnL query
+    # shouldn't block the entire pipeline, but MUST be loud (not silent).
+    try:
+        daily_report = TradeJournal().generate_daily_report()
+        daily_pnl_percent = _pnl_to_percent(daily_report.get("total_pnl", 0.0))
+    except Exception as exc:
+        print(f"WARNING: could not compute daily_pnl_percent ({exc}); defaulting to 0.0.")
+        daily_pnl_percent = 0.0
+
+    try:
+        weekly_report = TradeJournal().generate_weekly_report()
+        weekly_pnl_percent = _pnl_to_percent(weekly_report.get("total_pnl", 0.0))
+    except Exception as exc:
+        print(f"WARNING: could not compute weekly_pnl_percent ({exc}); defaulting to 0.0.")
+        weekly_pnl_percent = 0.0
+
     try:
         risk_decision = RiskManager().evaluate(
-            signal, trades_today=trades_today, circuit_breaker=circuit_breaker
+            signal,
+            daily_pnl_percent=daily_pnl_percent,
+            weekly_pnl_percent=weekly_pnl_percent,
+            trades_today=trades_today,
+            circuit_breaker=circuit_breaker,
         )
     except Exception as exc:
         print(f"ERROR: risk evaluation failed: {exc}")

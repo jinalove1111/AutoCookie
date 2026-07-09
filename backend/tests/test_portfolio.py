@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 
 def test_trade_tracker_record_and_query_round_trip(migrated_db):
     from app.portfolio.trades import TradeTracker
@@ -170,3 +172,148 @@ def test_trade_journal_save_chart_snapshot_is_a_safe_noop(migrated_db):
 
     # Must not raise even though there is no chart-snapshot table/column yet.
     TradeJournal().save_chart_snapshot(trade_id=1, snapshot={"any": "data"})
+
+
+def _seed_closed_trade(tracker, *, pnl: float, opened_at: datetime, closed_at: datetime) -> int:
+    """Helper: record + immediately close a paper trade with explicit
+    opened_at/closed_at timestamps, for date-boundary tests below."""
+    trade_id = tracker.record_trade(
+        {
+            "symbol": "BTCUSDT",
+            "direction": "long",
+            "entry_price": 100,
+            "stop_loss": 95,
+            "take_profit": 110,
+            "size": 1,
+            "mode": "paper",
+            "opened_at": opened_at,
+        }
+    )
+    tracker.close_trade(trade_id, exit_price=100 + pnl, pnl=pnl, closed_at=closed_at)
+    return trade_id
+
+
+def test_generate_journal_report_date_scoped_requires_both_or_neither_bound(migrated_db):
+    import pytest
+
+    from app.portfolio.journal import TradeJournal
+
+    journal = TradeJournal()
+    now = datetime.now(timezone.utc)
+
+    with pytest.raises(ValueError, match="together"):
+        journal.generate_journal_report(start=now)
+    with pytest.raises(ValueError, match="together"):
+        journal.generate_journal_report(end=now)
+
+
+def test_generate_journal_report_date_scoped_rejects_naive_datetimes(migrated_db):
+    import pytest
+
+    from app.portfolio.journal import TradeJournal
+
+    journal = TradeJournal()
+    naive = datetime(2026, 1, 1)
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        journal.generate_journal_report(start=naive, end=naive)
+
+
+def test_generate_daily_report_excludes_other_days_and_open_trades(migrated_db):
+    """Proves the UTC-calendar-day boundary: a loss from 8 days ago and a
+    loss closed "tomorrow" must NOT count toward "today", and an open
+    (never-closed) trade must not count at all -- only the trade closed
+    inside today's UTC window counts.
+    """
+    from app.portfolio.journal import TradeJournal
+    from app.portfolio.trades import TradeTracker
+
+    tracker = TradeTracker()
+    journal = TradeJournal()
+
+    as_of = datetime(2026, 1, 14, 12, 0, 0, tzinfo=timezone.utc)
+    today_start = datetime(2026, 1, 14, 0, 0, 0, 0, tzinfo=timezone.utc)
+    today_end = datetime(2026, 1, 14, 23, 59, 59, 999999, tzinfo=timezone.utc)
+    yesterday_end = datetime(2026, 1, 13, 23, 59, 59, 999999, tzinfo=timezone.utc)
+    tomorrow_start = datetime(2026, 1, 15, 0, 0, 0, tzinfo=timezone.utc)
+    eight_days_ago = as_of - timedelta(days=8)
+
+    # In-window: exactly at the start and end instants of today's UTC day.
+    _seed_closed_trade(tracker, pnl=-10.0, opened_at=today_start, closed_at=today_start)
+    _seed_closed_trade(tracker, pnl=-5.0, opened_at=today_start, closed_at=today_end)
+    # Out-of-window: 1 microsecond before today, 1 second into tomorrow,
+    # and 8 days in the past -- all with large losses, so a boundary bug
+    # would be impossible to miss in the assertion below.
+    _seed_closed_trade(tracker, pnl=-1000.0, opened_at=yesterday_end, closed_at=yesterday_end)
+    _seed_closed_trade(tracker, pnl=-1000.0, opened_at=tomorrow_start, closed_at=tomorrow_start)
+    _seed_closed_trade(tracker, pnl=-1000.0, opened_at=eight_days_ago, closed_at=eight_days_ago)
+    # Never closed -- must not count toward a realized-PnL window at all.
+    tracker.record_trade(
+        {
+            "symbol": "BTCUSDT",
+            "direction": "long",
+            "entry_price": 100,
+            "stop_loss": 95,
+            "take_profit": 110,
+            "size": 1,
+            "mode": "paper",
+            "opened_at": today_start,
+        }
+    )
+
+    report = journal.generate_daily_report(as_of=as_of)
+
+    assert report["total_trades"] == 2
+    assert report["total_pnl"] == -15.0
+
+    # All-time default report (no args) is unaffected -- still all-time.
+    all_time = journal.generate_journal_report()
+    assert all_time["total_trades"] == 6  # 5 closed + 1 open
+
+
+def test_generate_weekly_report_respects_iso_week_boundary(migrated_db):
+    """Proves the ISO-calendar-week boundary (Monday 00:00:00 UTC through
+    Sunday 23:59:59.999999 UTC): a loss closed 1 microsecond before this
+    week's Monday, and one closed exactly at next Monday 00:00:00, must
+    NOT count -- only trades closed inside [this Monday, this Sunday] do.
+    """
+    from app.portfolio.journal import TradeJournal
+    from app.portfolio.trades import TradeTracker
+
+    tracker = TradeTracker()
+    journal = TradeJournal()
+
+    # 2026-01-14 is a Wednesday; its ISO week runs Mon 2026-01-12 through
+    # Sun 2026-01-18 (verified independently, not derived from the
+    # production formula under test).
+    as_of = datetime(2026, 1, 14, 12, 0, 0, tzinfo=timezone.utc)
+    week_start = datetime(2026, 1, 12, 0, 0, 0, 0, tzinfo=timezone.utc)
+    week_end = datetime(2026, 1, 18, 23, 59, 59, 999999, tzinfo=timezone.utc)
+    prev_week_end = datetime(2026, 1, 11, 23, 59, 59, 999999, tzinfo=timezone.utc)
+    next_week_start = datetime(2026, 1, 19, 0, 0, 0, tzinfo=timezone.utc)
+
+    _seed_closed_trade(tracker, pnl=-30.0, opened_at=week_start, closed_at=week_start)
+    _seed_closed_trade(tracker, pnl=-20.0, opened_at=week_start, closed_at=week_end)
+    _seed_closed_trade(tracker, pnl=-1000.0, opened_at=prev_week_end, closed_at=prev_week_end)
+    _seed_closed_trade(tracker, pnl=-1000.0, opened_at=next_week_start, closed_at=next_week_start)
+
+    report = journal.generate_weekly_report(as_of=as_of)
+
+    assert report["total_trades"] == 2
+    assert report["total_pnl"] == -50.0
+
+
+def test_generate_daily_report_all_zero_when_nothing_closed_today(migrated_db):
+    from app.portfolio.journal import TradeJournal
+    from app.portfolio.trades import TradeTracker
+
+    tracker = TradeTracker()
+    journal = TradeJournal()
+
+    as_of = datetime(2026, 1, 14, 12, 0, 0, tzinfo=timezone.utc)
+    eight_days_ago = as_of - timedelta(days=8)
+    _seed_closed_trade(tracker, pnl=-500.0, opened_at=eight_days_ago, closed_at=eight_days_ago)
+
+    report = journal.generate_daily_report(as_of=as_of)
+
+    assert report == {"total_trades": 0, "win_rate": 0.0, "total_pnl": 0.0}

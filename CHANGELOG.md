@@ -4,6 +4,133 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Capital-protection: real date-scoped daily/weekly PnL wired into RiskManager and the circuit breaker
+
+### Fixed
+- **`TradeJournal.generate_journal_report()` had zero date/time filtering**:
+  it aggregated `total_pnl`/`win_rate`/`total_trades` across EVERY paper
+  trade ever recorded (all-time cumulative), with no way to ask for "just
+  today" or "just this week". `scripts/run_paper.py`'s loop-mode drawdown
+  check consumed this all-time total as if it were a daily figure
+  (`daily_pnl_percent = report["total_pnl"] / PLACEHOLDER_ACCOUNT_BALANCE
+  * 100`), so the circuit breaker's "daily loss limit" check was actually
+  comparing all-time cumulative PnL against `MAX_DAILY_LOSS_PERCENT` —
+  mislabeled as daily, and immune to a real same-day loss spike that was
+  still small relative to history.
+- **`RiskManager().evaluate()` — the real per-signal trade-approval gate,
+  called in BOTH single-pass and loop mode — never received
+  `daily_pnl_percent`/`weekly_pnl_percent`**, so both silently defaulted to
+  `0.0` and `DrawdownGuard.check_daily_loss`/`check_weekly_loss` could
+  never reject a trade regardless of real losses — dead code in the live
+  pipeline.
+- **`MAX_WEEKLY_LOSS_PERCENT` had zero enforcement anywhere.**
+
+### Added
+- `TradeJournal.generate_journal_report()` gains optional `start`/`end`
+  timezone-aware datetime bounds (both required together; raises
+  `ValueError` if only one is given or either is naive). Default
+  (no args) is UNCHANGED — the original all-time/cumulative contract,
+  byte-for-byte, for existing callers/tests. When bounds are given, the
+  query switches to counting only `status == "closed"` paper trades with
+  `closed_at` inside `[start, end]` (a trade's PnL only counts once
+  realized/closed; open trades have no `closed_at` and are excluded from
+  `total_trades` in this mode, unlike the all-time default which includes
+  open trades too).
+- `TradeJournal.generate_daily_report(as_of=None)` /
+  `generate_weekly_report(as_of=None)`: thin convenience wrappers around
+  the above. "Daily" = the UTC calendar day
+  `[00:00:00.000000, 23:59:59.999999]`. "Weekly" = the ISO calendar week,
+  Monday `00:00:00.000000` UTC through Sunday `23:59:59.999999` UTC. ISO
+  calendar week (not a rolling 7-day window) was chosen specifically for
+  consistency with the UTC-calendar-day convention `run_paper.py`'s
+  `_count_trades_opened_today` already uses — documented in
+  `docs/risk_rules.md`'s new "Daily/weekly boundary convention" section.
+- `scripts/run_paper.py`'s `_pnl_to_percent()` helper centralizes the
+  PnL-to-percent-of-`PLACEHOLDER_ACCOUNT_BALANCE` conversion so the
+  circuit-breaker check and the `RiskManager.evaluate()` call can't drift
+  onto different formulas.
+
+### Changed
+- `scripts/run_paper.py`'s `_check_drawdown_and_maybe_trip()` (loop mode
+  only) now uses `TradeJournal().generate_daily_report()` /
+  `generate_weekly_report()` for real, correctly-scoped daily/weekly PnL%,
+  and trips the circuit breaker on EITHER a daily OR a weekly breach — a
+  deliberate, documented design call (this function is the only
+  Telegram/Discord-alerting integration point in loop mode; relying on
+  RiskManager's per-signal weekly rejection alone would silently reject
+  every future signal without ever alerting the operator).
+- `run_once()` (shared by both single-pass and loop mode) now computes
+  real `daily_pnl_percent`/`weekly_pnl_percent` from the journal
+  (best-effort, same fallback-to-0.0-with-a-loud-WARNING pattern as the
+  existing `trades_today` computation) and passes them into
+  `RiskManager().evaluate(...)`. Documented conclusion (module docstring):
+  this alone is judged sufficient protection for single-pass mode, since
+  the PnL figures are queried fresh from the real DB on every invocation
+  (not from in-process memory) — a real breach is independently
+  re-detected and re-rejected on every future single-pass run. Flagged
+  (not fixed, out of scope): a single-pass rejection due to a real
+  daily/weekly loss breach is currently silent from an alerting
+  standpoint — no Telegram/Discord alert fires, unlike loop mode.
+- `docs/risk_rules.md`'s "Behavior" section rewritten to state precisely
+  what happens today: the circuit breaker trips and requires a manual
+  `.reset()` (DB-persisted via `PersistentCircuitBreaker`) — there is
+  currently NO automatic day/week-boundary auto-reset. Stated as a
+  deliberate design choice for a single-trader system, not an
+  unacknowledged gap; automatic reset is explicitly out of scope for this
+  change. Also documents that `MAX_WEEKLY_LOSS_PERCENT` is now actually
+  enforced (previously documented only, never wired).
+
+### Tests
+- 5 new tests in `backend/tests/test_portfolio.py`: `start`/`end` must be
+  given together (`ValueError` otherwise) and must be timezone-aware;
+  `generate_daily_report()` proven to include only a trade closed inside
+  today's UTC window while excluding trades closed 1 microsecond before
+  today, 1 second into tomorrow, and 8 days ago (all seeded with large
+  losses so a boundary bug would be impossible to miss), plus an
+  open/never-closed trade; `generate_weekly_report()` proven against the
+  ISO-week boundary the same way (1 microsecond before/after the week,
+  independently verified dates, not derived from the formula under test);
+  all-time default (`generate_journal_report()` with no args) proven
+  unaffected.
+- 3 new tests in `backend/tests/test_risk_daily_weekly_real_integration.py`
+  (real migrated temp SQLite DB, no mocks): a real seeded daily-loss-
+  breaching trade correctly rejects a signal via the real
+  `RiskManager.evaluate()` end-to-end (journal query -> percent conversion
+  -> risk decision); a real seeded weekly-only loss (closed earlier in the
+  same ISO week, not "today") rejects via the weekly reason specifically,
+  proving the two checks are genuinely independent, not just both firing
+  together; a contrast case with a small in-limits loss still approves
+  (proves the wiring doesn't just reject everything unconditionally).
+- Full `pytest backend/tests/` **135/135 passing** (127 pre-existing + 8
+  new).
+- Real end-to-end verification (temp SQLite, real `alembic upgrade head`,
+  real OKX candle fetch): plain `run_paper.py` single-pass run, exit code
+  0, `"No signal generated this pass."` (real market data, no error).
+  Seeded a real closed trade (`pnl=-150.0`, i.e. -1.5% of the $10,000
+  placeholder balance) and re-ran in loop mode
+  (`--iterations 2 --interval-seconds 0`): both iterations printed `ALERT:
+  Circuit breaker tripped: daily loss limit breached (daily PnL -1.50%,
+  limit 1.0%)` — the real seeded loss, correctly scoped and labeled,
+  actually tripping the real persistent circuit breaker end-to-end; exit
+  code 0 (expected — a trip alone is a safe/handled outcome, not a
+  process-level failure).
+- `py_compile` clean on all changed/new files. Grep-confirmed: no
+  TODO/placeholder-stub/mock/bare `pass`/`NotImplementedError` introduced
+  (the pre-existing `PLACEHOLDER_ACCOUNT_BALANCE` name/comments are
+  unrelated prior art, not new stub code).
+
+### Scope
+- `backend/app/strategy/*`, `backend/app/backtesting/*`,
+  `backend/app/execution/*`, `backend/app/exchange/*`,
+  `backend/app/risk/risk_manager.py`, `backend/app/risk/drawdown_guard.py`,
+  `frontend/*`, and all live-trading gating are unchanged (diff does not
+  touch them) — `risk_manager.py`/`drawdown_guard.py` were read closely to
+  confirm their existing `daily_pnl_percent`/`weekly_pnl_percent`
+  parameters and `DrawdownGuard` boolean convention already supported this
+  wiring correctly with zero changes needed there.
+- **git commit not done** — operator/CTO independent re-verification
+  pending, same pattern as prior milestones this session.
+
 ## [Unreleased] - Backtest engine: real RISK_PER_TRADE_PERCENT position sizing (replaces 100%-notional placeholder)
 
 ### Fixed
