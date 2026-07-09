@@ -4,6 +4,50 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Backtest quality: multi-period out-of-sample validation
+
+### Added
+- `scripts/run_backtest.py --periods N`: splits the fetched history into
+  `N` equal, non-overlapping chronological chunks and runs the backtest
+  independently on each (fresh account balance, no shared trades/equity
+  state between periods) instead of one continuous run. `split_into_periods()`
+  is a pure function (every candle used exactly once, no overlap, no
+  gaps -- verified directly). Deliberately NOT a walk-forward with a
+  rolling parameter-fit window -- this strategy has no tunable/fitted
+  parameters to fit against a training window (see entry_model.py's
+  documented "reasonable default, not tuned" constants). Total candles
+  fetched is `--candles * --periods`. `--periods 1` (default) is
+  byte-for-byte the prior single-run behavior. Prints a per-period
+  summary plus an aggregate, and writes a separate report/CSV per period
+  (`<stem>_period<N>.md/.csv`) when `--periods > 1`.
+
+### Why this matters (addresses last commit's own honest caveat)
+- The previous commit's before/after comparison was three separate
+  single-continuous-window samples -- encouraging, but explicitly flagged
+  as not sufficient to call the strategy validated (no genuinely disjoint-
+  period check). This closes that gap directly: real, disjoint-period
+  results now show a MORE NUANCED picture than the single continuous
+  samples suggested -- BTCUSDT/15m: 2 of 3 independent periods profitable
+  (period 1: 12 trades/50% win rate/-$48.64; period 2: 6 trades/83.33%/
+  +$165.81; period 3: 10 trades/80.00%/+$184.62). ETHUSDT/15m: 3 of 3
+  periods profitable (4 trades/100%/+$148.51; 5 trades/60%/+$60.04; 10
+  trades/90%/+$308.75). 5 of 6 independent periods profitable across two
+  assets, with the one losing period a small loss, not a blowup -- more
+  genuinely informative than either "it's definitely broken" or "it's
+  definitely proven," and a real, reusable tool for future strategy
+  changes to be checked against the same way.
+
+### Still not sufficient for a "validated" claim (updated caveat)
+- Per-period trade counts (4-12) are even smaller than the single-window
+  samples, so per-period win-rate confidence intervals are wide. All
+  three periods for both assets fall within the same ~31-day calendar
+  span (this run's `--candles 3000` history depth) -- genuinely disjoint
+  in trade sequence/walk-forward state, but not a different market
+  regime/year. A meaningfully stronger claim would need periods spanning
+  materially different market conditions (trending vs. ranging, high vs.
+  low volatility), which requires either a longer total history fetch or
+  running this tool again once more calendar time has passed.
+
 ## [Unreleased] - Strategy accuracy: fixed duplicate signal generation on already-tested zones
 
 ### Fixed

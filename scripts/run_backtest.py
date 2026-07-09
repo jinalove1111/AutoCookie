@@ -95,6 +95,33 @@ def run_backtest(ltf_candles: list, htf_candles: list) -> Any:
     )
 
 
+def split_into_periods(candles: list, periods: int) -> list[list]:
+    """Split `candles` (already sorted oldest -> newest) into `periods`
+    contiguous, NON-OVERLAPPING chronological chunks, in order (chunk 0 =
+    oldest period, last chunk = most recent period, which absorbs any
+    remainder from integer division so every candle is used exactly once).
+
+    Deliberately NOT a walk-forward with a rolling parameter-fit window --
+    this strategy has no tunable/fitted parameters to fit against a
+    training window (see docs/strategy_spec.md / entry_model.py's
+    documented "reasonable default, not tuned" constants). This is a
+    simpler, honest way to check whether backtest results are consistent
+    across genuinely disjoint historical windows rather than resting on a
+    single continuous sample -- each period is run through
+    `BacktestEngine.run()` completely independently (fresh account
+    balance, no shared trades/equity state across periods), so a result
+    that only "works" in one specific window and not others is a real,
+    visible red flag here rather than hidden inside one long average.
+    """
+    if periods <= 1:
+        return [candles]
+    n = len(candles)
+    chunk_size = n // periods
+    chunks = [candles[i * chunk_size : (i + 1) * chunk_size] for i in range(periods - 1)]
+    chunks.append(candles[(periods - 1) * chunk_size :])
+    return chunks
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -123,12 +150,28 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--periods",
+        type=int,
+        default=1,
+        help=(
+            "Split the fetched history into this many equal, non-overlapping "
+            "chronological periods and run the backtest independently on "
+            "each (default 1 = single continuous run, unchanged behavior). "
+            "Total candles fetched is --candles * --periods. Use this to "
+            "check whether results are consistent across genuinely disjoint "
+            "historical windows rather than resting on a single continuous "
+            "sample -- see split_into_periods()'s docstring."
+        ),
+    )
+    parser.add_argument(
         "--output",
         default=str(DEFAULT_OUTPUT_PATH),
         help=(
             "Path to write the markdown report to (default: "
             f"{DEFAULT_OUTPUT_PATH}). A sibling CSV trade export is written "
-            "next to it with the same stem and a .csv extension."
+            "next to it with the same stem and a .csv extension. With "
+            "--periods > 1, each period gets its own "
+            "<stem>_period<N><suffix> report/CSV instead."
         ),
     )
     return parser.parse_args(argv)
@@ -136,10 +179,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
+    total_requested = args.candles * args.periods
 
     # --- 1. Fetch historical LTF candles (real deep pagination, see docstring) ---
     try:
-        candles = fetch_candles(args.symbol, args.timeframe, args.candles)
+        candles = fetch_candles(args.symbol, args.timeframe, total_requested)
     except Exception as exc:  # network/data errors are genuine failures
         print(f"ERROR: failed to fetch candles for {args.symbol}: {exc}")
         return 1
@@ -149,18 +193,18 @@ def main() -> int:
         return 1
 
     print(f"Fetched {len(candles)} candles for {args.symbol}/{args.timeframe}.")
-    if len(candles) < args.candles:
+    if len(candles) < total_requested:
         print(
-            f"NOTE: requested {args.candles} candles but only {len(candles)} "
+            f"NOTE: requested {total_requested} candles but only {len(candles)} "
             f"are available from OKX for {args.symbol}/{args.timeframe} (e.g. "
             "a recent listing) -- not an error, this is genuinely all the "
             "history that exists."
         )
-    if len(candles) < MIN_CANDLES:
+    if len(candles) < MIN_CANDLES * args.periods:
         print(
-            f"NOTE: {len(candles)} candles is below the engine's minimum "
-            f"of {MIN_CANDLES} needed to generate even one signal; this "
-            "backtest will produce a valid, empty (0-trade) result."
+            f"NOTE: {len(candles)} candles across {args.periods} period(s) may "
+            f"leave some periods below the engine's minimum of {MIN_CANDLES}; "
+            "those periods will produce a valid, empty (0-trade) result."
         )
 
     # --- 1b. Fetch historical HTF candles (independent fetch, mirrors
@@ -169,7 +213,7 @@ def main() -> int:
     # too, since a silent LTF-as-HTF fallback would defeat the entire point
     # of the HTF/LTF separation).
     try:
-        htf_candles = fetch_candles(args.symbol, settings.HTF_TIMEFRAME, args.candles)
+        htf_candles = fetch_candles(args.symbol, settings.HTF_TIMEFRAME, total_requested)
     except Exception as exc:  # network/data errors are genuine failures
         print(f"ERROR: failed to fetch HTF candles for {args.symbol}: {exc}")
         return 1
@@ -179,40 +223,81 @@ def main() -> int:
         return 1
 
     print(f"Fetched {len(htf_candles)} HTF candles for {args.symbol}/{settings.HTF_TIMEFRAME}.")
-    if len(htf_candles) < args.candles:
+    if len(htf_candles) < total_requested:
         print(
-            f"NOTE: requested {args.candles} HTF candles but only "
+            f"NOTE: requested {total_requested} HTF candles but only "
             f"{len(htf_candles)} are available from OKX for "
             f"{args.symbol}/{settings.HTF_TIMEFRAME} -- not an error, this "
             "is genuinely all the history that exists."
         )
 
-    # --- 2. Replay through the real Strategy/Risk/Backtest engines ---
-    try:
-        result = run_backtest(candles, htf_candles)
-    except Exception as exc:  # unexpected engine failure is a genuine failure
-        print(f"ERROR: backtest engine raised an exception: {exc}")
-        return 1
+    # --- 2. Split into non-overlapping periods (periods=1 -> single chunk,
+    # identical to pre-existing behavior) and replay each independently
+    # through the real Strategy/Risk/Backtest engines. The FULL htf_candles
+    # list is passed to every period -- safe, not a lookahead risk: each
+    # period's BacktestEngine.run() starts its own no-lookahead HTF cursor
+    # fresh at -1 and advances it purely from real timestamp comparisons
+    # against that period's own LTF candles, so HTF data from outside a
+    # given period's time range is simply never reached by that period's
+    # cursor.
+    ltf_periods = split_into_periods(candles, args.periods)
+    results: list[Any] = []
+    for period_num, ltf_chunk in enumerate(ltf_periods, start=1):
+        try:
+            result = run_backtest(ltf_chunk, htf_candles)
+        except Exception as exc:  # unexpected engine failure is a genuine failure
+            print(f"ERROR: backtest engine raised an exception on period {period_num}: {exc}")
+            return 1
+        results.append(result)
 
-    # --- 3. Console summary (0-trade outcome is valid, not an error) ---
-    print("Backtest complete:")
-    print(f"  total_trades  : {result.total_trades}")
-    print(f"  win_rate      : {result.win_rate * 100:.2f}%")
-    print(f"  total_pnl     : {result.total_pnl:.2f}")
-    print(f"  max_drawdown  : {result.max_drawdown * 100:.2f}%")
+        label = f"period {period_num}/{args.periods}" if args.periods > 1 else "Backtest complete"
+        start_ts = ltf_chunk[0]["timestamp"] if ltf_chunk else None
+        end_ts = ltf_chunk[-1]["timestamp"] if ltf_chunk else None
+        print(f"{label}{f' ({start_ts} -> {end_ts})' if args.periods > 1 else ''}:")
+        print(f"  candles       : {len(ltf_chunk)}")
+        print(f"  total_trades  : {result.total_trades}")
+        print(f"  win_rate      : {result.win_rate * 100:.2f}%")
+        print(f"  total_pnl     : {result.total_pnl:.2f}")
+        print(f"  max_drawdown  : {result.max_drawdown * 100:.2f}%")
 
-    # --- 4. Write markdown report + CSV trade export ---
+    # --- 3. Aggregate summary across periods (only meaningful/printed when
+    # periods > 1 -- otherwise identical to the single-run output above) ---
+    if args.periods > 1:
+        total_trades = sum(r.total_trades for r in results)
+        total_pnl = sum(r.total_pnl for r in results)
+        profitable_periods = sum(1 for r in results if r.total_pnl > 0)
+        print("Aggregate across periods (each period run fully independently -- fresh "
+              "account balance, no shared state):")
+        print(f"  periods           : {args.periods}")
+        print(f"  profitable periods: {profitable_periods}/{args.periods}")
+        print(f"  total_trades      : {total_trades}")
+        print(f"  total_pnl (summed): {total_pnl:.2f}")
+        print(
+            "  NOTE: consistency across periods matters more than the sum -- "
+            "a strategy profitable in only some periods is NOT validated, "
+            "regardless of the aggregate total."
+        )
+
+    # --- 4. Write markdown report(s) + CSV trade export(s) ---
     output_path = Path(args.output).resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    csv_path = output_path.with_suffix(".csv")
-
     report_generator = ReportGenerator()
-    report_markdown = report_generator.generate(result)
-    output_path.write_text(report_markdown, encoding="utf-8")
-    report_generator.export_csv(result, str(csv_path))
 
-    print(f"Markdown report written to: {output_path}")
-    print(f"CSV trade export written to: {csv_path}")
+    for period_num, result in enumerate(results, start=1):
+        if args.periods > 1:
+            period_output = output_path.with_name(
+                f"{output_path.stem}_period{period_num}{output_path.suffix}"
+            )
+        else:
+            period_output = output_path
+        csv_path = period_output.with_suffix(".csv")
+
+        report_markdown = report_generator.generate(result)
+        period_output.write_text(report_markdown, encoding="utf-8")
+        report_generator.export_csv(result, str(csv_path))
+
+        print(f"Markdown report written to: {period_output}")
+        print(f"CSV trade export written to: {csv_path}")
 
     return 0
 
