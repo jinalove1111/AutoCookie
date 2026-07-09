@@ -18,11 +18,15 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from app.backtesting.backtest_engine import (
     MIN_CANDLES,
     BacktestEngine,
     _advance_htf_cursor,
 )
+from app.config import settings
+from app.risk.position_sizing import calculate_position_size
 from app.risk.risk_manager import RiskManager
 from app.strategy.signal_engine import SignalEngine
 
@@ -237,3 +241,213 @@ def test_backtest_engine_run_unaffected_by_still_forming_htf_bar():
     assert result_a.trades == result_b.trades
     # Sanity: this is a real, non-empty proof -- a genuine signal/trade fired.
     assert result_a.total_trades >= 1
+
+
+# --- Position-sizing PnL correctness (real RISK_PER_TRADE_PERCENT sizing,
+# replacing the old 100%-notional-of-account_balance placeholder) --------
+
+
+class _FakeSignal:
+    """Minimal stand-in for a real TradeSignal, used only to drive
+    `_simulate_trade`/`run()` with fully controlled entry/stop/take-profit
+    values -- this section is testing the ENGINE's own sizing/PnL wiring,
+    not strategy detection (which has its own dedicated tests), so a
+    controlled fake here (rather than the real SignalEngine) is the right
+    tool, same spirit as this file's direct `_advance_htf_cursor` tests.
+    """
+
+    def __init__(self, entry_price, stop_loss, take_profit, direction):
+        self.entry_price = entry_price
+        self.stop_loss = stop_loss
+        self.take_profit = take_profit
+        self.direction = direction
+
+
+def test_simulate_trade_size_matches_calculate_position_size_independently():
+    """Given a known account_balance, risk_percent, and entry/stop distance,
+    the size baked into the trade record must exactly equal an independent
+    call to `calculate_position_size` with the same inputs -- not just
+    "some positive size".
+    """
+    account_balance = 10000.0
+    risk_percent = 1.0
+    entry_price = 100.0
+    stop_loss = 95.0
+    take_profit = 110.0
+
+    expected_size = calculate_position_size(
+        account_balance, risk_percent, entry_price, stop_loss
+    )
+    assert expected_size == 20.0  # risk_amount=100, per_unit_risk=5 -> 20 units
+
+    signal = _FakeSignal(entry_price, stop_loss, take_profit, "long")
+    # No slippage, so entry_fill == entry_price exactly, keeping the
+    # arithmetic below exact rather than approximate.
+    candle0 = _c(100, 100, 100, 100, BASE_TS)
+    # Take-profit hit on the very next candle (high >= 110), stop_loss not
+    # touched (low > 95) -- deterministic exit at exit_price == take_profit.
+    candle1 = _c(100, 110, 99, 105, BASE_TS + LTF_STEP)
+    ltf_candles = [candle0, candle1]
+
+    trade, exit_index, new_balance = BacktestEngine()._simulate_trade(
+        signal,
+        ltf_candles,
+        entry_index=0,
+        account_balance=account_balance,
+        fee_percent=0.1,
+        slippage_percent=0.0,
+        size=expected_size,
+    )
+
+    assert trade["size"] == expected_size
+    assert exit_index == 1
+    assert trade["exit_price"] == take_profit
+    assert trade["entry_price"] == entry_price  # no slippage -> fill == entry_price
+
+    # Independently recomputed expected PnL: raw price-move PnL minus
+    # per-leg fees on the ACTUAL notional (size * price at each leg) --
+    # NOT a flat fraction of account_balance like the old placeholder.
+    raw_pnl = expected_size * (take_profit - entry_price)
+    fee_rate = 0.1 / 100
+    entry_fee = fee_rate * expected_size * entry_price
+    exit_fee = fee_rate * expected_size * take_profit
+    expected_pnl = raw_pnl - entry_fee - exit_fee
+
+    assert trade["pnl"] == expected_pnl
+    assert new_balance == account_balance + expected_pnl
+
+
+def test_simulate_trade_pnl_scales_with_size_not_flat_fraction_of_balance():
+    """Two otherwise-identical scenarios (same account_balance, same price
+    path/exit) differing ONLY in stop-loss distance (hence only in the
+    resulting `size`) must produce PnL that scales exactly with `size` --
+    proving PnL tracks the real position size, not a flat fraction of
+    account_balance as the old formula did (which would have produced
+    IDENTICAL pnl for both scenarios regardless of stop distance).
+    """
+    account_balance = 10000.0
+    risk_percent = 1.0
+    entry_price = 100.0
+    take_profit = 110.0
+
+    candle0 = _c(100, 100, 100, 100, BASE_TS)
+    candle1 = _c(100, 110, 99, 105, BASE_TS + LTF_STEP)
+    ltf_candles = [candle0, candle1]
+
+    # Scenario A: risk 5 points -> size 20. Scenario B: risk 2.5 points (half
+    # the distance) -> size 40 (double A's), same account_balance/risk_percent.
+    size_a = calculate_position_size(account_balance, risk_percent, entry_price, 95.0)
+    size_b = calculate_position_size(account_balance, risk_percent, entry_price, 97.5)
+    assert size_a == 20.0
+    assert size_b == 40.0
+    assert size_b == size_a * 2
+
+    signal_a = _FakeSignal(entry_price, 95.0, take_profit, "long")
+    signal_b = _FakeSignal(entry_price, 97.5, take_profit, "long")
+
+    trade_a, _, _ = BacktestEngine()._simulate_trade(
+        signal_a, ltf_candles, 0, account_balance, fee_percent=0.1,
+        slippage_percent=0.0, size=size_a,
+    )
+    trade_b, _, _ = BacktestEngine()._simulate_trade(
+        signal_b, ltf_candles, 0, account_balance, fee_percent=0.1,
+        slippage_percent=0.0, size=size_b,
+    )
+
+    # Under the OLD (pre-fix) model, both would have produced the exact same
+    # pnl (a flat fraction of account_balance, oblivious to stop distance).
+    # Under the fixed model, pnl must scale exactly with size (same
+    # entry/exit prices in both scenarios, so the only variable is size).
+    assert trade_a["pnl"] != 0.0
+    assert trade_b["pnl"] == pytest.approx(trade_a["pnl"] * 2)
+
+
+class _FakeApprovedRiskDecision:
+    approved = True
+    reasons: list = []
+
+
+class _FakeRiskManager:
+    """Always approves -- isolates this section's tests to the engine's own
+    sizing wiring in `run()`, not RiskManager's own approval logic (which
+    has its own dedicated tests).
+    """
+
+    def evaluate(self, signal, trades_today=0):
+        return _FakeApprovedRiskDecision()
+
+
+class _FakeSignalEngineFixedSignal:
+    """Returns the same fixed signal on every call -- lets `run()`'s
+    walk-forward loop be driven deterministically without depending on real
+    strategy detection."""
+
+    def __init__(self, signal):
+        self._signal = signal
+        self.call_count = 0
+
+    def generate_signal(self, symbol, ltf_candles, htf_candles):
+        self.call_count += 1
+        return self._signal
+
+
+def _flat_ltf_candles(n: int) -> list[dict]:
+    ts = BASE_TS
+    candles = []
+    for _ in range(n):
+        candles.append(_c(100, 110, 99, 105, ts))
+        ts += LTF_STEP
+    return candles
+
+
+def test_run_wires_real_settings_risk_per_trade_percent_into_trade_size():
+    """End-to-end (through `run()`, not `_simulate_trade` directly): the
+    `size` recorded on the trade must equal `calculate_position_size` called
+    with the REAL `settings.RISK_PER_TRADE_PERCENT` -- proving `run()` is
+    actually wired to the real Risk Engine config, not a hardcoded value.
+    """
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=110.0, direction="long")
+    signal_engine = _FakeSignalEngineFixedSignal(signal)
+    # Exactly MIN_CANDLES + 1: one entry candle at index MIN_CANDLES - 1, one
+    # exit candle right after it (immediately hits take_profit), then the
+    # loop ends -- keeps this a single, unambiguous trade.
+    ltf_candles = _flat_ltf_candles(MIN_CANDLES + 1)
+
+    result = BacktestEngine().run(
+        ltf_candles, [], signal_engine, _FakeRiskManager(), account_balance=10000.0
+    )
+
+    assert result.total_trades == 1
+    expected_size = calculate_position_size(
+        10000.0, settings.RISK_PER_TRADE_PERCENT, 100.0, 95.0
+    )
+    assert expected_size > 0.0
+    assert result.trades[0]["size"] == expected_size
+
+
+def test_run_skips_degenerate_zero_size_signal_without_recording_a_fake_trade():
+    """When entry == stop_loss, `calculate_position_size` returns 0.0 (its
+    own division-by-zero guard). `run()` must treat this exactly like a
+    rejected/no-signal step -- skip it (`i += 1; continue`) and never append
+    a fake zero-notional "trade" -- even though `generate_signal` keeps
+    firing on every remaining step (proving the loop genuinely reached and
+    evaluated the degenerate signal each time, rather than short-circuiting
+    for an unrelated reason).
+    """
+    degenerate_signal = _FakeSignal(
+        entry_price=100.0, stop_loss=100.0, take_profit=110.0, direction="long"
+    )
+    signal_engine = _FakeSignalEngineFixedSignal(degenerate_signal)
+    ltf_candles = _flat_ltf_candles(MIN_CANDLES + 5)
+
+    result = BacktestEngine().run(
+        ltf_candles, [], signal_engine, _FakeRiskManager(), account_balance=10000.0
+    )
+
+    assert result.total_trades == 0
+    assert result.trades == []
+    assert result.total_pnl == 0.0
+    # Confirms the loop really did reach the sizing step repeatedly (once
+    # per remaining LTF index), not that generate_signal was only called once
+    # then something else short-circuited the loop.
+    assert signal_engine.call_count == len(ltf_candles) - (MIN_CANDLES - 1)

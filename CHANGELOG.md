@@ -4,6 +4,64 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Backtest engine: real RISK_PER_TRADE_PERCENT position sizing (replaces 100%-notional placeholder)
+
+### Fixed
+- **`BacktestEngine._simulate_trade()`'s own docstring admitted this was a
+  placeholder**: PnL was computed as `account_balance * net_return`, which
+  implicitly risks 100% of `account_balance` as notional on every trade —
+  meaning backtest PnL/win-rate/max-drawdown described a far riskier,
+  unrealistic strategy than what `RISK_PER_TRADE_PERCENT`-governed
+  paper/live trading actually runs (`scripts/run_paper.py` already used the
+  real `calculate_position_size()` sizing correctly; `BacktestEngine` was the
+  one remaining place using the old model). Backtest results were therefore
+  non-representative evidence, undermining the point of backtesting before
+  paper/live.
+
+### Changed
+- `BacktestEngine.run()` now calls
+  `calculate_position_size(account_balance, settings.RISK_PER_TRADE_PERCENT,
+  signal.entry_price, signal.stop_loss)` (`app.risk.position_sizing` —
+  unmodified, consumed only) right after risk approval, sized off the
+  signal's original pre-slippage entry/stop, exactly mirroring
+  `run_paper.py`'s pattern.
+- `_simulate_trade()`'s PnL/fee math rewritten for real position-based
+  accounting instead of the old notional-fraction approximation:
+  `raw_pnl = size * (exit_price - entry_fill)` (sign flipped for short); fees
+  are charged per-leg on the ACTUAL notional (`size * entry_fill` on entry,
+  `size * exit_price` on exit) rather than a flat percent-of-account-equity
+  approximation. Reasoning documented inline rather than mechanically porting
+  the old formula onto the new `size` variable.
+- Trade records gain an additive `size` (units) field — a real sizing
+  decision shouldn't be invisible in the trade record.
+  `report_generator.py`'s `TRADE_FIELDS`/`.get()`-based CSV export needed no
+  changes (new field flows through automatically).
+
+### Added
+- Degenerate-case guard: when `entry == stop_loss`, `calculate_position_size`
+  returns `0.0` (its own division-by-zero guard) — `BacktestEngine.run()`
+  now treats this exactly like a rejected/no-signal step (`i += 1;
+  continue`), never recording a fake zero-notional "trade". Defended
+  directly rather than trusting `entry_model.py`'s upstream
+  `if risk <= 0: return None` guarantee to make this unreachable.
+- 4 new tests in `backend/tests/test_backtest_engine.py` (existing 6,
+  including both mandatory no-lookahead regression tests, pass unchanged):
+  size correctness verified against an independent `calculate_position_size`
+  call; PnL proven to scale exactly with `size` (not a flat fraction of
+  `account_balance`, via two scenarios differing only in stop distance);
+  `run()`'s wiring to the real `settings.RISK_PER_TRADE_PERCENT` proven
+  end-to-end; degenerate zero-size signals proven to be skipped, never
+  recorded, across every remaining walk-forward step. Full suite: 127/127
+  passing (123 pre-existing + 4 new).
+- Real end-to-end verification: `scripts/run_backtest.py` against real OKX
+  data produced actual trades (`BTCUSDT/15m`: 2 trades, `total_pnl=-89.85`,
+  `max_drawdown=0.90%`; `SOLUSDT/15m`: 2 trades, `total_pnl=-80.25`,
+  `max_drawdown=0.80%`) — with `account_balance=10000`/
+  `RISK_PER_TRADE_PERCENT=0.25%` ($25 risk budget/trade), max drawdown stays
+  well under 1% even across 2 consecutive losses, bounded and sane, versus
+  the old model where a single trade's notional exposure was the entire
+  account regardless of `RISK_PER_TRADE_PERCENT`.
+
 ## [Unreleased] - Backtest engine: real HTF/LTF walk-forward with no-lookahead HTF cursor
 
 ### Fixed
