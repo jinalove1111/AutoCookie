@@ -76,12 +76,40 @@ The Strategy Engine never places orders directly. It only ever produces a
 - Inputs (conceptual): candle series, CHOCH/MSS move.
 - Outputs (conceptual): zero or more FVG zones (price range + candle
   indices).
+- **Zone mitigation filter (implemented, in `SignalEngine.generate_signal`,
+  not inside `detect_fair_value_gap` itself):** `detect_fair_value_gap`
+  reports a zone for as long as it remains anywhere in the given candle
+  window, with no awareness of whether price has already retraded back
+  into it. Without a freshness check, the same still-visible zone kept
+  re-qualifying as "the most recent zone" on consecutive walk-forward
+  steps even after a trade off it had already failed and price had moved
+  back through it -- confirmed empirically in a real deep backtest (see
+  CHANGELOG.md/HANDOFF.md): a large fraction of trades in one sample were
+  exact duplicate re-entries of a just-failed setup. `SignalEngine` now
+  excludes any FVG already "mitigated" -- overlapped by a candle strictly
+  between the zone's formation and the current (most recent) candle,
+  which is excluded from the check since the current candle touching a
+  zone as part of triggering a signal (e.g. a sweep wick that taps
+  straight into a nearby FVG in the same candle) is the setup itself, not
+  a disqualifying prior retest. See `app.strategy.utils.is_zone_mitigated`.
+  `detect_fair_value_gap` itself stays unchanged/mitigation-unaware.
 
 ## 5. Order Block / Breaker Block Detection
 - Purpose: detect the Order Block or Breaker Block associated with the
   CHOCH/MSS move.
 - Inputs (conceptual): candle series, CHOCH/MSS move, FVG zones.
 - Outputs (conceptual): zero or more OB/Breaker zones (price range + type).
+- **Zone mitigation filter (implemented, same rationale/mechanism as FVG
+  above):** `SignalEngine` excludes an order block already mitigated
+  since its CONFIRMING IMPULSE candle (not the base/zone candle -- the
+  impulse candle's own range routinely overlaps the base zone it
+  originated from, which would make every fresh order block look
+  immediately "mitigated" by its own confirming move; `detect_order_block`
+  returns `impulse_index` specifically so this distinction can be made).
+  `detect_order_block`/`detect_breaker_block` themselves stay unchanged/
+  mitigation-unaware -- `detect_breaker_block` specifically depends on
+  `detect_order_block` returning the raw, un-filtered zone so it can do
+  its own closed-through/retest analysis on top of it.
 
 ## 6. Entry Model
 - Purpose: define the precise entry condition once bias, liquidity sweep,

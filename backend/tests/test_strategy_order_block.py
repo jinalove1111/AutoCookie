@@ -33,7 +33,13 @@ def test_detect_order_block_finds_bearish_candle_before_bullish_impulse():
 
     result = detect_order_block(candles)
 
-    assert result == {"type": "bullish", "top": 101, "bottom": 99, "index": 9}
+    assert result == {
+        "type": "bullish",
+        "top": 101,
+        "bottom": 99,
+        "index": 9,
+        "impulse_index": 10,
+    }
 
 
 def test_detect_breaker_block_none_when_zone_never_closed_through():

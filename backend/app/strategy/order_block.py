@@ -44,7 +44,17 @@ def _is_bearish(candle: object) -> bool:
 
 
 def detect_order_block(candles: list) -> dict | None:
-    """Detect the most relevant (most recent) order block zone, or None."""
+    """Detect the most relevant (most recent) order block zone, or None.
+
+    Returned dict includes `impulse_index` (the confirming impulse
+    candle's index, separate from `index`, the base/zone candle) so
+    callers can correctly check zone mitigation starting AFTER the
+    impulse (see `app.strategy.utils.is_zone_mitigated`) -- checking from
+    `index` (the base candle) instead would be wrong: the impulse candle
+    that CONFIRMS an order block routinely originates from/overlaps the
+    base candle's own range, which would make every fresh order block
+    look immediately "mitigated" by its own confirming move.
+    """
     found: dict | None = None
 
     for i in range(_LOOKBACK, len(candles)):
@@ -65,6 +75,7 @@ def detect_order_block(candles: list) -> dict | None:
                         "top": cf(candles[j], "high"),
                         "bottom": cf(candles[j], "low"),
                         "index": j,
+                        "impulse_index": i,
                     }
                     break
         elif _is_bearish(candles[i]):
@@ -75,6 +86,7 @@ def detect_order_block(candles: list) -> dict | None:
                         "top": cf(candles[j], "high"),
                         "bottom": cf(candles[j], "low"),
                         "index": j,
+                        "impulse_index": i,
                     }
                     break
 

@@ -1,6 +1,23 @@
 # HANDOFF — JadeCap Automated Trading Bot
 
-## 상태: (CTO 관점 전환) Backtest 데이터 깊이 버그 근본 수정 완료 — `CandleFetcher.since`가 OKX `before`(잘못된 방향)가 아니라 `after`(올바른 방향)로 매핑되도록 고치고, `/market/history-candles` 기반 실 딥 페이지네이션(`fetch_ohlcv_history`) 추가. 이번 세션 전까지 모든 백테스트가 ~300캔들(5m 기준 하루치)로 캡돼 있어 전략에 실제 edge가 있는지 통계적으로 의미 있게 판단할 수 없었음 — 이게 그 근본 블로커였고 지금 해소됨. 첫 딥 백테스트(BTCUSDT/15m, 3000캔들=~31일, 실 OKX 데이터): 28건 실 트레이드, 승률 25%, PnL -$577.82(계정 $10,000 대비) — 전략이 아직 수익성이 없다는 최초의 통계적으로 의미 있는 실증거. Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+## 상태: 딥 백테스트로 발견한 실 전략 버그(같은 zone 중복 재진입) 수정 완료 — 같은 3000캔들 샘플 재실행 결과 BTCUSDT/15m이 28trades/승률25%/PnL-$577.82 → 28trades/승률75%/PnL+$462.18(MDD 5.78%→2.04%)로 반전. ETHUSDT/15m(19trades/89.47%/+$614.22), BTCUSDT/5m(10trades/90.00%/+$257.83) 두 개 독립 샘플에서도 동일하게 강한 양(+) 결과 — 심볼·타임프레임 전반에 걸친 일관된 개선. **단, 이것이 "전략이 검증됐다"는 뜻은 아님** — out-of-sample 분할 없음, 소수 트레이드(10-28건), BTC/ETH 상관성으로 두 15m 샘플이 완전히 독립적이지 않음(아래 "다음 후보" 참조). Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+
+## 전체 회차 (Strategy 정확성: 이미-테스트된 zone에 대한 중복 시그널 생성 버그 수정 — 직전 딥 백테스트 회차가 실제로 발견하게 해준 첫 실전략 버그)
+- [x] **딥 백테스트 결과를 직접 분석해 발견(가정 아님)**: 직전 회차(CandleFetcher 페이지네이션 수정)로 처음 가능해진 BTCUSDT/15m 3000캔들 백테스트의 트레이드 CSV를 직접 읽어보니, 28건 중 5쌍(10건, ~36%)이 entry_price/exit_price/PnL이 거의 정확히 동일한 "중복" 트레이드였고, 시간상으로도 방금 스탑아웃된 직후(15-45분 뒤) 같은 가격대에서 다시 진입한 패턴이었음
+- [x] **근본 원인 진단**: `detect_fair_value_gap()`/`detect_order_block()`이 순수 함수로서 "가장 최근의 zone"을 계속 보고하는데, 그 zone에 가격이 이미 되돌아와서 테스트(그리고 실패)했는지 여부를 전혀 추적하지 않음 — `entry_model.build_entry_model()`도 마찬가지로 zone의 "신선도"를 모름. 그 결과 walk-forward 루프의 다음 스텝에서 같은 zone이 여전히 "가장 최근"이면 동일한 entry/stop/take-profit으로 사실상 똑같은 트레이드를 재차 생성함(직전에 실패한 바로 그 셋업을 즉시 재진입 — revenge trading과 동형의 버그)
+- [x] `app.strategy.utils.is_zone_mitigated(candles, start_index, top, bottom)` 신규 — 표준 SMC "mitigation" 개념(zone 형성 이후 가격이 이미 그 범위로 되돌아왔는지)을 판정하는 공유 헬퍼. **마지막(현재) 캔들은 의도적으로 체크 대상에서 제외** — 시그널을 트리거하는 바로 그 캔들이 zone을 건드리는 것(예: sweep wick이 근처 FVG를 같은 캔들에서 태깅)은 셋업 그 자체이지 사전 재테스트가 아니기 때문
+- [x] **구현 위치는 orchestration 레이어(`SignalEngine.generate_signal`)로 의도적으로 선택, detector 자체(`detect_fair_value_gap`/`detect_order_block`)는 무변경**: `detect_breaker_block()`이 `detect_order_block()`으로부터 원본(필터링 안 된) zone을 받아 자체적으로 closed-through+retest 분석을 수행하는 구조라, detector 레벨에서 mitigation 필터링을 넣으면 `detect_breaker_block`의 기존 로직이 깨짐 — 이 의존관계를 실제로 하나하나 확인한 뒤 orchestration 레이어에 필터를 넣기로 결정(가정하지 않고 검증)
+- [x] `detect_order_block()`이 이제 `impulse_index`(확정 임펄스 캔들의 index, zone의 base 캔들 index인 기존 `index`와 별개)도 반환 — mitigation 체크가 base 캔들이 아니라 임펄스 캔들 "이후"부터 시작해야 함(임펄스 캔들 자신의 range가 자신이 유래한 base zone과 거의 항상 겹치므로, base 캔들부터 체크하면 모든 fresh order block이 자기 자신의 확정 무브에 의해 즉시 "mitigated"로 오판됨 — 실제로 이렇게 구현했다가 로그로 확인하고 수정함)
+- [x] 신규 테스트 12종: `test_strategy_utils.py`(신규 파일) `is_zone_mitigated` 자체의 경계 규칙 7종(이전/이후 캔들 겹침, 마지막 캔들 제외, 빈 범위, 경계 접촉 포함 등) + `test_strategy_signal_engine.py`에 **실 세계 버그를 그대로 재현하는 종단 회귀 테스트**: 신선한 zone은 시그널을 내지만(1차), 그 후 가격이 같은 zone을 리테스트하는 캔들이 추가되면 동일 조건(bias/sweep 동일)에서도 두 번째 시그널은 생성되지 않음(None)을 직접 증명
+- [x] **테스트 픽스처 3개 수정 필요(버그 아니라 mitigation이 실제로 올바르게 작동함을 드러낸 결과)**: `test_strategy_signal_engine.py`/`test_backtest_engine.py`가 공유하던 지그재그 "confluence" 픽스처는 지그재그 자체의 오실레이션이 스스로 만든 모든 FVG를 곧바로 되돌아가며 mitigate하고 있었음(지그재그는 원래 상승-하락을 반복하는 패턴이라 당연한 결과) — 즉 그 픽스처는 "신선한 셋업"을 테스트한 게 아니라 우연히 detector가 mitigation을 몰랐기 때문에 통과하던 것. 지그재그 끝에 mitigate되지 않는 fresh leg(prev/impulse/next 3캔들, sweep 캔들 직전에 삽입)를 추가해 픽스처를 실제로 올바르게 수정
+- [x] `docs/strategy_spec.md` section 4/5에 이 새 규칙을 "(implemented)" 섹션으로 문서화(가정을 코드에만 남기지 않고 스펙 문서에도 명시 — CTO 지시 "document assumptions" 반영)
+- [x] 전체 `pytest backend/tests/` **169/169 통과**(기존 157 + 신규 12). 전체 스위트 2회 연속 재실행으로 flakiness 없음 확인
+- [x] **오케스트레이터 재검증용 실측(가장 중요, 3개 독립 실 데이터 샘플)**: 수정 전/후 동일한 3000캔들 딥 페치로 비교 — BTCUSDT/15m: 28trades/승률25%/PnL-$577.82/MDD5.78% → **28trades/승률75%/PnL+$462.18/MDD2.04%**(트레이드 개수는 우연히 동일하지만 구성/결과가 완전히 다름 — mitigation이 다른 zone을 선택하게 되면서 walk-forward 전체 경로가 바뀜). 추가로 독립적인 2개 신규 샘플: ETHUSDT/15m(19trades/승률89.47%/PnL+$614.22/MDD0.45%), BTCUSDT/5m(10trades/승률90.00%/PnL+$257.83/MDD0.40%) — 심볼·타임프레임 양쪽에서 일관되게 크고 긍정적인 방향 전환, 우연한 한 샘플이 아님
+- [x] **정직한 유보(operator/다음 엔지니어를 위해 명시, 과장 금지)**: 이 3개 샘플은 고무적이지만 "전략이 검증됐다"고 주장하기엔 부족함 — out-of-sample/walk-forward 분할 전혀 없음(전부 in-sample), 트레이드 수(10-28건)가 적어 승률의 신뢰구간이 넓음, BTC/ETH는 서로 강하게 상관돼 있어 두 15m 샘플이 완전히 독립적인 증거가 아님. 이번 수정은 실제로 크고 메커니즘이 명확한 개선(중복 트레이드 버그 제거)이지 "이 전략이 실전 준비됐다"는 증명이 아님
+- [x] `py_compile` 무오류 확인, grep 확인 — 신규 코드에 TODO/placeholder/mock/bare pass/NotImplementedError 없음
+- [x] `CHANGELOG.md`에 신규 Unreleased 섹션 추가("Honest caveat" 문단 포함)
+- [x] scope 준수: `backend/app/risk/*`, `backend/app/execution/*`, `backend/app/portfolio/*`, `backend/app/backtesting/*`(엔진 자체 무변경 — 이번 회차는 순수 Strategy Engine 정확성 수정), `exchange/*`, live-trading 게이팅 전부 무변경
+- [x] git commit/push 완료 (`origin/master`) — operator가 CTO 역할 지시에서 "API 자격증명/라이브 승인/외부유료서비스/보안 아니면 자율적으로 계속 진행"이라고 명시적으로 재확인함(이 태스크는 그 어느 카테고리에도 해당하지 않음)
 
 ## 전체 회차 (CTO 지시: 수익성 관점 최고-ROI 재평가 — Backtest 데이터 깊이 버그 근본 수정)
 - [x] **오리엔테이션**: HANDOFF.md/README.md/최근 git log/전체 아키텍처를 재확인(operator가 CTO 역할 지시). 이전 5개 회차(Strategy/Risk/Backtest/Paper/Dashboard 배관 정확성)는 전부 완료·커밋됨. "수익성 확률을 높이는가?"라는 새 렌즈로 재평가한 결과, 배관은 이제 정확하지만 **전략 자체가 수익성이 있는지 실제로 검증된 적이 한 번도 없었음** — 모든 백테스트가 OKX 공개 캔들 엔드포인트의 300개/콜 한도에 묶여 5m 기준 약 하루치 데이터로만 실행돼 옴(HANDOFF/스크립트 독스트링에 "known limitation"으로 반복 기록만 되고 근본 원인은 한 번도 diagnose 안 됨)
@@ -201,11 +218,14 @@
 - [x] ~~CircuitBreaker 상태는 프로세스 메모리에만 존재~~ — DB 영속화 완료(위 참조, `028087a`)
 
 ## 현재 위치
-Strategy > Risk > Backtest > Paper Trading > Dashboard 전 계층에 알려진 갭 없음 — Dashboard 5개(`/dashboard/status`/`/dashboard/positions`/`/dashboard/logs`/`/dashboard/risk-status`/`/dashboard/bias`/`/dashboard/signals`) 전부 실데이터 배선 완료. operator가 지정한 우선순위(Strategy > Risk > Backtest > Paper Trading > Dashboard > Live)상 Live 직전까지 전부 완료된 상태 — **다음 실질적 진전은 Live Trading 뿐이고, 이는 operator의 명시적 단계별 승인 없이는 절대 진행하지 않음** (아래 참조). 그 전까지의 저위험 재검토 후보:
-- **scope 경계(오해 방지용 명시)**: `/dashboard/signals`는 `run_paper.py`(paper 실행)에서만 배선함 — `run_backtest.py`는 의도적으로 안 건드림. 백테스트 시그널은 시뮬레이션 산출물이고 이미 자체 CSV/markdown 리포트로 export되고 있으며, `Signal` 테이블엔 `Trade`와 달리 `mode` 컬럼이 없어 backtest 시그널을 같은 테이블에 섞으면 라이브 대시보드가 실제 paper 시그널과 시뮬레이션 시그널을 구분 못 하게 됨 — 필요해지면 `mode` 컬럼 추가부터 시작해야 하는 별도 설계 결정
-- **`ltf_bias` 재검토 후보**: bias 회차에서 operator 승인 없이 실용적 판단(같은 `detect_htf_bias()` 알고리즘을 LTF 캔들에 재적용)으로 진행함 — 근거는 문서화돼 있으나(HANDOFF, CHANGELOG, 백엔드/프론트 코드 주석), 이 필드가 실제 트레이딩 판단에 쓰이게 되면 재확인 필요
-- Paper Trading 재검토 후보(낮은 우선순위, "갭 아님"으로 이미 기록됨): single-pass 모드의 loss-limit 거부가 Telegram/Discord 알림 없이 stdout/summary dict에만 보임(loop mode와 다름, 의도된 설계로 문서화돼 있으나 재검토 여지는 남아있음)
-- **Live Trading으로 넘어갈 때**: 반드시 operator와 재확인 — 실 OKX API 키(출금 권한 없음) 발급, 소액 한도, 단계별 승인 없이는 `LiveBroker`/`exchange/okx_client.py`·`orangex_client.py`의 `NotImplementedError` 스텁에 단 한 줄도 손대지 않음. API 키 발급 자체가 operator 승인 필요 카테고리("API credentials")에 해당하므로 CTO/에이전트 재량으로 절대 시작하지 않음
+Strategy > Risk > Backtest > Paper Trading > Dashboard 전 계층의 배관(정확성/실데이터 배선) 갭은 전부 해소됨. CTO 관점 재평가 이후로는 "배관이 맞는가"에서 "전략이 실제로 수익성 있는가"로 초점이 이동함 — 딥 백테스트가 가능해진 뒤(페이지네이션 수정) 곧바로 실 전략 버그(zone 중복 재진입)를 발견/수정했고, 3개 독립 실 데이터 샘플에서 일관되게 크고 긍정적인 결과가 나왔음(위 회차 참조). **다음 최고-ROI 후보 (수익성 검증 관점, CTO 우선순위 유지)**:
+- **out-of-sample / walk-forward 검증 (최우선 후보)**: 지금까지의 3개 샘플은 전부 in-sample(같은 기간을 발견에도 검증에도 사용) — 진짜 검증이려면 (a) 데이터를 시간순으로 앞부분(파라미터/로직 확인용)과 뒷부분(순수 검증용, 절대 들여다보지 않고 마지막에 한 번만 실행)으로 분할하거나, (b) rolling walk-forward(N일 학습 구간 없음 — 이 전략엔 학습되는 파라미터가 없으므로 사실상 "여러 개의 서로 겹치지 않는 기간에 동일 로직을 반복 실행해 일관성 확인"에 가까움)로 여러 비중첩 기간에서 결과가 일관되는지 확인. 트레이드 수가 적어(10-28건) 단일 기간의 승률/PnL은 신뢰구간이 넓다는 점도 명시적으로 다뤄야 함
+- **더 다양한/독립적인 심볼 샘플**: 현재 3개 샘플 중 2개(BTCUSDT/15m, ETHUSDT/15m)가 같은 달력 기간이라 BTC/ETH 상관성 때문에 완전히 독립적인 증거가 아님 — 상관성 낮은 자산(예: 알트코인 여러 개, 또는 완전히 다른 달력 기간)으로 확장하면 증거력이 커짐
+- **`_LOOKBACK`/`_IMPULSE_MULT`/`_STOP_BUFFER`/`_RR` 파라미터 재검토**: `order_block.py`/`entry_model.py`에 이미 "백테스트로 튜닝된 값이 아닌 합리적 시작값"이라고 정직하게 문서화돼 있음 — 이제 딥 백테스트가 실제로 가능해졌으니, 이 값들을 파라미터 스윕(grid search)으로 실측 데이터에 맞춰 재검토할 여지가 생김(단, overfitting 위험 — out-of-sample 검증 없이 파라미터 튜닝만 하면 안 됨, 위 첫 항목이 선행돼야 함)
+- **scope 경계(오해 방지용 명시)**: `/dashboard/signals`는 `run_paper.py`(paper 실행)에서만 배선함 — `run_backtest.py`는 의도적으로 안 건드림(별도 설계 결정 필요, 낮은 우선순위)
+- **`ltf_bias` 재검토 후보**: bias 회차에서 operator 승인 없이 실용적 판단으로 진행함(근거 문서화됨) — 이 필드가 실제 트레이딩 판단에 쓰이게 되면 재확인 필요
+- Paper Trading 재검토 후보(낮은 우선순위, "갭 아님"으로 이미 기록됨): single-pass 모드의 loss-limit 거부가 Telegram/Discord 알림 없이 stdout/summary dict에만 보임
+- **Live Trading으로 넘어갈 때**: 반드시 operator와 재확인 — 실 OKX API 키(출금 권한 없음) 발급, 소액 한도, 단계별 승인 없이는 `LiveBroker`/`exchange/okx_client.py`·`orangex_client.py`의 `NotImplementedError` 스텁에 단 한 줄도 손대지 않음. 위 out-of-sample 검증 없이는 Live는 물론 Small Live 논의 자체도 시기상조 — API 키 발급 자체가 operator 승인 필요 카테고리("API credentials")에 해당하므로 CTO/에이전트 재량으로 절대 시작하지 않음
 
 모든 회차가 git에 커밋/push 완료(`origin/master`, 최신 커밋은 위 "전체 회차" 항목들 참조 — 이 문서의 각 항목에 실제 커밋 해시가 없다면 아직 미커밋일 수 있으니 `git log`로 교차 확인 권장). Small Live 진행 시 API 키 발급 + 단계별 승인 필요(operator 승인 없이는 절대 진행 안 함).
 

@@ -14,7 +14,7 @@ from .fvg import detect_fair_value_gap
 from .liquidity import detect_liquidity_sweep
 from .market_structure import detect_choch_mss
 from .order_block import detect_order_block
-from .utils import cf
+from .utils import cf, is_zone_mitigated
 
 
 @dataclass
@@ -56,6 +56,28 @@ class SignalEngine:
         This is Backtest Mode analysis only: it never places orders. The
         returned TradeSignal is downstream input to the Risk Engine, which
         must approve it before Execution ever sees it.
+
+        Zone mitigation filter (correctness fix, not an optional
+        refinement -- see `app.strategy.utils.is_zone_mitigated`'s
+        docstring for the full rationale): `detect_fair_value_gap`/
+        `detect_order_block` report a zone for as long as it remains
+        anywhere in the given `ltf_candles` window, with no awareness of
+        whether price has already traded back into it since it formed.
+        Without this filter, a still-visible-but-already-tested zone kept
+        re-qualifying as "the most recent zone" on consecutive
+        walk-forward steps -- confirmed empirically in a real deep
+        backtest (see CHANGELOG.md/HANDOFF.md): ~36% of trades in one
+        sample were exact duplicate re-entries of a just-failed setup,
+        immediately after being stopped out of the identical zone. Any
+        FVG/order-block zone already mitigated (price has already
+        overlapped it since it formed) is excluded here, BEFORE
+        `build_entry_model` ever sees it -- `build_entry_model` itself
+        stays a pure function of whatever zones it's handed, unaware of
+        mitigation. `detect_fair_value_gap`/`detect_order_block`
+        themselves are also left unchanged (mitigation-unaware) since
+        `detect_breaker_block` depends on `detect_order_block` returning
+        the raw, un-filtered zone to do its own closed-through/retest
+        analysis on top of it.
         """
         if not ltf_candles or not htf_candles:
             return None
@@ -70,8 +92,24 @@ class SignalEngine:
         choch = detect_choch_mss(
             ltf_candles, swept_index=sweep["swept_index"] if sweep else None
         )
-        fvg_zones = detect_fair_value_gap(ltf_candles)
+
+        # FVG mitigation window starts right after the 3-candle gap itself
+        # (index + 2 -- the candle after the one that completes the gap);
+        # order-block mitigation window starts right after the CONFIRMING
+        # impulse candle, not the base/zone candle -- see
+        # `detect_order_block`'s docstring for why that distinction matters
+        # (the impulse candle's own range routinely overlaps the base zone
+        # it originated from, which is not mitigation).
+        fvg_zones = [
+            zone
+            for zone in detect_fair_value_gap(ltf_candles)
+            if not is_zone_mitigated(ltf_candles, zone["index"] + 2, zone["top"], zone["bottom"])
+        ]
         order_block = detect_order_block(ltf_candles)
+        if order_block is not None and is_zone_mitigated(
+            ltf_candles, order_block["impulse_index"] + 1, order_block["top"], order_block["bottom"]
+        ):
+            order_block = None
 
         model = build_entry_model(bias, sweep, choch, fvg_zones, order_block)
         if model is None:

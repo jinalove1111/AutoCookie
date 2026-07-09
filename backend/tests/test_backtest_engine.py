@@ -40,22 +40,26 @@ def _c(open_: float, high: float, low: float, close: float, ts: datetime) -> dic
 
 
 # Real higher-highs/higher-lows zigzag (bullish bias, same shape verified
-# directly in test_strategy_bias.py) plus a final wick that sweeps a recent
-# swing low and closes back above it -- same pattern verified in
+# directly in test_strategy_bias.py), same pattern verified in
 # test_strategy_signal_engine.py's `_bullish_confluence_candles`, reused
-# here with real datetime timestamps instead of string placeholders.
+# here with real datetime timestamps instead of string placeholders. A
+# zigzag's own oscillation legitimately retraces through (mitigates, see
+# `app.strategy.utils.is_zone_mitigated`) every FVG it creates internally,
+# so a FRESH trailing leg is appended after it (not part of the zigzag's
+# regular oscillation) to leave one genuinely unmitigated bullish FVG in
+# place before the final sweep candle.
 _ZIGZAG_HIGHS = [10, 11, 20, 11, 9, 11, 25, 11, 9, 11, 30, 11, 9]
 _ZIGZAG_LOWS = [8, 9, 15, 9, 5, 9, 18, 9, 8, 9, 22, 11, 12]
 
 
 def _ltf_candles_with_real_confluence(n_pad: int = 17) -> list[dict]:
     """`n_pad` flat lead-in candles (so the walk-forward loop has the
-    MIN_CANDLES history it requires) followed by the real bullish zigzag +
-    sweep pattern. Confirmed empirically (see task verification) that this
-    padding does not change the resulting signal versus the unpadded
-    14-candle fixture -- the detectors that matter here (liquidity sweep,
-    FVG) are local/index-relative, not affected by unrelated flat history
-    earlier in the series.
+    MIN_CANDLES history it requires) followed by the real bullish zigzag,
+    a fresh unmitigated-FVG leg, and a sweep+reversal candle. Confirmed
+    empirically (see task verification) that this padding does not change
+    the resulting signal versus the unpadded fixture -- the detectors that
+    matter here (liquidity sweep, FVG) are local/index-relative, not
+    affected by unrelated flat history earlier in the series.
     """
     candles: list[dict] = []
     ts = BASE_TS
@@ -66,6 +70,14 @@ def _ltf_candles_with_real_confluence(n_pad: int = 17) -> list[dict]:
     for h, l in zip(_ZIGZAG_HIGHS, _ZIGZAG_LOWS):
         candles.append(_c((h + l) / 2, h, l, (h + l) / 2, ts))
         ts += LTF_STEP
+    # Fresh leg (prev/impulse/next): bullish FVG [32, 35], nothing after it
+    # retraces it before the sweep candle below.
+    candles.append(_c(31, 32, 29, 31, ts))
+    ts += LTF_STEP
+    candles.append(_c(31, 40, 30, 39, ts))
+    ts += LTF_STEP
+    candles.append(_c(39, 42, 35, 41, ts))
+    ts += LTF_STEP
     # Final wick: sweeps below the swing low at value 8 but closes back above it.
     candles.append(_c(9, 10, 6, 9.5, ts))
     return candles
@@ -93,7 +105,7 @@ def test_run_below_min_candles_returns_empty_result_without_calling_engines():
     it would still work correctly since generate_signal(symbol, [], [])
     returns None safely, but the point is the loop short-circuits first.
     """
-    ltf_candles = _ltf_candles_with_real_confluence(n_pad=0)  # only 14 total
+    ltf_candles = _ltf_candles_with_real_confluence(n_pad=0)  # only 17 total
     assert len(ltf_candles) < MIN_CANDLES
 
     result = BacktestEngine().run(
@@ -113,7 +125,7 @@ def test_run_produces_a_real_trade_with_real_signal_and_risk_engines():
     pattern must walk forward, generate a real signal, get risk-approved
     (rr=2.0 >= MIN_RR), and simulate a real trade.
     """
-    ltf_candles = _ltf_candles_with_real_confluence(n_pad=17)  # len == MIN_CANDLES
+    ltf_candles = _ltf_candles_with_real_confluence(n_pad=17)  # comfortably above MIN_CANDLES
     htf_candles = _htf_bullish_closed_candles(13)
 
     result = BacktestEngine().run(ltf_candles, htf_candles, SignalEngine(), RiskManager())

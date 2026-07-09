@@ -4,6 +4,76 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Strategy accuracy: fixed duplicate signal generation on already-tested zones
+
+### Fixed
+- **`SignalEngine` could generate near-identical duplicate signals on the
+  same FVG/order-block zone, back-to-back.** `detect_fair_value_gap`/
+  `detect_order_block` report a zone for as long as it remains anywhere
+  in the given candle window, with no awareness of whether price has
+  already traded back into it. Discovered by analyzing a real deep
+  backtest (made possible by the prior pagination fix): in a 28-trade,
+  31-day BTCUSDT/15m sample, 5 pairs (10 of 28 trades, ~36%) were EXACT
+  duplicate re-entries of a setup that had just been stopped out of --
+  the same still-visible zone kept re-qualifying as "the most recent
+  zone" on the next walk-forward step, immediately after a failed
+  attempt at the identical price level.
+
+### Added
+- `app.strategy.utils.is_zone_mitigated(candles, start_index, top, bottom)`:
+  true if any candle strictly between a zone's formation and the current
+  (most recent, excluded) candle has overlapped it -- standard SMC
+  "mitigation" concept. The current/last candle is deliberately excluded
+  since it touching a zone as part of triggering a signal (e.g. a sweep
+  wick tapping straight into a nearby FVG in the same candle) is the
+  setup itself, not a disqualifying prior retest.
+- `SignalEngine.generate_signal()` now excludes any FVG/order-block zone
+  already mitigated before selecting an entry zone. Deliberately
+  implemented at the orchestration layer, NOT inside `detect_fair_value_gap`/
+  `detect_order_block` themselves, which stay unchanged/mitigation-unaware
+  -- `detect_breaker_block` depends on `detect_order_block` returning the
+  raw, un-filtered zone to do its own closed-through/retest analysis on
+  top of it.
+- `detect_order_block()` now also returns `impulse_index` (the confirming
+  impulse candle's index, separate from `index`, the base/zone candle) --
+  needed so mitigation checking starts AFTER the impulse, not after the
+  base candle (whose own confirming impulse routinely overlaps it, which
+  would make every fresh order block look immediately mitigated by its
+  own confirming move).
+
+### Verified
+- `pytest backend/tests/` 169/169 passing (12 new: direct unit-level
+  proofs of `is_zone_mitigated`'s boundary rules, including the
+  last-candle exclusion; an end-to-end regression test reproducing the
+  exact real-world duplicate-signal pattern -- a fresh zone signals once,
+  then price retesting that same zone correctly produces no second
+  signal). 3 existing test fixtures (shared between
+  `test_strategy_signal_engine.py`/`test_backtest_engine.py`) needed a
+  small fix: their "confluence" zigzag pattern's own oscillation was
+  legitimately retracing through every FVG it created internally (a real,
+  correct mitigation detection exposing that those fixtures weren't
+  actually testing a genuinely fresh setup) -- a trailing unmitigated leg
+  was appended to each. Full suite re-run 2x with no flakiness.
+- Real end-to-end, three independent live-data samples (before vs. after
+  this fix, same 3000-candle deep-history fetch as the pagination fix's
+  verification): BTCUSDT/15m flipped from 28 trades/25% win rate/-$577.82
+  to 28 trades/75% win rate/+$462.18 (max drawdown 5.78% -> 2.04%);
+  ETHUSDT/15m (new sample): 19 trades/89.47% win rate/+$614.22/0.45% max
+  drawdown; BTCUSDT/5m (new sample): 10 trades/90.00% win rate/+$257.83/
+  0.40% max drawdown. Consistent, large, positive shift across symbol AND
+  timeframe -- not a single lucky sample.
+
+### Honest caveat (not proof of a profitable strategy yet)
+- Three same-period, overlapping-regime samples are encouraging but NOT
+  sufficient to claim the strategy is validated: no out-of-sample/
+  walk-forward split has been done, trade counts (10-28) are small enough
+  that win-rate confidence intervals are wide, and BTC/ETH move highly
+  correlated with each other so the two 15m samples are not fully
+  independent evidence. This is a real, large, and mechanistically
+  well-understood improvement (a duplicate-trade bug is gone), not yet a
+  claim that this strategy is production-ready. Next validation step
+  flagged in HANDOFF.md.
+
 ## [Unreleased] - Backtest data depth: fixed OKX pagination bug, real deep history now fetchable
 
 ### Fixed
