@@ -10,9 +10,10 @@ the "why" behind specific non-obvious engineering choices, see
 `ROADMAP.md`.
 
 Last updated: 2026-07-11 (night CTO session: built walk-forward
-validation, Phase 1 gate #2 -- BTCUSDT baseline PASSED. Scope locked by
-operator directive this round: Phase 1 = JadeCap only, tracked against 4
-explicit gates, see below. All 3 audit HIGH items wired, A/B tested, and
+validation, Phase 1 gate #2 -- now CLOSED, PASSED unanimously on all 4
+tested assets (BTC/ETH/SOL/XRP). Scope locked by operator directive this
+round: Phase 1 = JadeCap only, tracked against 4 explicit gates, see
+below. All 3 audit HIGH items wired, A/B tested, and
 re-validated across 6 months of real market data on FOUR independent
 assets AND a second independent YEAR via a new `--end-date` time-anchored
 fetch capability. Break-even shows NO reliable direction across either
@@ -31,7 +32,7 @@ section for ideas explicitly out of scope until these 4 gates clear.
 | Gate | Status |
 |---|---|
 | 1. Backtest | ✅ Complete — 4 assets x 2026, BTCUSDT also x 2025 |
-| 2. Walk-forward validation | ✅ Built, PASSED for BTCUSDT baseline (6/6 profitable, 0 losing streak, no degradation). Not yet run for ETH/SOL/XRP |
+| 2. Walk-forward validation | ✅ CLOSED — PASSED on all 4 tested assets (24/24 periods profitable, 0 losing streaks, no degradation anywhere) |
 | 3. Paper trading | ✅ Pipeline complete and running (`scripts/run_paper.py`), no real capital |
 | 4. Small live validation | ❌ Not started — requires operator-issued API keys + staged approval |
 
@@ -170,9 +171,12 @@ script exercising long/short/idempotency/disabled-gate paths end to end.
   parameter-refitting walk-forward (the strategy has no tunable
   parameters to refit yet — see `ENGINEERING_DECISIONS.md` #8); it's a
   genuine check that performance holds up moving forward through
-  chronological time. **Real result: BTCUSDT 2026 baseline PASSED** —
-  6/6 profitable, 0 losing streak, and the second half of the window
-  actually outperformed the first half (no degradation at all).
+  chronological time. **Real result: PASSED unanimously on all 4 tested
+  assets** — BTC ($237->$408), ETH ($367->$541), SOL ($586->$814), XRP
+  ($474->$476) all show 6/6 profitable periods, 0 losing streaks, and a
+  second half that performed flat-or-better than the first. Zero
+  degradation detected on any asset. Phase 1 gate #2 is now closed for
+  the current asset set.
 - **Data-layer bug found and fixed along the way**: `scripts/run_backtest.py`
   requested the same candle COUNT for both LTF and HTF fetches, which
   for a large `--periods` request meant asking for years more HTF

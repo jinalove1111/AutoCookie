@@ -4,6 +4,38 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Phase 1 gate #2 closed: walk-forward validation PASSES on all 4 tested assets
+
+### Ran `--walk-forward` on the remaining 3 assets (BTCUSDT already done, previous entry)
+Same 2026/6-month/6-period baseline, no experimental features:
+
+| Asset | Profitable periods | Max losing streak | First-half avg PnL | Second-half avg PnL | Result |
+|---|---|---|---|---|---|
+| BTCUSDT | 6/6 | 0 | $237.47 | $407.64 | **PASSED** |
+| ETHUSDT | 6/6 | 0 | $367.22 | $541.19 | **PASSED** |
+| SOLUSDT | 6/6 | 0 | $585.79 | $813.65 | **PASSED** |
+| XRPUSDT | 6/6 | 0 | $474.38 | $475.59 | **PASSED** |
+
+24 of 24 periods profitable across all 4 assets, zero losing streaks
+anywhere, and every single asset's second half performed flat-or-better
+than its first half — not one asset showed any hint of degradation.
+This is a unanimous, clean result: JadeCap's baseline strategy (no
+experimental features) walk-forward validates across every asset tested
+so far.
+
+### No code changes
+Pure validation round — reused the walk-forward tooling built in the
+previous entry, no new logic. `pytest` re-run for a regression check
+only (201/201, unchanged).
+
+### Decision
+Phase 1 gate #2 (walk-forward validation) is now considered CLOSED for
+the current asset set (BTC/ETH/SOL/XRP, 2026 window). Note this
+specifically validates the STRATEGY's baseline behavior, not the mixed/
+inconsistent experimental features (break-even, Breaker Block, partial
+TP), which remain separately tracked and off by default. See
+`ROADMAP.md`'s Phase 1 gate table for the updated status.
+
 ## [Unreleased] - Build walk-forward validation (Phase 1 gate #2) — BTCUSDT baseline PASSES
 
 ### Scope note

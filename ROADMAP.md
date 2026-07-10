@@ -27,7 +27,7 @@ Walk-Forward -> Paper Trading -> Small Live Validation.
 | Gate | Status | Evidence |
 |---|---|---|
 | 1. Backtest | ✅ Complete, extensively validated | 4 assets (BTC/ETH/SOL/XRP) x 2026, BTCUSDT also x 2025 — see "Done" below and `CHANGELOG.md` |
-| 2. Walk-forward validation | ✅ Built and PASSED (this round) | `run_backtest.py --walk-forward` — explicit PASS/FAIL criteria (profitable-period ratio, max losing streak, degradation trend), not a parameter-refitting walk-forward (no tunable params exist yet — see `ENGINEERING_DECISIONS.md` #8). BTCUSDT 2026 baseline: **PASSED** (6/6 profitable, 0 losing streak, no degradation — second half actually outperformed first half) |
+| 2. Walk-forward validation | ✅ CLOSED — PASSED on all 4 tested assets | `run_backtest.py --walk-forward` — explicit PASS/FAIL criteria (profitable-period ratio, max losing streak, degradation trend), not a parameter-refitting walk-forward (no tunable params exist yet — see `ENGINEERING_DECISIONS.md` #8). BTC/ETH/SOL/XRP 2026 baselines: **all PASSED** (24/24 periods profitable, 0 losing streaks anywhere, every asset's second half flat-or-better than its first) |
 | 3. Paper trading | ✅ Pipeline complete and running | `scripts/run_paper.py` — real open/close/PnL against live OKX data, no real capital. Break-even wired in (off by default, permanently — see research findings) |
 | 4. Small live validation | ❌ Not started, intentionally gated | Requires operator-issued API keys + staged approval — explicit stop condition, not a CTO-mode decision |
 
@@ -144,17 +144,21 @@ varied conditions):
   2026 baseline PASSED** — 6/6 profitable, 0 losing streak, no
   degradation (second half actually outperformed the first). This is
   the formal Phase 1 gate #2 artifact.
+- ~~Run `--walk-forward` on the other 3 assets' baselines
+  (ETH/SOL/XRP)~~ — DONE. **All 4 assets PASSED**: 24/24 periods
+  profitable, 0 losing streaks anywhere, every asset's second half
+  flat-or-better than its first (BTC $237->$408, ETH $367->$541, SOL
+  $586->$814, XRP $474->$476). Phase 1 gate #2 is now CLOSED for the
+  current asset set. This specifically validates the baseline
+  strategy's forward-time consistency, not the mixed experimental
+  features (break-even/Breaker Block/partial-TP), which stay separately
+  tracked.
 
 See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all of this.
 
 ## Immediate (highest ROI, unblocked, no operator input needed)
 
-1. **Run `--walk-forward` on the other 3 assets' baselines (ETH/SOL/XRP)**
-   — only BTCUSDT has a formal walk-forward PASS/FAIL result so far.
-   Completing this for all 4 assets closes out Phase 1 gate #2
-   thoroughly before treating it as fully done project-wide, not just
-   for one asset.
-2. **Run more `--end-date` cross-year tests, prioritized over more
+1. **Run more `--end-date` cross-year tests, prioritized over more
    assets** — one time-anchored BTCUSDT test just produced a bigger
    revision to the break-even story (a sign flip on the SAME asset)
    than three additional assets combined. Natural next steps: (a) a
@@ -162,13 +166,13 @@ See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all of this.
    given `--end-date` now works), (b) the same 2025 window on
    ETHUSDT/SOLUSDT/XRPUSDT to see whether Partial TP's time-robustness
    holds for them too.
-3. **Break-even and Breaker Block: stop looking for a "final verdict" at
+2. **Break-even and Breaker Block: stop looking for a "final verdict" at
    all — treat "no reliable direction across assets OR time" as the
    actual, settled conclusion.** Both now show sign flips or
    inconsistent effects across every axis tested (4 assets, 2 time
    windows on the asset with the strongest original signal). Further
    testing of either dimension alone has clearly diminishing ROI.
-4. **`ENABLE_BREAKEVEN` stays off by default, permanently** — reaffirmed,
+3. **`ENABLE_BREAKEVEN` stays off by default, permanently** — reaffirmed,
    now by a same-asset sign flip across time in addition to the earlier
    cross-asset coin flip. This is not being revisited without a
    fundamentally different kind of evidence (e.g. a parameter change
@@ -176,7 +180,7 @@ See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all of this.
 
 ## Near-term (needs the above first, or is inherently larger scope)
 
-5. **Parameter sweep of `_LOOKBACK`/`_IMPULSE_MULT`/`_STOP_BUFFER`/`_RR`/
+4. **Parameter sweep of `_LOOKBACK`/`_IMPULSE_MULT`/`_STOP_BUFFER`/`_RR`/
    `BREAKEVEN_TRIGGER_R`/`PARTIAL_TP_TRIGGER_R`/`PARTIAL_TP_PORTION`** —
    all seven are disclosed-as-untuned defaults. **Hard rule,
    non-negotiable**: any sweep MUST reserve a subset of `--periods`
@@ -190,7 +194,7 @@ See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all of this.
    rate/RR profile, a smaller `PARTIAL_TP_TRIGGER_R` or a different
    `_RR` might change that conclusion -- worth investigating with proper
    held-out discipline, not by assumption.
-6. **Resolve the spec/implementation ambiguity in confluence strength**
+5. **Resolve the spec/implementation ambiguity in confluence strength**
    (audit item #9) — `docs/strategy_spec.md` section 6 reads as requiring
    bias + sweep + CHOCH + FVG/OB all in confluence; the actual code
    requires only bias + (sweep OR choch) + (FVG OR OB), a strictly
@@ -198,7 +202,7 @@ See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all of this.
    confluence (more factors aligned) produces meaningfully better
    trades, or whether the looser bar is correct and the spec wording
    should be relaxed to match reality instead.
-7. **Equal-highs/equal-lows liquidity detection** (audit item #3) —
+6. **Equal-highs/equal-lows liquidity detection** (audit item #3) —
    `detect_liquidity_sweep()` only recognizes single swing-point sweeps;
    real SMC also treats clusters of near-equal highs/lows as a stronger
    resting-liquidity signal. Neither the spec nor the code currently

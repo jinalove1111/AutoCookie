@@ -1,6 +1,22 @@
 # HANDOFF — JadeCap Automated Trading Bot
 
-## 상태: (CEO/CTO 스코프락 세션) operator가 명시적으로 **Phase 1 범위 고정**을 지시함 — "JadeCap 하나를 수익성 있는 자동매매 시스템으로 만드는 것"만이 유일한 목표, Backtest→Walk-Forward→Paper Trading→Small Live 4개 게이트로 관리. multi-strategy platform·quant research platform 등은 명시적으로 금지되어 ROADMAP.md의 "Phase 2 (deferred)" 섹션으로 이동 처리함. 이 지시에 따라 **Phase 1 게이트 #2(walk-forward validation)를 신규 구현** — 기존엔 `--periods`로 기간을 나누기만 했지 "PASS/FAIL 판정"이 없었음. `walk_forward_report()`(수익 기간 비율 ≥66%, 연속 손실 기간 ≤2, 전반부-후반부 퇴화 체크의 3개 명시적 기준) + `--walk-forward` CLI 플래그 신규. **실제 결과: BTCUSDT 2026 baseline이 PASSED**(6/6 수익, 연속손실 0, 후반부가 오히려 전반부보다 더 좋은 성과 — 퇴화 전혀 없음) — 이것이 JadeCap의 공식 Phase 1 게이트 #2 산출물. `scripts/run_backtest.py`의 순수 함수들(기존 `split_into_periods` 포함, 지금까지 pytest 커버리지 0이었음)에 신규 테스트 10종 추가, 전체 `pytest` **201/201 통과**. Live 관련 코드는 여전히 전무 — Small Live(게이트 #4)는 operator의 명시적 승인 대기 중
+## 상태: (CEO/CTO 스코프락 세션) walk-forward validation(Phase 1 게이트 #2)을 **4개 자산 전부에 대해 실행 완료 — 전부 PASSED**. BTC($237→$408)/ETH($367→$541)/SOL($586→$814)/XRP($474→$476) 전부 6/6 수익 기간, 연속손실 0, 퇴화 없음(오히려 모든 자산에서 후반부가 전반부와 같거나 더 좋음) — 24/24 기간 만장일치. **Phase 1 게이트 #2가 현재 테스트된 자산 범위에서 공식적으로 CLOSED됨**. 코드 변경 없음(기존 walk-forward 도구 재사용, 순수 실행 라운드). 전체 `pytest` 201/201 유지. Live 관련 코드는 여전히 전무 — Small Live(게이트 #4)는 operator의 명시적 승인 대기 중
+
+## 전체 회차 (walk-forward validation을 나머지 3개 자산에도 실행 — Phase 1 게이트 #2, 4개 자산 전부 PASSED로 CLOSED)
+- [x] 직전 회차에서 BTCUSDT만 `--walk-forward` 실행했었음 — ROADMAP.md "Immediate" 1순위였던 "나머지 3개 자산(ETH/SOL/XRP)도 실행"을 이어서 진행
+- [x] 동일 2026년 6개월/6기간 baseline(실험적 기능 전부 비활성)으로 3개 자산 전부 `--walk-forward` 실행:
+
+  | 자산 | 수익 기간 | 최대 연속손실 | 전반부 평균 PnL | 후반부 평균 PnL | 결과 |
+  |---|---|---|---|---|---|
+  | BTCUSDT | 6/6 | 0 | $237.47 | $407.64 | **PASSED** |
+  | ETHUSDT | 6/6 | 0 | $367.22 | $541.19 | **PASSED** |
+  | SOLUSDT | 6/6 | 0 | $585.79 | $813.65 | **PASSED** |
+  | XRPUSDT | 6/6 | 0 | $474.38 | $475.59 | **PASSED** |
+
+- [x] **만장일치 결과**: 4개 자산 24/24 기간 전부 수익, 연속손실 0건, 어느 자산에서도 퇴화 트렌드 없음(전부 후반부가 전반부와 같거나 더 좋은 성과) — JadeCap baseline 전략이 테스트된 모든 자산에서 walk-forward 검증을 통과함
+- [x] **코드 변경 없음** — 직전 회차에서 만든 도구를 재사용한 순수 실행/검증 라운드. 전체 `pytest backend/tests/` **201/201 유지**(회귀 확인용 재실행)
+- [x] `CHANGELOG.md`(4자산 비교표)/`ROADMAP.md`(Phase 1 게이트 표 갱신 — 게이트 #2를 "CLOSED"로, 관련 항목 번호 재정렬)/`PROJECT_STATUS.md`(게이트 표 + 연구결과 갱신) 갱신
+- [x] git commit/push 예정 (`origin/master`) — operator의 스코프락 지시("Backtest→Walk-Forward→Paper Trading→Small Live 완료 전까지 목표 불변, 계속 자율 진행")에 따라 계속 진행. 이 태스크는 API 자격증명/라이브 승인/보안/외부유료서비스 어디에도 해당하지 않음
 
 ## 전체 회차 (operator의 Phase 1 스코프락 지시 처리 + walk-forward validation 신규 구현(Phase 1 게이트 #2) — BTCUSDT baseline PASSED)
 - [x] **operator의 스코프락 지시 수신 및 처리**: "JadeCap 하나를 수익성 있는 자동매매 시스템으로 만드는 것"이 Phase 1의 유일한 목표라는 명시적 지시. Phase 1 체크리스트: (1) JadeCap 구현 완료 (2) 모든 룰 백테스트 검증 (3) walk-forward validation 수행 (4) paper trading 준비 (5) production-ready risk control 구축 (6) paper trading 준비 완료 상태 도달. "이 목표에 직접 기여하지 않는 아이디어는 ROADMAP.md에 Phase 2로 문서화하고 구현하지 않는다"는 명시적 금지 규칙도 수신
@@ -434,11 +450,10 @@
 ## 현재 위치
 **operator 스코프락 발효 중**: Phase 1 목표는 오직 "JadeCap 하나를 수익성 있는 자동매매 시스템으로 완성"하는 것 — Backtest → Walk-Forward → Paper Trading → Small Live 4개 게이트로만 진행 판단. 멀티전략/퀀트 리서치 플랫폼 등은 명시적으로 Phase 2(ROADMAP.md에 문서화만, 구현 금지)로 이동됨.
 
-**Phase 1 게이트 현황**: (1) Backtest ✅ 완료(4자산×2026 + BTC×2025) (2) Walk-Forward ✅ 신규 구축, BTCUSDT baseline PASSED(ETH/SOL/XRP는 아직 미실행) (3) Paper Trading ✅ 파이프라인 완료·가동 중(break-even 배선, 기본 비활성) (4) Small Live ❌ operator 승인 대기.
+**Phase 1 게이트 현황**: (1) Backtest ✅ 완료(4자산×2026 + BTC×2025) (2) Walk-Forward ✅ **CLOSED — 4개 자산 전부 PASSED**(24/24 기간 수익, 연속손실 0, 퇴화 없음) (3) Paper Trading ✅ 파이프라인 완료·가동 중(break-even 배선, 기본 비활성) (4) Small Live ❌ operator 승인 대기.
 
 Strategy > Risk > Backtest > Paper Trading > Dashboard 전 계층의 배관 갭은 전부 해소됨. 감사 HIGH 항목 3개 전부 A/B 검증 완료 — 4개 자산(BTC/ETH/SOL/XRP, 전부 2026년) + BTCUSDT의 2개 연도(2025/2026)까지 검증. **break-even**: 자산 축(2승2패)과 시간 축(BTC 단독으로도 +9.2%↔-1.9% 부호 반전) 양쪽 다 신뢰 방향 없음 — `ENABLE_BREAKEVEN` 기본 False **영구 확정**. **Breaker Block**: 대체로 부정, 일관성 약함. **Partial TP**: 4개 자산 + BTC 2개 연도 전부 일관되게 부정 — 유일하게 "적극 비추천" 근거를 갖춘 항목. **다음 최고-ROI 후보 (Phase 1 게이트 완료 우선순위)**:
-- **Walk-forward를 ETH/SOL/XRP에도 실행**: 현재 BTCUSDT만 공식 PASS/FAIL 판정을 받음 — 게이트 #2를 프로젝트 전체 자산으로 완전히 닫으려면 필요
-- **`--end-date`로 추가 교차-연도 검증**: (a) 2024년으로 더 과거, (b) ETH/SOL/XRP도 2025년으로 검증
+- **`--end-date`로 추가 교차-연도 검증**: (a) 2024년으로 더 과거, (b) ETH/SOL/XRP도 2025년으로 검증(walk-forward도 함께 실행해 2025년 데이터에 대한 게이트 #2 재확인 가능)
 - **break-even/Breaker Block에 대해 "최종 결론 찾기"를 그만두는 것 고려**: 자산·시간 두 축 모두에서 신뢰 방향이 없다는 게 이미 충분히 확정적인 결론
 - **`_LOOKBACK`/`_IMPULSE_MULT`/`_STOP_BUFFER`/`_RR`/`BREAKEVEN_TRIGGER_R`/`PARTIAL_TP_TRIGGER_R`/`PARTIAL_TP_PORTION` 파라미터 재검토**: 파라미터 스윕을 한다면 **반드시** `--periods`로 나눈 일부 기간에서만 스윕하고 나머지는 최종 확인에만 사용
 - **scope 경계**: `/dashboard/signals`는 `run_paper.py`에서만 배선(`run_backtest.py`는 의도적으로 안 건드림)
