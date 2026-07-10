@@ -399,3 +399,48 @@ experiments that had already produced results once. Accepted because
 the Breaker Block revision alone justified the cost -- it changed a
 real conclusion this project would otherwise be carrying forward
 incorrectly.
+
+---
+
+## 15. "Reproduced" must specify what varied between samples -- a second time window is not a second asset
+
+**Decision**: when re-validating an A/B finding, the writeup (CHANGELOG.md/
+PROJECT_STATUS.md/ROADMAP.md) always states explicitly what changed
+between the two samples being compared (same asset/different time window,
+vs. different asset/same time window, vs. both) rather than saying only
+"reproduced" or "did not reproduce."
+
+**Why**: decision #14 re-ran break-even/Breaker Block/partial-TP on a
+6-month BTCUSDT sample and called break-even "the most robust of the
+three findings -- same direction on two independent datasets," since it
+reproduced its small-sample result (+13.5% -> +9.2%). That phrasing was
+technically true but misleading: both of those "independent datasets"
+were BTCUSDT, just different time windows. When break-even was then
+tested on a 6-month ETHUSDT sample (same methodology, different asset),
+it came back slightly NEGATIVE (-1.9%, mixed per-period) -- the opposite
+conclusion. Partial-TP and Breaker Block, by contrast, reproduced their
+negative verdicts on ETHUSDT too (even more strongly), so the SAME
+"reproduced across two independent samples" language that turned out to
+be fragile for break-even turned out to be genuinely robust for the
+other two. The lesson is not "re-validation failed" -- it's that
+asset-generalization and time-generalization are different claims with
+different strength, and collapsing them into one word ("reproduced")
+let an overconfident claim about break-even stand for one release cycle
+longer than it should have.
+
+**Alternative considered**: treat any second confirming sample,
+regardless of what varied, as sufficient to call a finding "robust."
+Rejected — this is exactly the failure mode that just occurred: two time
+windows on a correlated single asset gave false confidence that would
+not have survived a single additional asset test.
+
+**Trade-off accepted**: writeups are longer and more hedged than a flat
+"positive"/"negative" verdict would be. Accepted because the entire
+point of this project's evidence-over-assumption philosophy (see
+`ROADMAP.md`'s guiding principle) is defeated if "reproduced" is used
+loosely enough to paper over exactly the kind of gap this decision
+describes. `ENABLE_BREAKEVEN` shipping off-by-default (decision area:
+see paper-trading wiring in CHANGELOG.md) is a direct, practical
+consequence of taking this distinction seriously — an operator reading
+only the headline verdict, not the fine print, still gets the safe
+default.

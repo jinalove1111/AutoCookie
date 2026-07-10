@@ -4,6 +4,70 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Re-validated all 3 audit findings on ETHUSDT: break-even does NOT generalize, the other two do
+
+### Re-validated on a second, independent asset (ROADMAP item #1)
+Same methodology as the BTCUSDT 6-month/6-period re-validation (see the
+entry below): ETHUSDT/15m, `--candles 3000 --periods 6`, same four
+configurations (baseline, `--breakeven`, `--breaker-block`,
+`--partial-tp`), January-July 2026. Baseline: **6 of 6 periods
+profitable** (aggregate $2906.18).
+
+| | P1 | P2 | P3 | P4 | P5 | P6 | Sum |
+|---|---|---|---|---|---|---|---|
+| Baseline | $317.23 | $684.60 | $30.02 | $568.11 | $692.01 | $614.22 | $2906.18 |
+| Break-even | $401.77 | $684.60 | -$18.17 | $568.11 | $601.63 | $614.22 | **$2852.16 (-1.9%)** |
+| Breaker Block | $308.06 | $667.97 | $30.02 | $568.11 | $611.84 | $372.57 | **$2558.56 (-12.0%)** |
+| Partial TP | $269.30 | $507.60 | $0.94 | $392.71 | $463.05 | $245.31 | **$1878.91 (-35.4%)** |
+
+- **Break-even: NOT REPRODUCED — this is the headline finding.**
+  BTCUSDT showed +13.5% (small sample) then +9.2% (6-month sample), both
+  positive, which is why it was just wired into paper trading (previous
+  entry, same file). ETHUSDT's 6-month result is **slightly negative**
+  (-1.9%), and the period-by-period picture is genuinely mixed, not
+  uniformly bad: P1 improved (+$84.54), P3 flipped from a small win to a
+  small loss (-$48.19, win rate 60%->40% — a trade that would have hit
+  take-profit instead reversed after 1R and exited near breakeven, which
+  is exactly the known risk/mechanism of this feature), P5 got worse
+  (-$90.38), and P2/P4/P6 were unaffected (the trigger was never reached
+  in those periods). Net: break-even's benefit looks **asset-dependent,
+  not universal** — positive on BTCUSDT across two independent samples,
+  roughly neutral-to-slightly-negative on ETHUSDT. This does not
+  invalidate wiring it into paper trading (it ships off by default,
+  opt-in via `ENABLE_BREAKEVEN`, and an operator running ETHUSDT now has
+  the evidence to leave it disabled) — but it does mean the earlier
+  "reproduced positive on two independent samples" framing overstated
+  generality: both of those samples were BTCUSDT. Two independent TIME
+  WINDOWS on the same asset is weaker evidence than one time window each
+  on two different assets, and this result is exactly why that
+  distinction matters.
+- **Breaker Block: REPRODUCED negative, more strongly.** BTCUSDT was
+  -3.8% (1 of 6 periods affected). ETHUSDT is -12.0% (4 of 6 periods
+  affected, all negative, 0 positive). Same direction on both assets now
+  — this meaningfully strengthens the "kept optional, not recommended"
+  verdict from the prior entry.
+- **Partial TP: REPRODUCED negative, again very strongly.** BTCUSDT
+  -32.6% (6 of 6 periods worse), ETHUSDT -35.4% (6 of 6 periods worse) —
+  12 of 12 periods worse across both assets now, no exceptions. The
+  mechanistic explanation (fixed 2:1 RR + high win rate means banking
+  half the position at 1R trades away more upside from winners than it
+  protects from losers) holds on a second, independent asset.
+
+### Verified
+- `pytest backend/tests/` 190/190 passing (no code changes this entry —
+  research/validation only, matching this project's "don't add features
+  unless the strategy becomes more complete or statistically stronger"
+  discipline from the coverage-audit round).
+
+### Decision
+No code changes from this finding alone. `ENABLE_BREAKEVEN` stays
+off-by-default (already was) — this result is a reason FOR that default,
+not a reason to revert the paper-trading wiring itself: an operator
+choosing to enable it for BTCUSDT now has stronger evidence for doing so
+than for ETHUSDT. See `ROADMAP.md` for the natural follow-up (more
+assets, more years) before any of these three findings should be treated
+as settled either way.
+
 ## [Unreleased] - Wire break-even stop management into paper trading
 
 ### Added

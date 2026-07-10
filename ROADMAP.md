@@ -57,23 +57,37 @@ varied conditions):
   short, idempotency (a stop already at breakeven is never re-processed
   or re-written), and the disabled-gate path — see CHANGELOG.md.
 
+- ~~Re-run the 6-month deep test on ETHUSDT~~ — DONE. **Break-even does
+  NOT reproduce**: +9.2% on BTCUSDT, -1.9% on ETHUSDT (mixed per-period,
+  not uniformly negative) — the earlier "reproduced positive on two
+  independent samples" claim rested on two BTCUSDT time windows, not two
+  different assets; this is weaker evidence than that framing implied.
+  **Breaker Block and Partial TP both REPRODUCE their negative
+  verdicts, more strongly**: Breaker Block -3.8% (BTC) -> -12.0% (ETH,
+  4/6 periods affected vs. 1/6 on BTC); Partial TP -32.6% (BTC) ->
+  -35.4% (ETH, 6/6 periods worse on both assets, 12/12 total). No code
+  changed from this finding — `ENABLE_BREAKEVEN` stays off by default,
+  which this result is a reason FOR, not against. See CHANGELOG.md for
+  the full comparison table.
+
 See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all of this.
 
 ## Immediate (highest ROI, unblocked, no operator input needed)
 
-1. **Re-run the 6-month deep test on ETHUSDT** — the 6-month/6-period
-   validation above was BTCUSDT only (time-boxed this round). Confirming
-   the same three verdicts (break-even positive, partial-TP negative,
-   breaker-block slightly negative) hold on ETHUSDT too would meaningfully
-   strengthen all three findings; a DIFFERENT verdict on ETHUSDT would be
-   equally informative (asset-specific rather than universal effects).
-2. **Add more, less-correlated symbols** — only BTCUSDT/ETHUSDT checked
-   so far (highly correlated with each other). Lower-correlation assets
-   would make all three findings above meaningfully stronger evidence.
-3. **Extend even further back in time / to other years** — the 6-month
+1. **Add more, less-correlated symbols** — only BTCUSDT/ETHUSDT checked
+   so far (highly correlated with each other, and break-even's ETHUSDT
+   result already shows they don't even agree with each other). A third,
+   genuinely less-correlated asset would help determine whether
+   break-even is "BTCUSDT-specific" or "sometimes positive, sometimes
+   not, no reliable pattern yet."
+2. **Extend even further back in time / to other years** — the 6-month
    sample (Jan-Jul 2026) is still one continuous span of recent history.
    Genuinely different YEARS (different macro conditions) would be a
    stronger test than a longer contiguous window in the same period.
+3. **Consider whether `ENABLE_BREAKEVEN` needs to become symbol-aware**
+   (e.g. a per-symbol override) rather than a single global on/off switch
+   — premature until at least a third asset's result is in, but worth
+   flagging now given BTCUSDT and ETHUSDT already disagree.
 
 ## Near-term (needs the above first, or is inherently larger scope)
 
@@ -129,9 +143,10 @@ See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all of this.
 - **Live Trading** (`LiveBroker`, `exchange/okx_client.py`,
   `exchange/orangex_client.py`) — all `NotImplementedError` stubs,
   deliberately. Requires, IN ORDER: (a) out-of-sample validation across
-  genuinely different market regimes (partially done -- see the 6-month
-  BTCUSDT result above, but ETHUSDT and other years/assets remain, see
-  items #1-3 above), (b) operator-issued OKX API keys with withdrawal
+  genuinely different market regimes (partially done -- 6-month results
+  now exist for both BTCUSDT and ETHUSDT, see above, but they DISAGREE on
+  break-even, and other years/less-correlated assets remain untested, see
+  items #1-2 above), (b) operator-issued OKX API keys with withdrawal
   disabled, (c) a small live-capital limit agreed with the operator, (d)
   step-by-step operator approval at each stage per
   `docs/live_trading_checklist.md`. None of this proceeds without the

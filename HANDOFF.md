@@ -1,6 +1,26 @@
 # HANDOFF — JadeCap Automated Trading Bot
 
-## 상태: (야간 CTO 세션, founder 부재, 계속 진행 중) 로드맵 1순위였던 "break-even을 paper trading에 배선" 완료. `TradeTracker.update_stop_loss()` 신규(미존재/종료된 trade면 ValueError, close_trade와 동일한 계약), `settings.ENABLE_BREAKEVEN`/`BREAKEVEN_TRIGGER_R` 신규(후자는 BacktestEngine과 공유하는 단일 소스 — 기존엔 BacktestEngine에 하드코딩 `1.0`이었음), `scripts/run_paper.py::_maybe_move_to_breakeven()` 신규 — exit-check 스텝 바로 다음, concurrency guard 이전에 배선(BacktestEngine의 "같은 캔들/같은 패스 내에서는 항상 기존 stop으로 먼저 판정" 원칙과 동일). 실제 stop 이동 계산은 새로 만들지 않고 기존 `OrderManager.move_to_breakeven()`을 재사용 — ENGINEERING_DECISIONS.md 항목 #6에서 이미 예견했던 재사용 지점. 세 실험(break-even/breaker-block/partial-tp) 중 두 독립 표본에서 재현된 것은 break-even뿐이라 이것만 paper trading에 배선함(breaker-block/partial-tp는 근거 부족으로 backtest 전용 유지). 신규 pytest 3종 + 실제 임시 SQLite DB 검증 스크립트(long/short/멱등성/비활성 게이트 전부 통과), 전체 `pytest` 190/190 통과. 참고: 세션 도중 "position exit-checking을 paper trading에 배선"이라는 이름의 백그라운드 서브에이전트가 2시간 넘게 진행 없이 멈춰 있었고 직접 상태 확인 메시지에도 응답이 없었음 — git log 확인 결과 그 작업은 이미 이전 회차(`8e7b1b3` 커밋)에서 완료되어 있었으므로(중복/구식 태스크) 대기를 중단하고 이번 작업을 직접 진행함. Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+## 상태: (야간 CTO 세션, founder 부재, 계속 진행 중) break-even paper trading 배선 완료 직후, 로드맵 1순위였던 "ETHUSDT 6개월 딥 재검증"까지 완료. **가장 중요한 결과**: **break-even이 ETHUSDT에서는 재현 안 됨**(BTC +9.2% vs ETH -1.9%, 기간별로 혼재된 결과 — 1개 기간 개선/2개 기간 악화/3개 기간 무영향) — 지금까지 "두 독립 표본에서 재현됨"이라고 서술했던 것이 실은 BTCUSDT의 서로 다른 두 시간 구간이었을 뿐, 서로 다른 자산이 아니었다는 방법론적 허점을 발견함(ENGINEERING_DECISIONS.md 항목 #15로 정식 기록). 반면 **Breaker Block**(-3.8%→-12.0%, 6개 중 4개 기간 악화)과 **Partial TP**(-32.6%→-35.4%, 두 자산 합쳐 12/12 기간 전부 악화)는 오히려 더 강하게 재현됨. 코드 변경은 없음(순수 재검증) — `ENABLE_BREAKEVEN` 기본값 False는 그대로 유지, 이번 결과가 바로 그 기본값이 실제로 의미 있다는 근거가 됨. Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+
+## 전체 회차 (ETHUSDT 6개월 딥 데이터 재검증 — break-even 결론이 자산별로 다름을 발견, 로드맵 1순위)
+- [x] **배경**: break-even paper trading 배선 완료 직후 바로 이어서, 로드맵 "Immediate" 1순위였던 ETHUSDT 6개월 재검증 진행(라이브 자격증명/승인/보안/외부유료서비스 어디에도 해당 안 함 — 계속 진행 조건 충족)
+- [x] BTCUSDT 검증과 완전히 동일한 방법론: ETHUSDT/15m, `--candles 3000 --periods 6`(2026년 1월~7월), baseline/breakeven/breaker-block/partial-tp 4개 설정 전부 실행. baseline 자체가 6개 기간 전부 수익(합산 $2906.18)
+
+  | | P1 | P2 | P3 | P4 | P5 | P6 | 합계 |
+  |---|---|---|---|---|---|---|---|
+  | Baseline | $317.23 | $684.60 | $30.02 | $568.11 | $692.01 | $614.22 | $2906.18 |
+  | Break-even | $401.77 | $684.60 | -$18.17 | $568.11 | $601.63 | $614.22 | **$2852.16 (-1.9%)** |
+  | Breaker Block | $308.06 | $667.97 | $30.02 | $568.11 | $611.84 | $372.57 | **$2558.56 (-12.0%)** |
+  | Partial TP | $269.30 | $507.60 | $0.94 | $392.71 | $463.05 | $245.31 | **$1878.91 (-35.4%)** |
+
+- [x] **Break-even: 재현 안 됨(가장 중요한 발견)** — BTC는 +13.5%(소표본)→+9.2%(6개월)로 재현됐었는데, ETH는 -1.9%로 방향이 뒤집힘. 기간별로 보면 완전히 나쁜 건 아니고 혼재됨: P1 개선(+$84.54), P3는 원래 승리했을 트레이드가 1R 도달 후 반전해서 breakeven 근처에서 청산되며 승→패 전환(승률 60%→40%, -$48.19 — 이게 바로 break-even의 알려진 리스크 메커니즘이 실제로 발현된 사례), P5 악화(-$90.38), P2/P4/P6은 트리거 자체가 발동 안 해서 무영향. **결론: break-even의 효과는 자산-의존적이지 보편적이지 않음**
+- [x] **방법론적 교훈 발견 및 기록(ENGINEERING_DECISIONS.md 항목 #15 신규)**: "재현됨(reproduced)"이라는 표현이 지금까지 무엇이 달라졌는지(같은 자산의 다른 시간 구간 vs 다른 자산)를 명시하지 않아서 오해를 낳을 뻔했음. break-even의 "두 독립 표본에서 재현"은 실은 BTCUSDT의 서로 다른 두 시간 구간이었을 뿐 — 서로 다른 자산 테스트(ETHUSDT)에서는 결론이 뒤집힘. 반면 partial-tp/breaker-block은 진짜로 자산이 달라져도 재현됐으므로, 같은 "재현" 표현이 실제로는 서로 다른 신뢰도를 가리키고 있었음. 앞으로 모든 재검증 문서는 "무엇이 달라졌는지"를 명시하기로 함
+- [x] **Breaker Block: 더 강하게 재현(부정)** — BTC -3.8%(6개 중 1개 기간 영향) → ETH -12.0%(6개 중 4개 기간 영향, 전부 부정, 개선 0건). 두 자산에서 같은 방향으로 재현, 규모는 ETH가 훨씬 큼
+- [x] **Partial TP: 더 강하게 재현(부정)** — BTC -32.6% → ETH -35.4%. 두 자산 전 기간(12/12) 예외 없이 전부 악화 — 기계적 설명(고정 2:1 RR + 높은 승률 → partial 청산이 승자의 upside를 매번 크게 깎아먹음)이 두 번째 독립 자산에서도 그대로 유지됨
+- [x] **코드 변경 없음** — 순수 재검증/연구 라운드(감사 원칙 준수: "전략이 더 완전해지거나 통계적으로 더 강해지지 않는 한 기능을 계속 추가하지 않는다"). `ENABLE_BREAKEVEN` 기본값(False)은 그대로 유지 — 이번 발견이 바로 그 기본값을 지지하는 근거가 됨(BTCUSDT 증거만 보고 기본값을 True로 바꿨다면 지금 ETHUSDT에서 소폭 손해를 보고 있었을 것)
+- [x] 전체 `pytest backend/tests/` **190/190 통과**(코드 변경 없으므로 회귀 확인용 재실행)
+- [x] `CHANGELOG.md`(신규 Unreleased 섹션, 전체 비교표)/`ROADMAP.md`(1순위 항목 Done 이동, 번호 재정렬, 신규 후속 항목 "symbol-aware ENABLE_BREAKEVEN" 추가)/`PROJECT_STATUS.md`(연구 결과·honest caveats 전면 갱신)/`ENGINEERING_DECISIONS.md`(항목 #15 신규) 갱신
+- [x] git commit/push 예정 (`origin/master`) — operator가 "계속하라, CTO처럼 사고하라, API 자격증명/라이브 승인/보안/외부유료서비스 아니면 계속 진행"이라고 명시적으로 재확인함(이 태스크는 그 어느 카테고리에도 해당하지 않음)
 
 ## 전체 회차 (break-even을 paper trading에 배선 — 로드맵 1순위, "계속하라" 지시에 따라 진행)
 - [x] **배경**: 세 A/B 실험(break-even/breaker-block/partial-tp) 중 두 독립 표본(31일 소표본, 6개월 딥표본)에서 같은 방향으로 재현된 것은 break-even뿐(+13.5% → +9.2%) — 로드맵에서 이것만 paper trading 배선 대상 1순위로 승격했었음
@@ -323,9 +343,9 @@
 - [x] ~~CircuitBreaker 상태는 프로세스 메모리에만 존재~~ — DB 영속화 완료(위 참조, `028087a`)
 
 ## 현재 위치
-Strategy > Risk > Backtest > Paper Trading > Dashboard 전 계층의 배관 갭은 전부 해소됨. 감사 HIGH 항목 3개 전부 A/B 검증 완료, 6개월 딥 데이터로 재검증까지 완료: **break-even**(딥표본 +9.2%, 소표본 +13.5%와 재현 — 긍정적)/**Partial TP**(딥표본 -32.6%, 소표본 -31.4%와 재현 — 부정적)/**Breaker Block**(소표본 중립 → 딥표본 소폭 부정). 이번 회차에서 **break-even을 실제 paper trading에 배선 완료**(`ENABLE_BREAKEVEN`, 기본 False) — 세 항목 중 두 독립 표본에서 재현된 유일한 항목이라 이것만 배선함. **다음 최고-ROI 후보 (우선순위순)**:
-- **ETHUSDT도 동일한 6개월 딥 데이터로 재검증**: 이번 회차는 BTCUSDT만 재검증함(시간 관계상) — ETHUSDT에서도 break-even 긍정/partial-tp 부정/breaker-block 소폭부정이 재현되는지 확인하면 증거력이 한층 강해짐
-- **상관성 낮은 추가 심볼 확보**: 지금까지 BTCUSDT/ETHUSDT만 확인(서로 상관성 높음)
+Strategy > Risk > Backtest > Paper Trading > Dashboard 전 계층의 배관 갭은 전부 해소됨. 감사 HIGH 항목 3개 전부 A/B 검증 완료, 이제 BTCUSDT/ETHUSDT 양쪽 6개월 딥 데이터로 재검증까지 완료: **break-even**(BTC +9.2% 긍정 vs **ETH -1.9% 부정 — 자산 간 재현 안 됨**, 자산-의존적 효과로 결론)/**Partial TP**(BTC -32.6% → ETH -35.4%, 두 자산 12/12 기간 전부 악화로 강하게 재현)/**Breaker Block**(BTC -3.8% → ETH -12.0%, 두 자산 모두 부정, ETH가 더 강함). `ENABLE_BREAKEVEN`은 paper trading에 배선은 됐지만 기본 False 유지(정확히 이런 자산별 불일치를 대비한 선택이었고, 실제로 그 선택이 옳았음이 증명됨). **다음 최고-ROI 후보 (우선순위순)**:
+- **상관성 낮은 세 번째 심볼 확보**: BTCUSDT/ETHUSDT는 서로 상관성 높은데도 break-even 결론이 이미 갈렸음 — 진짜 상관성 낮은 자산에서 어느 쪽이 더 흔한 패턴인지 확인 필요
+- **다른 연도로 확장**: 지금까지 두 자산 모두 2026년 1~7월이라는 동일 캘린더 구간만 검증함(자산-일반화는 테스트했지만 시간-일반화는 아직)
 - **`_LOOKBACK`/`_IMPULSE_MULT`/`_STOP_BUFFER`/`_RR`/`BREAKEVEN_TRIGGER_R`/`PARTIAL_TP_TRIGGER_R`/`PARTIAL_TP_PORTION` 파라미터 재검토**: 파라미터 스윕을 한다면 **반드시** `--periods`로 나눈 일부 기간에서만 스윕하고 나머지는 최종 확인에만 사용
 - **scope 경계**: `/dashboard/signals`는 `run_paper.py`에서만 배선(`run_backtest.py`는 의도적으로 안 건드림)
 - **`ltf_bias` 재검토 후보**: 실제 트레이딩 판단에 쓰이게 되면 재확인 필요
