@@ -203,6 +203,24 @@ load-bearing for avoiding overfitting — tune only against a subset of
 periods, verify only against periods never inspected during tuning.
 Skipping this discipline defeats the entire reason the tool exists.
 
+**Follow-up (walk-forward validation built as Phase 1 gate #2)**: the
+operator's scope-lock directive named "walk-forward validation" as an
+explicit, required Phase 1 deliverable distinct from backtesting. Rather
+than build a refitting loop with nothing to refit (which this decision
+already rejected), `run_backtest.py::walk_forward_report()` was added on
+TOP of the existing period-splitting: it takes the same chronological
+period sequence and checks it against explicit PASS/FAIL criteria
+(minimum profitable-period ratio, maximum consecutive losing periods, a
+first-half-vs-second-half degradation check) instead of just printing an
+aggregate sum. This satisfies the actual intent behind "walk-forward
+validation" (does performance hold up moving forward through time,
+un-hidden by averaging) without pretending there's parameter-refitting
+happening where there isn't. First real result: BTCUSDT 2026 baseline
+PASSED (6/6 profitable, 0 losing streak, second half outperformed the
+first). The distinction this decision draws (no refitting mechanism
+exists) remains accurate and unchanged — this follow-up adds a
+validation GATE on top of period-splitting, not a refitting loop.
+
 ---
 
 ## 9. Conservative same-candle ordering for simultaneous stop/target/breakeven touches

@@ -11,6 +11,26 @@ Every item below is ranked by how much it moves the project closer to a
 code it produces. Evidence over assumption; a rule stays in the system
 because data proves it, not because it's popular in ICT/SMC communities.
 
+**Scope lock (operator directive, 2026-07-11)**: the objective for Phase
+1 is narrowly "build, validate, and prove ONE profitable JadeCap
+automated trading system" — nothing else. No multi-strategy platform, no
+quant research platform, no strategy marketplace, no architecture not
+required for JadeCap specifically. Every new item must answer "does this
+directly increase the probability that JadeCap becomes a profitable
+automated trading system?" — if no, it goes in the "Phase 2 (deferred,
+out of scope for now)" section below, not implemented. The objective
+does not change until JadeCap has completed, in order: Backtest ->
+Walk-Forward -> Paper Trading -> Small Live Validation.
+
+## Phase 1 gate status
+
+| Gate | Status | Evidence |
+|---|---|---|
+| 1. Backtest | ✅ Complete, extensively validated | 4 assets (BTC/ETH/SOL/XRP) x 2026, BTCUSDT also x 2025 — see "Done" below and `CHANGELOG.md` |
+| 2. Walk-forward validation | ✅ Built and PASSED (this round) | `run_backtest.py --walk-forward` — explicit PASS/FAIL criteria (profitable-period ratio, max losing streak, degradation trend), not a parameter-refitting walk-forward (no tunable params exist yet — see `ENGINEERING_DECISIONS.md` #8). BTCUSDT 2026 baseline: **PASSED** (6/6 profitable, 0 losing streak, no degradation — second half actually outperformed first half) |
+| 3. Paper trading | ✅ Pipeline complete and running | `scripts/run_paper.py` — real open/close/PnL against live OKX data, no real capital. Break-even wired in (off by default, permanently — see research findings) |
+| 4. Small live validation | ❌ Not started, intentionally gated | Requires operator-issued API keys + staged approval — explicit stop condition, not a CTO-mode decision |
+
 ## Done (this session, night CTO mode)
 
 All three HIGH-priority `docs/strategy_coverage_audit.md` findings are
@@ -111,31 +131,44 @@ varied conditions):
   vs. -32.1% (2025) — now confirmed across 4 assets in one time window
   AND 2 time windows on one asset, the strongest evidence for any single
   finding in this project. See CHANGELOG.md for the full table.
+- ~~Build walk-forward validation (Phase 1 gate #2)~~ — DONE.
+  `scripts/run_backtest.py::walk_forward_report()` + `--walk-forward`
+  CLI flag: evaluates a chronological period sequence against explicit,
+  deterministic criteria (>= 66% profitable periods, <= 2 consecutive
+  losing periods, no first-half-vs-second-half degradation >50%) rather
+  than just an aggregate sum. Deliberately NOT a rolling
+  parameter-refitting walk-forward (see `ENGINEERING_DECISIONS.md` #8 —
+  no tunable parameters exist yet to refit). 10 new unit tests
+  (`test_run_backtest.py`, previously zero coverage for
+  `scripts/run_backtest.py`'s pure functions). **Real result: BTCUSDT
+  2026 baseline PASSED** — 6/6 profitable, 0 losing streak, no
+  degradation (second half actually outperformed the first). This is
+  the formal Phase 1 gate #2 artifact.
 
 See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all of this.
 
 ## Immediate (highest ROI, unblocked, no operator input needed)
 
-1. **Run more `--end-date` cross-year tests, prioritized over more
+1. **Run `--walk-forward` on the other 3 assets' baselines (ETH/SOL/XRP)**
+   — only BTCUSDT has a formal walk-forward PASS/FAIL result so far.
+   Completing this for all 4 assets closes out Phase 1 gate #2
+   thoroughly before treating it as fully done project-wide, not just
+   for one asset.
+2. **Run more `--end-date` cross-year tests, prioritized over more
    assets** — one time-anchored BTCUSDT test just produced a bigger
    revision to the break-even story (a sign flip on the SAME asset)
    than three additional assets combined. Natural next steps: (a) a
    2024 window (further back, only 1 more day-count worth of pagination
    given `--end-date` now works), (b) the same 2025 window on
    ETHUSDT/SOLUSDT/XRPUSDT to see whether Partial TP's time-robustness
-   holds for them too, (c) a genuinely different SEASON within a year
-   (e.g. --end-date near a known volatility event) rather than only
-   different calendar years.
-2. **Break-even and Breaker Block: stop looking for a "final verdict" at
+   holds for them too.
+3. **Break-even and Breaker Block: stop looking for a "final verdict" at
    all — treat "no reliable direction across assets OR time" as the
    actual, settled conclusion.** Both now show sign flips or
    inconsistent effects across every axis tested (4 assets, 2 time
    windows on the asset with the strongest original signal). Further
-   testing of either dimension alone has clearly diminishing ROI;
-   effort is better spent elsewhere (item #1's remaining value is
-   mostly about Partial TP and general regime-characterization, not
-   about resolving these two).
-3. **`ENABLE_BREAKEVEN` stays off by default, permanently** — reaffirmed,
+   testing of either dimension alone has clearly diminishing ROI.
+4. **`ENABLE_BREAKEVEN` stays off by default, permanently** — reaffirmed,
    now by a same-asset sign flip across time in addition to the earlier
    cross-asset coin flip. This is not being revisited without a
    fundamentally different kind of evidence (e.g. a parameter change
@@ -143,7 +176,7 @@ See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all of this.
 
 ## Near-term (needs the above first, or is inherently larger scope)
 
-4. **Parameter sweep of `_LOOKBACK`/`_IMPULSE_MULT`/`_STOP_BUFFER`/`_RR`/
+5. **Parameter sweep of `_LOOKBACK`/`_IMPULSE_MULT`/`_STOP_BUFFER`/`_RR`/
    `BREAKEVEN_TRIGGER_R`/`PARTIAL_TP_TRIGGER_R`/`PARTIAL_TP_PORTION`** —
    all seven are disclosed-as-untuned defaults. **Hard rule,
    non-negotiable**: any sweep MUST reserve a subset of `--periods`
@@ -157,7 +190,7 @@ See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all of this.
    rate/RR profile, a smaller `PARTIAL_TP_TRIGGER_R` or a different
    `_RR` might change that conclusion -- worth investigating with proper
    held-out discipline, not by assumption.
-5. **Resolve the spec/implementation ambiguity in confluence strength**
+6. **Resolve the spec/implementation ambiguity in confluence strength**
    (audit item #9) — `docs/strategy_spec.md` section 6 reads as requiring
    bias + sweep + CHOCH + FVG/OB all in confluence; the actual code
    requires only bias + (sweep OR choch) + (FVG OR OB), a strictly
@@ -165,41 +198,52 @@ See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all of this.
    confluence (more factors aligned) produces meaningfully better
    trades, or whether the looser bar is correct and the spec wording
    should be relaxed to match reality instead.
-6. **Equal-highs/equal-lows liquidity detection** (audit item #3) —
+7. **Equal-highs/equal-lows liquidity detection** (audit item #3) —
    `detect_liquidity_sweep()` only recognizes single swing-point sweeps;
    real SMC also treats clusters of near-equal highs/lows as a stronger
    resting-liquidity signal. Neither the spec nor the code currently
    defines this — would need a spec addition first, then implementation,
    then the same A/B discipline as every other change here.
 
-## Medium-term (architecture / scalability)
+## Phase 2 (deferred, out of scope for Phase 1 — do not implement yet)
 
-7. **Multi-strategy plug-in architecture** — today `SignalEngine` is a
-   single hardcoded pipeline. If/when a second, genuinely different
-   strategy is worth trying (not just parameter variants of the current
-   one), the Strategy Engine's interface (`generate_signal(symbol,
-   ltf_candles, htf_candles) -> TradeSignal | None`) is already a clean
-   enough contract to support multiple implementations behind it — no
-   redesign needed yet, just keep new strategies behind the same
-   interface rather than special-casing them into the existing modules.
-8. **Monte Carlo readiness** — the backtest engine's trade list
-   (`BacktestResult.trades`) already has everything needed (`pnl`,
-   `direction`, `size`, timestamps) to bootstrap/reshuffle trade
-   sequences for Monte Carlo drawdown analysis. Not yet built; a
-   natural next step once there are enough real trades across enough
-   periods to make resampling meaningful (the 6-month sample's 8-28
-   trades per period is still on the small side for resampling).
+Per the operator's scope-lock directive: Phase 1 is JadeCap only. These
+items do not directly increase the probability that JadeCap specifically
+becomes a profitable automated trading system — they are architecture/
+scalability ideas that only become relevant AFTER JadeCap has cleared
+Backtest -> Walk-Forward -> Paper Trading -> Small Live Validation.
+Documented here so they aren't lost, not started.
+
+- **Multi-strategy plug-in architecture** — today `SignalEngine` is a
+  single hardcoded pipeline. If/when a second, genuinely different
+  strategy is worth trying (not just parameter variants of the current
+  one), the Strategy Engine's interface (`generate_signal(symbol,
+  ltf_candles, htf_candles) -> TradeSignal | None`) is already a clean
+  enough contract to support multiple implementations behind it — no
+  redesign needed yet. Explicitly a Phase 2 idea (this would be the
+  first step toward a "multi-strategy platform," which the scope lock
+  names directly as out of scope for Phase 1).
+- **Monte Carlo readiness** — the backtest engine's trade list
+  (`BacktestResult.trades`) already has everything needed (`pnl`,
+  `direction`, `size`, timestamps) to bootstrap/reshuffle trade
+  sequences for Monte Carlo drawdown analysis. Not yet built; a natural
+  next step once there are enough real trades across enough periods to
+  make resampling meaningful (still on the small side for resampling).
+  Not required for JadeCap to clear the 4 Phase 1 gates, so deferred.
 
 ## Explicitly NOT started, and why
 
 - **Live Trading** (`LiveBroker`, `exchange/okx_client.py`,
   `exchange/orangex_client.py`) — all `NotImplementedError` stubs,
-  deliberately. Requires, IN ORDER: (a) out-of-sample validation across
-  genuinely different market regimes (partially done -- 6-month results
-  now exist for FOUR assets, but two of the three experimental features
-  show no reliable cross-asset direction, and genuinely different YEARS
-  remain completely untested, see item #1 above), (b) operator-issued
-  OKX API keys with withdrawal
+  deliberately. This is Phase 1 gate #4 (Small Live Validation),
+  requires, IN ORDER: (a) out-of-sample validation across genuinely
+  different market regimes (substantial progress -- 6-month results now
+  exist for FOUR assets AND 2 years on BTCUSDT, walk-forward validation
+  built and PASSED for BTCUSDT baseline, but two of the three
+  experimental features show no reliable direction across assets OR
+  time, and gates #2/#3 need to be completed for the other assets too,
+  see items #1-2 above), (b) operator-issued OKX API keys with
+  withdrawal
   disabled, (c) a small live-capital limit agreed with the operator, (d)
   step-by-step operator approval at each stage per
   `docs/live_trading_checklist.md`. None of this proceeds without the

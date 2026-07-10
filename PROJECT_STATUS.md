@@ -9,16 +9,31 @@ the "why" behind specific non-obvious engineering choices, see
 `ENGINEERING_DECISIONS.md`. For forward-looking prioritization, see
 `ROADMAP.md`.
 
-Last updated: 2026-07-11 (night CTO session: all 3 audit HIGH items
-wired, A/B tested, and re-validated across 6 months of real market data
-on FOUR independent assets AND, new this round, a second independent
-YEAR via a new `--end-date` time-anchored fetch capability. Break-even
-now shows NO reliable direction across either dimension -- it even
-flips sign on BTCUSDT alone between 2025 and 2026 -- so
-`ENABLE_BREAKEVEN` stays off by default, permanently. Partial TP is the
-one finding solid enough to actively recommend against, having
+Last updated: 2026-07-11 (night CTO session: built walk-forward
+validation, Phase 1 gate #2 -- BTCUSDT baseline PASSED. Scope locked by
+operator directive this round: Phase 1 = JadeCap only, tracked against 4
+explicit gates, see below. All 3 audit HIGH items wired, A/B tested, and
+re-validated across 6 months of real market data on FOUR independent
+assets AND a second independent YEAR via a new `--end-date` time-anchored
+fetch capability. Break-even shows NO reliable direction across either
+dimension -- it even flips sign on BTCUSDT alone between 2025 and 2026 --
+so `ENABLE_BREAKEVEN` stays off by default, permanently. Partial TP is
+the one finding solid enough to actively recommend against, having
 reproduced negative across 4 assets (24/24 periods) AND across 2 years
 on BTCUSDT alone).
+
+## Phase 1 gate status (operator scope lock)
+
+Objective: build, validate, and prove ONE profitable JadeCap automated
+trading system. Nothing else. See `ROADMAP.md`'s "Phase 2 (deferred)"
+section for ideas explicitly out of scope until these 4 gates clear.
+
+| Gate | Status |
+|---|---|
+| 1. Backtest | ✅ Complete — 4 assets x 2026, BTCUSDT also x 2025 |
+| 2. Walk-forward validation | ✅ Built, PASSED for BTCUSDT baseline (6/6 profitable, 0 losing streak, no degradation). Not yet run for ETH/SOL/XRP |
+| 3. Paper trading | ✅ Pipeline complete and running (`scripts/run_paper.py`), no real capital |
+| 4. Small live validation | ❌ Not started — requires operator-issued API keys + staged approval |
 
 ## One-paragraph summary
 
@@ -43,7 +58,7 @@ approval — this is by design, not an oversight.
 | Data (candle fetch) | ✅ Complete | Real OKX public API, deep pagination via `/market/history-candles` (fixed a long-standing 300-candle cap bug), no API key needed. `fetch_ohlcv_history()` can now anchor a fetch to end at a specific past date (`end_time_ms`), enabling genuine cross-YEAR backtesting via `run_backtest.py --end-date` |
 | Strategy Engine | ✅ Complete, actively validated | Bias/sweep/CHOCH/FVG/OB/zone-mitigation/entry-model all real, all tested. Breaker Block detection now wired in too (opt-in, `use_breaker_block`, A/B tested — see findings below) |
 | Risk Engine | ✅ Complete | RR floor, daily/weekly loss limits, trades/day cap, position sizing, DB-persisted circuit breaker — all enforced in both paper AND backtest |
-| Backtest Engine | ✅ Complete, actively used for research | Real fee/slippage/PnL, no-lookahead HTF cursor, multi-period out-of-sample splitting (`--periods`, HTF fetch now correctly sized to the LTF request's real time span), time-anchored fetching (`--end-date`), opt-in break-even (`--breakeven`, A/B **no reliable direction across 4 assets OR across 2 years on the same asset — even flips sign on BTCUSDT alone**), opt-in Breaker Block entries (`--breaker-block`, A/B **mostly negative across assets, zero effect in the 2025 BTCUSDT window**), opt-in partial take-profit (`--partial-tp`, A/B **negative on all 4 tested assets AND both tested years on BTCUSDT — the most robust finding in the project**) |
+| Backtest Engine | ✅ Complete, actively used for research | Real fee/slippage/PnL, no-lookahead HTF cursor, multi-period out-of-sample splitting (`--periods`, HTF fetch now correctly sized to the LTF request's real time span), time-anchored fetching (`--end-date`), walk-forward validation (`--walk-forward`, explicit PASS/FAIL criteria — PASSED for BTCUSDT baseline), opt-in break-even (`--breakeven`, A/B **no reliable direction across 4 assets OR across 2 years on the same asset — even flips sign on BTCUSDT alone**), opt-in Breaker Block entries (`--breaker-block`, A/B **mostly negative across assets, zero effect in the 2025 BTCUSDT window**), opt-in partial take-profit (`--partial-tp`, A/B **negative on all 4 tested assets AND both tested years on BTCUSDT — the most robust finding in the project**) |
 | Paper Trading | ✅ Complete | Real open/close/PnL against live OKX data, no real capital. Break-even stop management is wired here too (`settings.ENABLE_BREAKEVEN`, off by default, PERMANENTLY -- see research findings below) — no reliable direction exists across assets OR across time (it flips sign on BTCUSDT alone between 2025 and 2026), so there is no direction to ever default toward. Breaker Block and partial-TP remain backtest-only (no positive evidence justifying paper trading) |
 | Portfolio/Journal | ✅ Complete | Real trade/signal persistence, daily/weekly/all-time reports |
 | Dashboard | ✅ Complete | All 5 endpoints (`status`, `positions`, `logs`, `risk-status`, `bias`, `signals`) real, DB/live-computed |
@@ -51,7 +66,7 @@ approval — this is by design, not an oversight.
 
 ## Test suite
 
-191 backend tests, 0 known failures, re-run 2x+ for flakiness on every
+201 backend tests, 0 known failures, re-run 2x+ for flakiness on every
 change in this session. Run: `cd backend && ./.venv/Scripts/python.exe -m pytest -q`
 (or the platform-appropriate venv path). No frontend test failures
 (`npx tsc --noEmit` clean as of the last frontend-touching change).
@@ -145,6 +160,19 @@ script exercising long/short/idempotency/disabled-gate paths end to end.
   confirmed negative across 4 assets in one time window AND 2 time
   windows on one asset, the strongest evidentiary base for any finding
   in this project.
+- **Walk-forward validation (Phase 1 gate #2) now exists as a formal,
+  reusable artifact**: `run_backtest.py::walk_forward_report()` +
+  `--walk-forward` evaluate a chronological period sequence against
+  explicit criteria (>= 66% profitable periods, <= 2 consecutive losing
+  periods, no >50% first-half-to-second-half PnL falloff) rather than
+  just an aggregate sum — catching degradation trends and losing streaks
+  an aggregate could hide. This is deliberately NOT a rolling
+  parameter-refitting walk-forward (the strategy has no tunable
+  parameters to refit yet — see `ENGINEERING_DECISIONS.md` #8); it's a
+  genuine check that performance holds up moving forward through
+  chronological time. **Real result: BTCUSDT 2026 baseline PASSED** —
+  6/6 profitable, 0 losing streak, and the second half of the window
+  actually outperformed the first half (no degradation at all).
 - **Data-layer bug found and fixed along the way**: `scripts/run_backtest.py`
   requested the same candle COUNT for both LTF and HTF fetches, which
   for a large `--periods` request meant asking for years more HTF

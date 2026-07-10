@@ -33,6 +33,17 @@ Exit codes:
   1 -> genuine failures: candle fetch/network error, zero candles returned,
        or an unexpected exception from the backtest engine itself.
 
+Walk-forward validation (`--walk-forward`, requires `--periods > 1`):
+prints an explicit PASS/FAIL report checking the chronological sequence
+of periods for degradation trends and losing streaks that a simple
+aggregate sum would hide -- see `walk_forward_report()`'s docstring for
+exact criteria. This is deliberately NOT a rolling parameter-refitting
+walk-forward (see `ENGINEERING_DECISIONS.md` decision #8): the strategy
+has no tunable parameters yet, so there is nothing to refit between
+periods. It IS a genuine check that performance holds up moving forward
+through time, which is what "walk-forward validation" means in this
+project's Phase 1 checklist (see `ROADMAP.md`).
+
 Time-anchored fetches (`--end-date YYYY-MM-DD`): by default this script
 fetches candles ending at "now". `--end-date` anchors the fetch to end at
 a specific past date instead, via `CandleFetcher.fetch_ohlcv_history`'s
@@ -184,6 +195,92 @@ def split_into_periods(candles: list, periods: int) -> list[list]:
     return chunks
 
 
+def walk_forward_report(
+    results: list,
+    min_profitable_ratio: float = 0.66,
+    max_losing_streak: int = 2,
+) -> dict:
+    """Evaluate a sequence of `BacktestResult`s (one per chronological
+    period from `split_into_periods`, already in oldest -> newest order)
+    against explicit, deterministic walk-forward validation criteria.
+
+    This is NOT a rolling parameter-refitting walk-forward (see decision
+    #8 in ENGINEERING_DECISIONS.md -- the strategy has no tunable
+    parameters yet, so there is nothing to refit). It IS a genuine
+    walk-forward-style check that the strategy's behavior holds up as
+    you move STRICTLY FORWARD through time, rather than just averaging
+    disjoint periods together: it looks for degradation trends and
+    losing streaks that an aggregate sum would hide.
+
+    Criteria (documented so a PASS/FAIL is reproducible, not a vibe):
+      - `min_profitable_ratio` (default 0.66): at least this fraction of
+        periods must have `total_pnl > 0`.
+      - `max_losing_streak` (default 2): no more than this many
+        CONSECUTIVE unprofitable periods in the chronological sequence
+        (a strategy that goes cold for 3+ periods in a row is a real
+        red flag a simple profitable-period COUNT would miss).
+      - Degradation check: compares the average PnL of the first half of
+        the sequence against the second half. If the first half averaged
+        a positive PnL, the second half must retain at least 50% of it
+        (a >50% falloff is flagged as degrading). If the first half
+        averaged <= 0, any further decline in the second half is flagged.
+        This is a simple, honest heuristic -- not a formal statistical
+        trend test -- and is documented as such rather than dressed up
+        as more rigorous than it is. For odd period counts, the middle
+        period is excluded from both halves (compares the oldest half
+        against the newest half only).
+
+    Raises `ValueError` if `results` has fewer than 2 periods (a
+    walk-forward comparison needs at least two points to compare).
+    """
+    n = len(results)
+    if n < 2:
+        raise ValueError("walk_forward_report requires at least 2 periods to compare")
+
+    pnls = [r.total_pnl for r in results]
+    profitable_flags = [pnl > 0 for pnl in pnls]
+    profitable_count = sum(profitable_flags)
+    profitable_ratio = profitable_count / n
+
+    max_streak = 0
+    current_streak = 0
+    for flag in profitable_flags:
+        if flag:
+            current_streak = 0
+        else:
+            current_streak += 1
+            max_streak = max(max_streak, current_streak)
+
+    half = n // 2
+    first_half_avg = sum(pnls[:half]) / half
+    second_half_avg = sum(pnls[n - half :]) / half
+    if first_half_avg > 0:
+        degrading = second_half_avg < first_half_avg * 0.5
+    else:
+        degrading = second_half_avg < first_half_avg
+
+    passed = (
+        profitable_ratio >= min_profitable_ratio
+        and max_streak <= max_losing_streak
+        and not degrading
+    )
+
+    return {
+        "periods": n,
+        "profitable_periods": profitable_count,
+        "profitable_ratio": profitable_ratio,
+        "max_losing_streak": max_streak,
+        "first_half_avg_pnl": first_half_avg,
+        "second_half_avg_pnl": second_half_avg,
+        "degrading": degrading,
+        "passed": passed,
+        "criteria": {
+            "min_profitable_ratio": min_profitable_ratio,
+            "max_losing_streak": max_losing_streak,
+        },
+    }
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -272,6 +369,21 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "docs/strategy_coverage_audit.md -- A/B-testable, not a proven "
             "improvement; run the same --symbol/--timeframe/--candles/"
             "--periods with and without this flag and compare."
+        ),
+    )
+    parser.add_argument(
+        "--walk-forward",
+        action="store_true",
+        default=False,
+        help=(
+            "Print a walk-forward validation report after the per-period "
+            "results (requires --periods > 1). Checks the chronological "
+            "sequence of periods against explicit criteria: minimum "
+            "profitable-period ratio, maximum consecutive losing "
+            "periods, and a first-half-vs-second-half degradation check "
+            "-- see walk_forward_report()'s docstring for exact criteria "
+            "and why this is not a parameter-refitting walk-forward "
+            "(the strategy has no tunable parameters yet)."
         ),
     )
     parser.add_argument(
@@ -431,6 +543,25 @@ def main() -> int:
             "a strategy profitable in only some periods is NOT validated, "
             "regardless of the aggregate total."
         )
+
+    # --- 3b. Walk-forward validation report (opt-in via --walk-forward,
+    # requires --periods > 1 -- see walk_forward_report()'s docstring for
+    # exact criteria and why this is not a parameter-refitting walk-forward) ---
+    if args.walk_forward:
+        if args.periods <= 1:
+            print("ERROR: --walk-forward requires --periods > 1 (need multiple chronological periods to compare).")
+            return 1
+        wf = walk_forward_report(results)
+        print("Walk-forward validation report (chronological, oldest -> newest):")
+        print(f"  profitable periods     : {wf['profitable_periods']}/{wf['periods']} "
+              f"({wf['profitable_ratio'] * 100:.1f}%, criterion >= "
+              f"{wf['criteria']['min_profitable_ratio'] * 100:.0f}%)")
+        print(f"  max losing streak      : {wf['max_losing_streak']} "
+              f"(criterion <= {wf['criteria']['max_losing_streak']})")
+        print(f"  first-half avg PnL     : {wf['first_half_avg_pnl']:.2f}")
+        print(f"  second-half avg PnL    : {wf['second_half_avg_pnl']:.2f}")
+        print(f"  degrading trend        : {'YES' if wf['degrading'] else 'no'}")
+        print(f"  WALK-FORWARD VALIDATION: {'PASSED' if wf['passed'] else 'FAILED'}")
 
     # --- 4. Write markdown report(s) + CSV trade export(s) ---
     output_path = Path(args.output).resolve()

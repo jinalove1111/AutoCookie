@@ -4,6 +4,78 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Build walk-forward validation (Phase 1 gate #2) — BTCUSDT baseline PASSES
+
+### Scope note
+Operator issued a scope-lock directive this round: Phase 1 objective is
+narrowly "build, validate, and prove ONE profitable JadeCap automated
+trading system," tracked against 4 explicit gates (Backtest ->
+Walk-Forward -> Paper Trading -> Small Live Validation). This entry
+implements gate #2, the one explicitly-named gate that didn't yet exist
+as a distinct, reusable artifact (see `ROADMAP.md`'s new "Phase 1 gate
+status" table).
+
+### Added
+- `scripts/run_backtest.py::walk_forward_report(results, ...)`:
+  evaluates a chronological sequence of period results against explicit,
+  deterministic criteria instead of just an aggregate sum:
+  - `min_profitable_ratio` (default 0.66): fraction of periods that must
+    be profitable.
+  - `max_losing_streak` (default 2): max CONSECUTIVE unprofitable
+    periods allowed (catches a strategy going cold for several periods
+    in a row, which a simple profitable-period count can hide).
+  - Degradation check: second-half average PnL must retain at least 50%
+    of the first-half average (or, if the first half averaged <= 0, must
+    not decline further) — a simple, explicitly-documented heuristic,
+    not a formal statistical trend test.
+  Returns a dict including a `passed: bool` verdict.
+- `run_backtest.py --walk-forward` CLI flag (requires `--periods > 1`):
+  prints the report and an explicit PASSED/FAILED verdict.
+- 10 new tests in `backend/tests/test_run_backtest.py` — previously ZERO
+  pytest coverage existed for any of `scripts/run_backtest.py`'s pure
+  functions (including the pre-existing `split_into_periods`, now also
+  covered). `scripts/` is a sibling directory to `backend/`, so the test
+  file adds it to `sys.path` explicitly.
+
+### Why this is NOT a parameter-refitting walk-forward
+`ENGINEERING_DECISIONS.md` decision #8 already documents why: the
+strategy has no tunable/fitted parameters yet (`_LOOKBACK`,
+`_IMPULSE_MULT`, `_STOP_BUFFER`, `_RR`, `BREAKEVEN_TRIGGER_R` are all
+fixed, disclosed-as-untuned constants) — a refit-then-test-forward loop
+would have nothing to refit. This IS a genuine walk-forward-style check
+that performance holds up moving STRICTLY FORWARD through chronological
+time (not just independently-shuffled periods), which is what "walk-
+forward validation" means as a Phase 1 gate: does the strategy keep
+working as you move through it in order, without hidden degradation an
+aggregate sum would mask.
+
+### Real result: BTCUSDT 2026 baseline
+`--symbol BTCUSDT --timeframe 15m --candles 3000 --periods 6
+--walk-forward`:
+```
+profitable periods     : 6/6 (100.0%, criterion >= 66%)
+max losing streak      : 0 (criterion <= 2)
+first-half avg PnL     : 237.47
+second-half avg PnL    : 407.64
+degrading trend        : no
+WALK-FORWARD VALIDATION: PASSED
+```
+Second half of the chronological sequence actually OUTPERFORMED the
+first half — the strongest possible walk-forward result (no hint of
+decay over the 6-month window). This is the formal Phase 1 gate #2
+artifact for JadeCap's baseline strategy.
+
+### Verified
+- `pytest backend/tests/` 201/201 passing (191 + 10 new).
+- Real CLI run against live OKX data (above) confirms the feature works
+  end-to-end, not just in unit tests with synthetic PnL sequences.
+
+### Decision
+Phase 1 gate #2 (walk-forward validation) is now built and has produced
+its first PASS. Per `ROADMAP.md`, the same check should be run for
+ETHUSDT/SOLUSDT/XRPUSDT baselines before considering this gate fully
+closed project-wide (currently proven for BTCUSDT only).
+
 ## [Unreleased] - Add time-anchored backtesting (`--end-date`); first cross-YEAR validation shows break-even flips sign on BTCUSDT itself
 
 ### Added
