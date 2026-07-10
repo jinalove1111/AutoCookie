@@ -116,6 +116,7 @@ if settings.TRADING_MODE == "live" and not settings.is_live_trading_allowed:
 
 from app.data.candle_fetcher import CandleFetcher
 from app.execution.execution_engine import ExecutionEngine
+from app.execution.order_manager import OrderManager
 from app.execution.paper_broker import FEE_PERCENT, SLIPPAGE_PERCENT, PaperBroker
 from app.notifications.discord import send_discord_alert
 from app.notifications.telegram import send_telegram_alert
@@ -232,6 +233,89 @@ def _check_and_close_open_positions(current_price: float) -> list[int]:
     return closed_ids
 
 
+def _maybe_move_to_breakeven(current_price: float) -> list[int]:
+    """No-op unless `settings.ENABLE_BREAKEVEN` is True (see app/config.py --
+    this is the only paper-trading gate for the break-even feature; the
+    A/B-tested trigger distance `settings.BREAKEVEN_TRIGGER_R` is shared
+    with `BacktestEngine`'s own `use_breakeven` path so the two always
+    agree on how far price must move before the stop is moved).
+
+    For every open position whose stop hasn't already been moved to
+    breakeven, computes the 1R trigger price from that position's
+    ORIGINAL entry/stop distance and, once `current_price` reaches or
+    passes it, moves `stop_loss` to `entry_price` via `TradeTracker().
+    update_stop_loss`. Returns the list of trade ids moved this call.
+
+    Ordering (deliberate, mirrors `BacktestEngine._simulate_trade`'s
+    same-candle/same-pass conservative rule): this is called AFTER
+    `_check_and_close_open_positions`, never before, in `run_once`. A
+    pass that reaches the breakeven trigger price this same tick is
+    exit-checked first against the OLD stop -- only a LATER pass sees the
+    moved stop. This never optimistically "saves" a trade that also
+    would have stopped out on the very same pass.
+
+    Idempotency: rather than adding a new DB column to track whether a
+    given trade already had its stop moved, "already moved" is inferred
+    from the stop itself -- once `stop_loss` is at or past `entry_price`
+    (>= for long, <= for short), the position is skipped. This is safe
+    because a genuine signal's stop_loss can never legitimately equal (or
+    be on the profit side of) its own entry_price to begin with (that
+    would mean zero or negative risk), so this state is only ever reached
+    via a prior breakeven move.
+
+    The actual "what should the new stop be" computation delegates to
+    `OrderManager.move_to_breakeven(position)` (this function only decides
+    WHETHER/WHEN to call it) -- this is the reuse point
+    `ENGINEERING_DECISIONS.md` entry #6 anticipated when break-even was
+    first implemented inline inside `BacktestEngine`: `OrderManager`'s
+    one-shot-call-against-a-DB-row contract fits naturally here, where
+    positions genuinely are DB rows, unlike `BacktestEngine`'s tight
+    per-candle scanning loop.
+    """
+    if not settings.ENABLE_BREAKEVEN:
+        return []
+
+    tracker = TradeTracker()
+    order_manager = OrderManager(PaperBroker())
+    moved_ids: list[int] = []
+
+    for position in tracker.get_open_positions():
+        entry_price = position["entry_price"]
+        stop_loss = position["stop_loss"]
+        direction = position["direction"]
+        is_long = direction == "long"
+
+        risk_per_unit = abs(entry_price - stop_loss)
+        if risk_per_unit <= 0:
+            continue
+
+        already_at_breakeven = stop_loss >= entry_price if is_long else stop_loss <= entry_price
+        if already_at_breakeven:
+            continue
+
+        trigger_price = (
+            entry_price + settings.BREAKEVEN_TRIGGER_R * risk_per_unit
+            if is_long
+            else entry_price - settings.BREAKEVEN_TRIGGER_R * risk_per_unit
+        )
+        triggered = (
+            current_price >= trigger_price if is_long else current_price <= trigger_price
+        )
+        if not triggered:
+            continue
+
+        new_position = order_manager.move_to_breakeven(position)
+        tracker.update_stop_loss(position["id"], new_stop_loss=new_position["stop_loss"])
+        moved_ids.append(position["id"])
+        print(
+            f"Moved paper trade id={position['id']} ({position['symbol']} "
+            f"{direction}) stop_loss to breakeven @ {new_position['stop_loss']:.6f} "
+            f"(trigger {trigger_price:.6f}, current_price {current_price:.6f})."
+        )
+
+    return moved_ids
+
+
 def _check_drawdown_and_maybe_trip(
     circuit_breaker: CircuitBreaker | PersistentCircuitBreaker,
 ) -> None:
@@ -314,6 +398,8 @@ def run_once(
         "error": str | None,
         "exit_code": int,          # 0 = safe/expected outcome, 1 = genuine failure
         "positions_closed": list[int],   # trade ids closed by this pass's exit-check step
+        "breakeven_moved": list[int],    # trade ids whose stop moved to breakeven this pass
+                                          # (always [] unless settings.ENABLE_BREAKEVEN)
         "skipped_signal_generation": bool,  # True if the concurrency guard skipped
                                              # everything past the exit-check step
         "skipped_reason": str | None,       # why, when skipped_signal_generation is True
@@ -350,6 +436,17 @@ def run_once(
     `_check_and_close_open_positions`'s docstring for the accepted
     close-price-only (not intrabar) limitation of this check.
 
+    Strategy coverage audit follow-up (break-even in paper trading): right
+    after the exit-check step, every open position is also checked against
+    a 1R break-even trigger (`_maybe_move_to_breakeven`, gated by
+    `settings.ENABLE_BREAKEVEN`, off by default). This was the only one of
+    three A/B-tested experimental execution features (break-even/
+    breaker-block/partial-TP -- see docs/strategy_coverage_audit.md and
+    CHANGELOG.md) that reproduced a positive backtest result on two
+    independent samples, hence the only one wired into paper trading so
+    far; the other two remain backtest-only until they show similar
+    evidence.
+
     Concurrency-guard design call (documented, not implicit): if any
     position(s) remain open AFTER the exit-check step, this pass skips
     signal generation/risk/execution ENTIRELY for the rest of this call --
@@ -373,6 +470,7 @@ def run_once(
         "error": None,
         "exit_code": 0,
         "positions_closed": [],
+        "breakeven_moved": [],
         "skipped_signal_generation": False,
         "skipped_reason": None,
     }
@@ -421,6 +519,26 @@ def run_once(
         return summary
 
     summary["positions_closed"] = closed_ids
+
+    # --- 1.55 Move open positions' stops to breakeven, if triggered ---
+    # Opt-in via settings.ENABLE_BREAKEVEN (default False -- see app/config.py
+    # and _maybe_move_to_breakeven's docstring for the full rationale: this
+    # is the only one of the three A/B-tested experimental features
+    # (break-even/breaker-block/partial-TP) that reproduced a positive
+    # result on two independent backtest samples, hence the only one wired
+    # into paper trading so far). Deliberately AFTER the exit-check step
+    # above (not before) so a position that reaches the breakeven trigger
+    # price this same pass is still exit-checked against its OLD stop this
+    # pass -- see that function's docstring for why.
+    try:
+        breakeven_moved_ids = _maybe_move_to_breakeven(current_price)
+    except Exception as exc:
+        print(f"ERROR: breakeven-move step failed: {exc}")
+        summary["error"] = str(exc)
+        summary["exit_code"] = 1
+        return summary
+
+    summary["breakeven_moved"] = breakeven_moved_ids
 
     # --- 1.6 Concurrency guard: at most one open position at a time ---
     # Re-queries open positions AFTER the exit-check step above (not

@@ -11,7 +11,8 @@ the "why" behind specific non-obvious engineering choices, see
 
 Last updated: 2026-07-10 (night CTO session: all 3 audit HIGH items
 wired, A/B tested, and re-validated across 6 months of real, diverse
-market data -- two findings reproduced, one revised).
+market data -- two findings reproduced, one revised. Break-even, the
+strongest of the three, is now also wired into paper trading).
 
 ## One-paragraph summary
 
@@ -37,17 +38,21 @@ approval — this is by design, not an oversight.
 | Strategy Engine | ✅ Complete, actively validated | Bias/sweep/CHOCH/FVG/OB/zone-mitigation/entry-model all real, all tested. Breaker Block detection now wired in too (opt-in, `use_breaker_block`, A/B tested — see findings below) |
 | Risk Engine | ✅ Complete | RR floor, daily/weekly loss limits, trades/day cap, position sizing, DB-persisted circuit breaker — all enforced in both paper AND backtest |
 | Backtest Engine | ✅ Complete, actively used for research | Real fee/slippage/PnL, no-lookahead HTF cursor, multi-period out-of-sample splitting (`--periods`, HTF fetch now correctly sized to the LTF request's real time span), opt-in break-even (`--breakeven`, A/B **positive, reproduced on 2 independent samples**), opt-in Breaker Block entries (`--breaker-block`, A/B **slightly negative on the larger sample** -- revised from an earlier "neutral" finding), opt-in partial take-profit (`--partial-tp`, A/B **negative, reproduced on 2 independent samples**) |
-| Paper Trading | ✅ Complete | Real open/close/PnL against live OKX data, no real capital. None of the three backtest-validated experimental features (break-even/breaker-block/partial-TP) are wired here yet — backtest-only so far |
+| Paper Trading | ✅ Complete | Real open/close/PnL against live OKX data, no real capital. Break-even stop management is now wired here too (`settings.ENABLE_BREAKEVEN`, off by default) — the only one of the three backtest-validated experimental features with evidence strong enough to justify it (reproduced positive on 2 independent samples). Breaker Block and partial-TP remain backtest-only (no positive evidence) |
 | Portfolio/Journal | ✅ Complete | Real trade/signal persistence, daily/weekly/all-time reports |
 | Dashboard | ✅ Complete | All 5 endpoints (`status`, `positions`, `logs`, `risk-status`, `bias`, `signals`) real, DB/live-computed |
 | Live Trading | ❌ Not implemented, intentionally gated | `LiveBroker`, `exchange/okx_client.py`, `exchange/orangex_client.py` are all `NotImplementedError` stubs. Requires operator-approved API keys + staged approval before ANY code is written here |
 
 ## Test suite
 
-187 backend tests, 0 known failures, re-run 2x+ for flakiness on every
+190 backend tests, 0 known failures, re-run 2x+ for flakiness on every
 change in this session. Run: `cd backend && ./.venv/Scripts/python.exe -m pytest -q`
 (or the platform-appropriate venv path). No frontend test failures
 (`npx tsc --noEmit` clean as of the last frontend-touching change).
+`scripts/run_paper.py` itself has no direct pytest coverage (needs a live
+network candle feed); its DB-backed logic (`TradeTracker.update_stop_loss`,
+`_maybe_move_to_breakeven`) is instead verified via a real-temp-SQLite-DB
+script exercising long/short/idempotency/disabled-gate paths end to end.
 
 ## Current research findings (the actual point of this project)
 
@@ -95,9 +100,11 @@ change in this session. Run: `cd backend && ./.venv/Scripts/python.exe -m pytest
     what it's for: a conclusion that looked stable on a small sample
     changed with more data.
 
-  All three kept opt-in; none made default; none wired into paper
-  trading yet (break-even is the strongest candidate given it reproduced
-  positively on two independent samples).
+  All three kept opt-in and non-default in the Backtest Engine. Of the
+  three, only break-even has since been wired into paper trading too
+  (`settings.ENABLE_BREAKEVEN`, off by default) — it's the only one that
+  reproduced positively on two independent samples; Breaker Block and
+  partial-TP have no positive evidence and remain backtest-only.
 - **Data-layer bug found and fixed along the way**: `scripts/run_backtest.py`
   requested the same candle COUNT for both LTF and HTF fetches, which
   for a large `--periods` request meant asking for years more HTF

@@ -18,16 +18,14 @@ MIN_CANDLES = 31  # need index 30 available (30 candles of prior LTF history)
 # moved 1R in favor) is the standard, simplest convention -- not
 # backtested/tuned to a different multiple, same "reasonable starting
 # default, disclosed as such" spirit as entry_model.py's _RR/_STOP_BUFFER.
-# Only takes effect when `BacktestEngine.run(..., use_breakeven=True)` --
-# see that parameter's docstring for why this is opt-in, not default-on:
-# `OrderManager.move_to_breakeven()` (Execution layer) has existed since
-# Milestone 3 but was never wired into any live/paper/backtest trade path
-# (see docs/strategy_coverage_audit.md) -- this is the first real,
-# empirically-tested integration of it, and it is NOT yet proven to
-# improve results (a break-even move can just as easily turn an eventual
-# full winner into a scratch trade on a pullback-then-continuation move
-# as it can protect against a full loss on a reversal).
-BREAKEVEN_TRIGGER_R = 1.0
+# Read from `settings.BREAKEVEN_TRIGGER_R` (app/config.py) rather than
+# hardcoded here so paper trading (scripts/run_paper.py, gated by the
+# separate `settings.ENABLE_BREAKEVEN`) and this module's own
+# `use_breakeven` A/B-test path always agree on the same trigger
+# distance -- see that setting's docstring for the full rationale
+# (A/B validated positive on two independent backtest samples before
+# being wired into paper trading, per docs/strategy_coverage_audit.md).
+BREAKEVEN_TRIGGER_R = settings.BREAKEVEN_TRIGGER_R
 
 # Partial take-profit trigger/portion. `PARTIAL_TP_TRIGGER_R = 1.0` (close
 # part of the position once price has moved 1R in favor -- same trigger

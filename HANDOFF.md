@@ -1,6 +1,21 @@
 # HANDOFF — JadeCap Automated Trading Bot
 
-## 상태: (야간 CTO 세션, founder 부재, 계속 진행 중) HTF 과다 fetch 버그 발견/수정 + 감사 3개 항목을 6개월(6기간×3000캔들) 딥 데이터로 재검증 완료. **핵심 발견**: break-even(+9.2%, 이전 소표본 +13.5%와 방향 일치 — 재현됨)과 partial-tp(-32.6%, 이전 -31.4%와 거의 동일 — 재현됨)는 두 독립 표본에서 결론이 그대로 유지됨. 반면 **breaker-block은 결론이 바뀜**: 소표본에서는 "완전히 중립"(발현 기회 자체가 없었음)이었는데, 6개월 딥 데이터에서는 실제로 한 기간(P4)에서 발현되어 **부정적** 효과를 보임(승률 90.48%→85.71%, PnL $567.92→$496.11, 합산 -3.8%) — "충분한 데이터가 있으면 결론이 바뀔 수 있다"를 실제로 보여준 사례. Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+## 상태: (야간 CTO 세션, founder 부재, 계속 진행 중) 로드맵 1순위였던 "break-even을 paper trading에 배선" 완료. `TradeTracker.update_stop_loss()` 신규(미존재/종료된 trade면 ValueError, close_trade와 동일한 계약), `settings.ENABLE_BREAKEVEN`/`BREAKEVEN_TRIGGER_R` 신규(후자는 BacktestEngine과 공유하는 단일 소스 — 기존엔 BacktestEngine에 하드코딩 `1.0`이었음), `scripts/run_paper.py::_maybe_move_to_breakeven()` 신규 — exit-check 스텝 바로 다음, concurrency guard 이전에 배선(BacktestEngine의 "같은 캔들/같은 패스 내에서는 항상 기존 stop으로 먼저 판정" 원칙과 동일). 실제 stop 이동 계산은 새로 만들지 않고 기존 `OrderManager.move_to_breakeven()`을 재사용 — ENGINEERING_DECISIONS.md 항목 #6에서 이미 예견했던 재사용 지점. 세 실험(break-even/breaker-block/partial-tp) 중 두 독립 표본에서 재현된 것은 break-even뿐이라 이것만 paper trading에 배선함(breaker-block/partial-tp는 근거 부족으로 backtest 전용 유지). 신규 pytest 3종 + 실제 임시 SQLite DB 검증 스크립트(long/short/멱등성/비활성 게이트 전부 통과), 전체 `pytest` 190/190 통과. 참고: 세션 도중 "position exit-checking을 paper trading에 배선"이라는 이름의 백그라운드 서브에이전트가 2시간 넘게 진행 없이 멈춰 있었고 직접 상태 확인 메시지에도 응답이 없었음 — git log 확인 결과 그 작업은 이미 이전 회차(`8e7b1b3` 커밋)에서 완료되어 있었으므로(중복/구식 태스크) 대기를 중단하고 이번 작업을 직접 진행함. Live 관련 코드는 여전히 전무 — Small Live는 operator의 명시적 승인 대기 중
+
+## 전체 회차 (break-even을 paper trading에 배선 — 로드맵 1순위, "계속하라" 지시에 따라 진행)
+- [x] **배경**: 세 A/B 실험(break-even/breaker-block/partial-tp) 중 두 독립 표본(31일 소표본, 6개월 딥표본)에서 같은 방향으로 재현된 것은 break-even뿐(+13.5% → +9.2%) — 로드맵에서 이것만 paper trading 배선 대상 1순위로 승격했었음
+- [x] `app/config.py`에 `ENABLE_BREAKEVEN: bool = False`, `BREAKEVEN_TRIGGER_R: float = 1.0` 추가
+- [x] `backend/app/backtesting/backtest_engine.py`의 모듈 상수 `BREAKEVEN_TRIGGER_R`을 하드코딩 `1.0`에서 `settings.BREAKEVEN_TRIGGER_R`로 리팩터 — paper trading과 backtest가 항상 같은 트리거 거리를 쓰도록 단일 소스화 (리팩터 직후 187/187 통과 확인, 회귀 없음)
+- [x] `app/portfolio/trades.py::TradeTracker.update_stop_loss(trade_id, new_stop_loss)` 신규 — trade_id 미존재 시 ValueError, 존재하지만 이미 closed면 별도 ValueError("not open") — `close_trade`와 동일한 "절대 조용히 no-op하지 않는다" 계약
+- [x] `scripts/run_paper.py::_maybe_move_to_breakeven(current_price)` 신규: 열린 포지션마다 원래 entry/stop 거리로 1R 트리거가를 계산, 가격이 도달하면 stop을 entry로 이동. `settings.ENABLE_BREAKEVEN`이 False면 완전 no-op. 멱등성은 신규 DB 컬럼 없이 "stop이 이미 entry 이상/이하(방향별)면 스킵"으로 추론(정상 신호는 애초에 stop이 entry와 같거나 유리한 쪽일 수 없으므로 안전)
+- [x] `run_once()`에 배선: **exit-check 스텝 바로 다음, concurrency guard 이전** — BacktestEngine의 same-pass 보수적 순서(이번 패스에서 트리거에 도달한 포지션도 이번 패스는 여전히 OLD stop으로 exit-check됨, 다음 패스부터 새 stop 적용)와 동일하게 맞춤. summary dict에 `breakeven_moved: list[int]` 필드 추가
+- [x] **재사용 발견**: `app/execution/order_manager.py::OrderManager.move_to_breakeven(position)`이 이미 존재했음(ENGINEERING_DECISIONS.md 항목 #6에서 "paper trading에 배선될 때 자연스러운 재사용 지점"이라고 이미 예견해둔 것) — 처음엔 직접 `new_stop_loss=entry_price`로 구현했다가, 이 기존 함수를 발견하고 `OrderManager(PaperBroker()).move_to_breakeven(position)` 호출로 리팩터하여 재사용. 트리거/멱등성 판단 로직만 신규(그 함수 자체엔 트리거 개념이 없음 — 호출되면 무조건 이동)
+- [x] 신규 테스트 3종(`test_portfolio.py`): 정상 이동 라운드트립 / 미존재 id ValueError / 이미 closed인 trade ValueError
+- [x] **실측 검증(pytest 아님 — run_paper.py는 실제 네트워크 캔들 fetch가 필요해 기존부터 pytest 커버리지 없음, 기존 관례 유지)**: 임시 SQLite DB로 long 트리거 미도달(무변화)/도달(이동)/이후 패스(이미 breakeven이라 재이동 안 함, 멱등성 확인), short 트리거 도달(이동), `ENABLE_BREAKEVEN=False`(가격 무관 완전 무변화) 전부 통과
+- [x] 전체 `pytest backend/tests/` **190/190 통과**(187 + 신규 3)
+- [x] `ROADMAP.md`(1순위 항목을 Done으로 이동, 번호 재정렬)/`PROJECT_STATUS.md`(Paper Trading 레이어 상태, 테스트 개수, 캐비어트 갱신)/`ENGINEERING_DECISIONS.md`(항목 #6 업데이트 — 재사용이 실제로 일어났음을 기록)/`CHANGELOG.md`(신규 Unreleased 섹션) 갱신
+- [x] **참고 — 스톨된 백그라운드 서브에이전트**: 이 작업 시작 시점에 "Wire position exit-checking into paper trading"이라는 이름의 백그라운드 로컬 에이전트가 이미 실행 중이었음. 직접 SendMessage로 진행 상황을 물었으나 2시간 넘게 응답도 파일 변경도 없어 스톨로 판단. `git log`로 확인한 결과 그 작업(포지션 exit-checking 배선)은 이미 이전 회차 커밋(`8e7b1b3 Paper trades now actually close on SL/TP...`)에서 완료되어 있었음 — 즉 그 서브에이전트는 이미 끝난 작업을 중복으로 맡았던 것으로 보임. 계속 대기하는 대신 이번 회차의 실제 작업(break-even 배선)을 직접 진행함
+- [x] git commit/push 예정 (`origin/master`) — operator가 "계속하라, CTO처럼 사고하라, API 자격증명/라이브 승인/보안/외부유료서비스 아니면 계속 진행"이라고 명시적으로 재확인함(이 태스크는 그 어느 카테고리에도 해당하지 않음)
 
 ## 전체 회차 (HTF 과다 fetch 버그 수정 + 3개 감사 항목 딥 데이터 재검증 — "계속하라" 지시에 따라 로드맵 1순위 항목 진행)
 - [x] **버그 발견 계기**: 로드맵 1순위 "다른 시장 레짐에 걸친 기간 확보"를 실행하려고 `--candles 3000 --periods 6`(총 18000캔들 ≈ 187일)으로 딥 백테스트를 시도했는데, 10분 넘게 아무 출력도 없이 멈춤 — 프로세스 확인 결과 실제로 살아있었지만 진행이 없어 강제 종료
@@ -308,8 +323,7 @@
 - [x] ~~CircuitBreaker 상태는 프로세스 메모리에만 존재~~ — DB 영속화 완료(위 참조, `028087a`)
 
 ## 현재 위치
-Strategy > Risk > Backtest > Paper Trading > Dashboard 전 계층의 배관 갭은 전부 해소됨. 감사 HIGH 항목 3개 전부 A/B 검증 완료, 이제 **6개월 딥 데이터로 재검증까지 완료**: **break-even**(딥표본 +9.2%, 소표본 +13.5%와 재현 — 긍정적, opt-in 유지) / **Partial TP**(딥표본 -32.6%, 소표본 -31.4%와 재현 — 부정적, opt-in 유지하되 비추천) / **Breaker Block**(소표본 중립 → 딥표본 소폭 부정으로 결론 변경, 6개 중 1개 기간에서 실제 악화 발현). **다음 최고-ROI 후보 (우선순위순)**:
-- **`run_paper.py`(실 paper trading)에 break-even 연결 (최우선 후보로 승격)**: 소표본+딥표본(6개월) 양쪽 모두에서 긍정적으로 재현된 유일한 항목 — 이제 두 독립 표본에서 검증됐으니 paper 연결을 진지하게 고려할 시점. `TradeTracker`에 현재 `update_stop_loss` 같은 메서드가 없음 — DB에 저장된 open position의 stop_loss를 갱신하는 새 경로 설계 필요
+Strategy > Risk > Backtest > Paper Trading > Dashboard 전 계층의 배관 갭은 전부 해소됨. 감사 HIGH 항목 3개 전부 A/B 검증 완료, 6개월 딥 데이터로 재검증까지 완료: **break-even**(딥표본 +9.2%, 소표본 +13.5%와 재현 — 긍정적)/**Partial TP**(딥표본 -32.6%, 소표본 -31.4%와 재현 — 부정적)/**Breaker Block**(소표본 중립 → 딥표본 소폭 부정). 이번 회차에서 **break-even을 실제 paper trading에 배선 완료**(`ENABLE_BREAKEVEN`, 기본 False) — 세 항목 중 두 독립 표본에서 재현된 유일한 항목이라 이것만 배선함. **다음 최고-ROI 후보 (우선순위순)**:
 - **ETHUSDT도 동일한 6개월 딥 데이터로 재검증**: 이번 회차는 BTCUSDT만 재검증함(시간 관계상) — ETHUSDT에서도 break-even 긍정/partial-tp 부정/breaker-block 소폭부정이 재현되는지 확인하면 증거력이 한층 강해짐
 - **상관성 낮은 추가 심볼 확보**: 지금까지 BTCUSDT/ETHUSDT만 확인(서로 상관성 높음)
 - **`_LOOKBACK`/`_IMPULSE_MULT`/`_STOP_BUFFER`/`_RR`/`BREAKEVEN_TRIGGER_R`/`PARTIAL_TP_TRIGGER_R`/`PARTIAL_TP_PORTION` 파라미터 재검토**: 파라미터 스윕을 한다면 **반드시** `--periods`로 나눈 일부 기간에서만 스윕하고 나머지는 최종 확인에만 사용

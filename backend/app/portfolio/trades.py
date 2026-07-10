@@ -98,6 +98,27 @@ class TradeTracker:
             trade.status = "closed"
             trade.closed_at = closed_at or datetime.now(timezone.utc)
 
+    def update_stop_loss(self, trade_id: int, new_stop_loss: float) -> None:
+        """
+        Update an OPEN trade's `stop_loss` (e.g. a break-even move --
+        see `scripts/run_paper.py`'s `_maybe_move_to_breakeven`, the only
+        real caller). Raises `ValueError` if `trade_id` does not exist or
+        is not currently open -- moving the stop on an already-closed
+        trade would silently do nothing useful and almost certainly
+        indicates a caller bug, so this fails loudly rather than
+        no-opping (same contract style as `close_trade`).
+        """
+        with session_scope() as db:
+            trade = db.get(Trade, trade_id)
+            if trade is None:
+                raise ValueError(f"Trade id={trade_id} not found")
+            if trade.status != "open":
+                raise ValueError(
+                    f"Trade id={trade_id} is not open (status={trade.status!r}); "
+                    "cannot update stop_loss on a closed trade"
+                )
+            trade.stop_loss = new_stop_loss
+
     def get_open_positions(self) -> list[dict]:
         """Return all Trade rows with status == 'open' as plain dicts."""
         with session_scope() as db:

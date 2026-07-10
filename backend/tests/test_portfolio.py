@@ -153,6 +153,65 @@ class _FakeTradeSignal:
         self.status = status
 
 
+def test_trade_tracker_update_stop_loss_moves_stop_on_open_trade(migrated_db):
+    from app.portfolio.trades import TradeTracker
+
+    tracker = TradeTracker()
+    trade_id = tracker.record_trade(
+        {
+            "symbol": "BTCUSDT",
+            "direction": "long",
+            "entry_price": 100.0,
+            "stop_loss": 95.0,
+            "take_profit": 110.0,
+            "size": 1.0,
+            "mode": "paper",
+        }
+    )
+
+    tracker.update_stop_loss(trade_id, new_stop_loss=100.0)
+
+    open_positions = tracker.get_open_positions()
+    assert len(open_positions) == 1
+    assert open_positions[0]["stop_loss"] == 100.0
+    # Nothing else about the trade should change.
+    assert open_positions[0]["status"] == "open"
+    assert open_positions[0]["entry_price"] == 100.0
+
+
+def test_trade_tracker_update_stop_loss_raises_for_unknown_id(migrated_db):
+    import pytest
+
+    from app.portfolio.trades import TradeTracker
+
+    tracker = TradeTracker()
+    with pytest.raises(ValueError, match="not found"):
+        tracker.update_stop_loss(999999, new_stop_loss=100.0)
+
+
+def test_trade_tracker_update_stop_loss_raises_for_closed_trade(migrated_db):
+    import pytest
+
+    from app.portfolio.trades import TradeTracker
+
+    tracker = TradeTracker()
+    trade_id = tracker.record_trade(
+        {
+            "symbol": "BTCUSDT",
+            "direction": "long",
+            "entry_price": 100.0,
+            "stop_loss": 95.0,
+            "take_profit": 110.0,
+            "size": 1.0,
+            "mode": "paper",
+        }
+    )
+    tracker.close_trade(trade_id, exit_price=110.0, pnl=10.0)
+
+    with pytest.raises(ValueError, match="not open"):
+        tracker.update_stop_loss(trade_id, new_stop_loss=100.0)
+
+
 def test_signal_tracker_record_and_query_round_trip(migrated_db):
     from app.portfolio.signals import SignalTracker
 

@@ -4,6 +4,72 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Wire break-even stop management into paper trading
+
+### Added
+- `app.portfolio.trades.TradeTracker.update_stop_loss(trade_id, new_stop_loss)`
+  — updates an OPEN trade's `stop_loss`. Raises `ValueError` if the trade
+  id doesn't exist, and a separate `ValueError` if it exists but isn't
+  currently open (moving the stop on a closed trade would silently do
+  nothing useful and almost certainly indicates a caller bug — same
+  fail-loudly contract as `close_trade`).
+- `app.config.settings.ENABLE_BREAKEVEN` (default `False`) and
+  `BREAKEVEN_TRIGGER_R` (default `1.0`) — the latter is now the single
+  source of truth for the break-even trigger distance, imported by
+  `BacktestEngine`'s own `BREAKEVEN_TRIGGER_R` module constant (was a
+  hardcoded `1.0` before this change) so paper trading and backtesting
+  always agree on how far price must move before the stop is moved.
+- `scripts/run_paper.py::_maybe_move_to_breakeven(current_price)` — for
+  every open position whose stop hasn't already reached breakeven,
+  computes the 1R trigger from that position's original entry/stop
+  distance and moves `stop_loss` to `entry_price` once price reaches it.
+  No-ops entirely unless `ENABLE_BREAKEVEN` is `True`. Wired into
+  `run_once()` immediately after the existing exit-check step (and
+  before the one-trade-open-at-a-time concurrency guard) — deliberately
+  AFTER, not before, mirroring `BacktestEngine._simulate_trade`'s
+  same-pass conservative rule: a position that reaches the breakeven
+  trigger price this same pass is still exit-checked against its OLD
+  stop this pass; only a later pass sees the moved stop. `run_once()`'s
+  returned summary dict gained a `breakeven_moved: list[int]` field
+  (trade ids moved this pass, always `[]` when the feature is disabled).
+- Idempotency without a new DB column: "already moved to breakeven" is
+  inferred from the stop itself (`stop_loss >= entry_price` for a long,
+  `<=` for a short) rather than a new tracked flag — safe because a
+  genuine signal's stop can never legitimately start on the profit side
+  of its own entry (that would mean zero or negative risk), so that
+  state is only ever reached via a prior breakeven move.
+- 3 new tests in `backend/tests/test_portfolio.py`
+  (`test_trade_tracker_update_stop_loss_moves_stop_on_open_trade`,
+  `..._raises_for_unknown_id`, `..._raises_for_closed_trade`).
+
+### Why this matters
+Break-even was the only one of the three A/B-tested experimental
+execution features (break-even/Breaker Block/partial-TP — see the entry
+below) with evidence strong enough to act on: it reproduced a positive
+result on two independent backtest samples (+13.5% on a ~31-day sample,
++9.2% on a 6-month sample). Breaker Block (slightly negative) and
+partial-TP (negative, reproduced) have no such evidence and are
+deliberately NOT wired into paper trading.
+
+### Verified
+- `pytest backend/tests/` 190/190 passing (187 + 3 new).
+- A real-temp-SQLite-DB script (not pytest — matches this repo's existing
+  convention that `run_paper.py` has no direct pytest coverage, since it
+  needs a live network candle feed) exercised: a long position below its
+  trigger (no move), at its trigger (stop moves to entry), and a later
+  pass at a higher price (correctly skipped — already at breakeven, no
+  duplicate write); a short position at its trigger (stop moves to
+  entry); and `ENABLE_BREAKEVEN=False` (no move regardless of price). All
+  passed.
+
+### Decision
+Ship as opt-in (`ENABLE_BREAKEVEN`, mirroring `ENABLE_TELEGRAM_ALERTS`'s
+existing pattern), off by default, so a live paper-trading run's behavior
+never changes silently. See `ROADMAP.md` and `ENGINEERING_DECISIONS.md`
+for the ongoing validation plan (ETHUSDT, more assets, more years) before
+this or any other experimental feature would ever be considered for live
+trading.
+
 ## [Unreleased] - Fixed HTF over-fetch bug; re-validated all 3 audit findings across 6 months of real regimes
 
 ### Fixed

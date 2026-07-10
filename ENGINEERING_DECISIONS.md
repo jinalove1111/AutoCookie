@@ -149,10 +149,17 @@ forcing that loop to construct/mutate position-dict-shaped objects on
 every iteration just to call a function designed for a different calling
 pattern would add complexity without benefit.
 
-**Trade-off accepted**: `OrderManager.move_to_breakeven()` remains
-unused in this round (see `ROADMAP.md` item #2 — it's the natural fit
-once break-even is wired into PAPER trading, where positions genuinely
-are DB rows and the one-shot-call contract fits naturally).
+**Trade-off accepted**: `OrderManager.move_to_breakeven()` remained
+unused for the rest of that round. **Update**: now consumed exactly as
+anticipated — `scripts/run_paper.py::_maybe_move_to_breakeven()` calls
+`OrderManager(PaperBroker()).move_to_breakeven(position)` to compute the
+new stop, then persists it via the new
+`TradeTracker.update_stop_loss()`. The one-shot-call contract fits
+paper trading's DB-row positions naturally, exactly as predicted; only
+the "should we call this right now" trigger/idempotency logic (1R
+distance, already-at-breakeven check) is new, since `move_to_breakeven()`
+itself has no concept of a trigger condition — it just moves the stop
+unconditionally whenever called.
 
 ---
 

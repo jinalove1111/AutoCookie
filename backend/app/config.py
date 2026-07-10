@@ -73,6 +73,23 @@ class Settings(BaseSettings):
     ENABLE_DISCORD_ALERTS: bool = False
     DISCORD_WEBHOOK_URL: str = ""
 
+    # --- Experimental strategy/execution features (opt-in, A/B validated
+    # in BacktestEngine before being offered here -- see
+    # docs/strategy_coverage_audit.md and ENGINEERING_DECISIONS.md) ---
+    #
+    # Break-even stop management: reproduced positive on two independent
+    # backtest samples (+13.5% on a ~31-day sample, +9.2% on a 6-month
+    # sample -- see CHANGELOG.md), the strongest of the three findings.
+    # `BREAKEVEN_TRIGGER_R` is shared with `BacktestEngine`'s own
+    # `use_breakeven` A/B-test path (imported from here, not duplicated)
+    # so paper trading and backtesting always agree on the same trigger
+    # distance -- ENABLE_BREAKEVEN itself only gates scripts/run_paper.py;
+    # BacktestEngine.run()'s per-call `use_breakeven` flag stays
+    # independent of this setting (backtesting needs to A/B test with
+    # both on and off regardless of the "production" paper setting).
+    ENABLE_BREAKEVEN: bool = False
+    BREAKEVEN_TRIGGER_R: float = 1.0
+
     @field_validator("TRADING_MODE")
     @classmethod
     def validate_trading_mode(cls, value: str) -> str:
