@@ -444,3 +444,20 @@ see paper-trading wiring in CHANGELOG.md) is a direct, practical
 consequence of taking this distinction seriously — an operator reading
 only the headline verdict, not the fine print, still gets the safe
 default.
+
+**Follow-up (SOLUSDT then XRPUSDT rounds)**: the same lesson recurred one
+level up. After a 3rd asset (SOLUSDT), break-even looked like it had a
+real negative LEAN (2 of 3 assets negative) rather than being purely
+asset-dependent noise — a 4th asset (XRPUSDT, +5.4%) broke that lean
+back to a genuine 2-of-4/2-of-4 split. A small COUNT OF ASSETS can
+manufacture the appearance of a trend exactly the way a small count of
+PERIODS can (the original concern this decision was written for) —
+"how many assets have been tested" needs the same explicit skepticism
+as "how many periods have been tested." Breaker Block showed the same
+pattern in miniature: unanimously negative across 3 assets, then a 4th
+(XRPUSDT, +1.5%) broke the unanimity. Partial TP is the calibration
+case that shows this ISN'T just "more data always overturns findings" —
+it has now stayed negative on all 4 assets and 24 of 24 periods with no
+sign of reverting, so a real, robust effect and an apparent-but-fragile
+trend look different once enough independent samples exist; the risk is
+mistaking the latter for the former too early.

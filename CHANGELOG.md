@@ -4,6 +4,67 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Re-validated all 3 audit findings on XRPUSDT (4th asset): break-even and Breaker Block both flip back to genuinely mixed
+
+### Re-validated on a fourth, independent asset (ROADMAP item #1)
+Same methodology again: XRPUSDT/15m, `--candles 3000 --periods 6`, same
+January-July 2026 window. Baseline: **6 of 6 periods profitable**
+(aggregate $2817.37).
+
+| | P1 | P2 | P3 | P4 | P5 | P6 | Sum |
+|---|---|---|---|---|---|---|---|
+| Baseline | $382.46 | $530.67 | $477.48 | $303.82 | $504.99 | $617.95 | $2817.37 |
+| Break-even | $382.46 | $569.74 | $427.04 | $303.82 | $453.61 | $832.63 | **$2969.31 (+5.4%)** |
+| Breaker Block | $382.46 | $573.34 | $477.48 | $303.82 | $504.99 | $617.95 | **$2860.04 (+1.5%)** |
+| Partial TP | $250.07 | $400.88 | $296.58 | $166.81 | $358.77 | $536.36 | **$2009.47 (-28.7%)** |
+
+### Four-asset picture (BTCUSDT / ETHUSDT / SOLUSDT / XRPUSDT, all 6-month/6-period)
+
+| Feature | BTC | ETH | SOL | XRP | Verdict |
+|---|---|---|---|---|---|
+| Break-even | +9.2% | -1.9% | -4.8% | +5.4% | **2 of 4 positive, 2 of 4 negative — genuinely mixed, no reliable direction** |
+| Breaker Block | -3.8% | -12.0% | -1.9% | +1.5% | **3 of 4 negative, 1 of 4 positive — mostly negative, no longer unanimous** |
+| Partial TP | -32.6% | -35.4% | -29.1% | -28.7% | **Negative on 4 of 4 assets, 24 of 24 periods, zero exceptions** |
+
+- **Break-even: back to genuinely mixed, NOT "more often negative."** The
+  prior entry (SOLUSDT) read this as trending negative (2 of 3 assets
+  negative). XRPUSDT's +5.4% breaks that trend -- the honest picture with
+  4 data points is a coin flip (BTC/XRP positive, ETH/SOL negative), not
+  a lean in either direction. This is itself an important, load-bearing
+  finding: a 2-of-3 trend that looked meaningful reverted to noise with
+  one more data point, which is exactly the risk `ENGINEERING_DECISIONS.md`
+  entry #14/#15 warn about -- small sample counts (of assets, not just
+  periods) produce apparent trends that don't survive more data.
+  `ENABLE_BREAKEVEN` remains off by default; a coin-flip-across-assets
+  result is, if anything, a STRONGER case for never defaulting it on
+  globally than a consistent-negative result would have been (a
+  consistent-negative result would at least be predictable and avoidable
+  per-asset; a coin flip means no one has a reliable way to predict which
+  assets it'll help without testing each one directly).
+- **Breaker Block: mostly negative, no longer unanimous.** XRPUSDT's
+  +1.5% is the first positive result for this feature across 4 assets
+  (BTC -3.8%, ETH -12.0%, SOL -1.9%, XRP +1.5%). Still 3 of 4 negative,
+  so the "not recommended" posture holds, but "negative on every tested
+  asset" is no longer an accurate description.
+- **Partial TP: negative on all 4 assets, 24 of 24 tested periods worse,
+  zero exceptions anywhere.** This remains the single most robust,
+  unambiguous finding in the project -- four independent assets, zero
+  counterexamples at the period level.
+
+### Verified
+- `pytest backend/tests/` 190/190 passing (no code changes -- pure
+  research/validation round).
+
+### Decision
+No code changes from this finding. `ENABLE_BREAKEVEN` and the backtest
+CLI's `--breaker-block`/`--partial-tp` flags all remain opt-in,
+off-by-default. Partial TP is now strong enough evidence to consider
+actively recommending AGAINST it (beyond just "not proven") in any future
+paper/live rollout guidance; break-even and Breaker Block both need
+either more assets or a different kind of test (e.g. different years,
+different market regimes) before any directional claim beyond "mixed,
+asset-specific, no default recommendation" is honest. See `ROADMAP.md`.
+
 ## [Unreleased] - Re-validated all 3 audit findings on SOLUSDT (3rd asset): break-even now negative on 2 of 3 assets
 
 ### Re-validated on a third, independent asset (ROADMAP item #1)

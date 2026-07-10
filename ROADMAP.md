@@ -81,25 +81,44 @@ varied conditions):
   Partial TP is 18 of 18 tested periods worse across three independent
   assets with zero exceptions, the most robust finding in the project.
   See CHANGELOG.md for the full 3-asset comparison table.
+- ~~Test a 4th asset (XRPUSDT)~~ — DONE. **Break-even's apparent
+  2-of-3-negative trend did NOT hold** — XRPUSDT came back +5.4%,
+  making the 4-asset picture BTC +9.2% / ETH -1.9% / SOL -4.8% /
+  XRP +5.4%: a genuine 2-of-4/2-of-4 split, not a lean in either
+  direction. This is itself the important result: a trend that looked
+  real after 3 assets reverted to noise with a 4th, exactly the
+  small-sample-of-assets risk flagged in the SOLUSDT entry above.
+  **Breaker Block also softened** — XRPUSDT's +1.5% is its first
+  positive result (3 of 4 assets still negative, so still not
+  recommended, but "negative on every asset" is no longer accurate).
+  **Partial TP remains unanimous**: -28.7% on XRP, negative on 4 of 4
+  assets, 24 of 24 tested periods, zero exceptions — the only one of
+  the three findings solid enough to actively recommend against, not
+  just decline to recommend. See CHANGELOG.md for the full 4-asset
+  comparison table.
 
 See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all of this.
 
 ## Immediate (highest ROI, unblocked, no operator input needed)
 
-1. **Test a 4th asset before treating break-even's 2-of-3-negative
-   picture as settled** — 2 of 3 could still flip with more data, the
-   same way the 1-of-2-BTC-only picture did when ETHUSDT was added.
-   Prefer a genuinely less-correlated asset class if OKX offers one
-   (BTC/ETH/SOL are all large-cap L1s with similar beta).
-2. **Extend even further back in time / to other years** — all three
-   6-month samples (BTC/ETH/SOL) cover the SAME calendar window
-   (Jan-Jul 2026). This tests asset-generalization, not
-   time-generalization; genuinely different YEARS (different macro
-   conditions) remain completely untested.
-3. **Consider whether `ENABLE_BREAKEVEN` should ever become a
-   recommended (not just available) default** — now leaning toward "no"
-   given the 2-of-3-negative picture, but hold the final call for a 4th
-   asset per item #1 above.
+1. **Extend to other years, not just other assets** — all four 6-month
+   samples (BTC/ETH/SOL/XRP) cover the SAME calendar window (Jan-Jul
+   2026). Break-even and Breaker Block have now shown that asset choice
+   alone produces a coin-flip-like spread of results; a genuinely
+   different YEAR (different macro regime) is the next axis of
+   variation that hasn't been tested at all, and is likely to matter at
+   least as much as asset choice does.
+2. **Stop trying to find a "final verdict" on break-even/Breaker Block
+   from more assets alone** — 4 assets already show no reliable
+   direction for either. Further asset-only testing has diminishing
+   ROI; time-based testing (item #1) or accepting "asset/regime
+   dependent, no safe global default" as the actual conclusion are both
+   better uses of effort than a 5th or 6th asset in the same time
+   window.
+3. **`ENABLE_BREAKEVEN` stays off by default, permanently, not
+   provisionally** — the 4-asset coin-flip result means there is no
+   asset-agnostic direction to default toward. This is now a settled
+   design conclusion, not a "waiting for more data" placeholder.
 
 ## Near-term (needs the above first, or is inherently larger scope)
 
@@ -156,9 +175,10 @@ See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all of this.
   `exchange/orangex_client.py`) — all `NotImplementedError` stubs,
   deliberately. Requires, IN ORDER: (a) out-of-sample validation across
   genuinely different market regimes (partially done -- 6-month results
-  now exist for both BTCUSDT and ETHUSDT, see above, but they DISAGREE on
-  break-even, and other years/less-correlated assets remain untested, see
-  items #1-2 above), (b) operator-issued OKX API keys with withdrawal
+  now exist for FOUR assets, but two of the three experimental features
+  show no reliable cross-asset direction, and genuinely different YEARS
+  remain completely untested, see item #1 above), (b) operator-issued
+  OKX API keys with withdrawal
   disabled, (c) a small live-capital limit agreed with the operator, (d)
   step-by-step operator approval at each stage per
   `docs/live_trading_checklist.md`. None of this proceeds without the
