@@ -69,25 +69,37 @@ varied conditions):
   changed from this finding — `ENABLE_BREAKEVEN` stays off by default,
   which this result is a reason FOR, not against. See CHANGELOG.md for
   the full comparison table.
+- ~~Add a third, less-correlated symbol (SOLUSDT)~~ — DONE. **Break-even
+  is now negative on 2 of 3 tested assets**: +9.2% (BTC), -1.9% (ETH),
+  -4.8% (SOL) — SOLUSDT's result was uniformly flat-to-negative (0
+  periods improved, 4 of 6 worse), not mixed the way ETHUSDT's was. The
+  honest read is no longer "asset-dependent, could go either way" but
+  "more often negative than positive on the assets tested so far," with
+  the caveat that 3 assets is still a small sample of assets.
+  **Breaker Block (-1.9% SOL) and Partial TP (-29.1% SOL, 6/6 periods
+  worse) both reproduce their negative verdicts on all 3 assets now** —
+  Partial TP is 18 of 18 tested periods worse across three independent
+  assets with zero exceptions, the most robust finding in the project.
+  See CHANGELOG.md for the full 3-asset comparison table.
 
 See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all of this.
 
 ## Immediate (highest ROI, unblocked, no operator input needed)
 
-1. **Add more, less-correlated symbols** — only BTCUSDT/ETHUSDT checked
-   so far (highly correlated with each other, and break-even's ETHUSDT
-   result already shows they don't even agree with each other). A third,
-   genuinely less-correlated asset would help determine whether
-   break-even is "BTCUSDT-specific" or "sometimes positive, sometimes
-   not, no reliable pattern yet."
-2. **Extend even further back in time / to other years** — the 6-month
-   sample (Jan-Jul 2026) is still one continuous span of recent history.
-   Genuinely different YEARS (different macro conditions) would be a
-   stronger test than a longer contiguous window in the same period.
-3. **Consider whether `ENABLE_BREAKEVEN` needs to become symbol-aware**
-   (e.g. a per-symbol override) rather than a single global on/off switch
-   — premature until at least a third asset's result is in, but worth
-   flagging now given BTCUSDT and ETHUSDT already disagree.
+1. **Test a 4th asset before treating break-even's 2-of-3-negative
+   picture as settled** — 2 of 3 could still flip with more data, the
+   same way the 1-of-2-BTC-only picture did when ETHUSDT was added.
+   Prefer a genuinely less-correlated asset class if OKX offers one
+   (BTC/ETH/SOL are all large-cap L1s with similar beta).
+2. **Extend even further back in time / to other years** — all three
+   6-month samples (BTC/ETH/SOL) cover the SAME calendar window
+   (Jan-Jul 2026). This tests asset-generalization, not
+   time-generalization; genuinely different YEARS (different macro
+   conditions) remain completely untested.
+3. **Consider whether `ENABLE_BREAKEVEN` should ever become a
+   recommended (not just available) default** — now leaning toward "no"
+   given the 2-of-3-negative picture, but hold the final call for a 4th
+   asset per item #1 above.
 
 ## Near-term (needs the above first, or is inherently larger scope)
 

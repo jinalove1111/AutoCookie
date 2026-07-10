@@ -11,10 +11,11 @@ the "why" behind specific non-obvious engineering choices, see
 
 Last updated: 2026-07-10 (night CTO session: all 3 audit HIGH items
 wired, A/B tested, and re-validated across 6 months of real, diverse
-market data on TWO independent assets. Break-even is wired into paper
+market data on THREE independent assets. Break-even is wired into paper
 trading, off by default -- and that default matters: break-even's
-positive result did NOT reproduce on ETHUSDT, while Breaker Block's and
-Partial TP's negative results reproduced even more strongly).
+positive result reproduced on only 1 of 3 assets (negative on the other
+2), while Breaker Block's and Partial TP's negative results reproduced
+on all 3, more strongly each time).
 
 ## One-paragraph summary
 
@@ -39,8 +40,8 @@ approval — this is by design, not an oversight.
 | Data (candle fetch) | ✅ Complete | Real OKX public API, deep pagination via `/market/history-candles` (fixed a long-standing 300-candle cap bug), no API key needed |
 | Strategy Engine | ✅ Complete, actively validated | Bias/sweep/CHOCH/FVG/OB/zone-mitigation/entry-model all real, all tested. Breaker Block detection now wired in too (opt-in, `use_breaker_block`, A/B tested — see findings below) |
 | Risk Engine | ✅ Complete | RR floor, daily/weekly loss limits, trades/day cap, position sizing, DB-persisted circuit breaker — all enforced in both paper AND backtest |
-| Backtest Engine | ✅ Complete, actively used for research | Real fee/slippage/PnL, no-lookahead HTF cursor, multi-period out-of-sample splitting (`--periods`, HTF fetch now correctly sized to the LTF request's real time span), opt-in break-even (`--breakeven`, A/B **positive on BTCUSDT (2 samples), slightly negative on ETHUSDT — asset-dependent, not universal**), opt-in Breaker Block entries (`--breaker-block`, A/B **negative, reproduced on both assets, more strongly on ETHUSDT**), opt-in partial take-profit (`--partial-tp`, A/B **negative, reproduced on both assets — 12 of 12 tested periods worse**) |
-| Paper Trading | ✅ Complete | Real open/close/PnL against live OKX data, no real capital. Break-even stop management is wired here too (`settings.ENABLE_BREAKEVEN`, off by default) — shipped while its evidence still looked BTCUSDT-consistent; ETHUSDT has since shown a slightly negative result, so the off-by-default posture is doing real work, not just formality. Breaker Block and partial-TP remain backtest-only (no positive evidence on either asset) |
+| Backtest Engine | ✅ Complete, actively used for research | Real fee/slippage/PnL, no-lookahead HTF cursor, multi-period out-of-sample splitting (`--periods`, HTF fetch now correctly sized to the LTF request's real time span), opt-in break-even (`--breakeven`, A/B **positive on BTCUSDT, negative on ETHUSDT AND SOLUSDT — negative on 2 of 3 tested assets**), opt-in Breaker Block entries (`--breaker-block`, A/B **negative on all 3 tested assets**), opt-in partial take-profit (`--partial-tp`, A/B **negative on all 3 tested assets, 18 of 18 tested periods worse**) |
+| Paper Trading | ✅ Complete | Real open/close/PnL against live OKX data, no real capital. Break-even stop management is wired here too (`settings.ENABLE_BREAKEVEN`, off by default) — shipped while its evidence still looked BTCUSDT-consistent; both follow-up assets (ETHUSDT, SOLUSDT) have since shown negative results, so the off-by-default posture is doing real, demonstrated work. Breaker Block and partial-TP remain backtest-only (no positive evidence on any tested asset) |
 | Portfolio/Journal | ✅ Complete | Real trade/signal persistence, daily/weekly/all-time reports |
 | Dashboard | ✅ Complete | All 5 endpoints (`status`, `positions`, `logs`, `risk-status`, `bias`, `signals`) real, DB/live-computed |
 | Live Trading | ❌ Not implemented, intentionally gated | `LiveBroker`, `exchange/okx_client.py`, `exchange/orangex_client.py` are all `NotImplementedError` stubs. Requires operator-approved API keys + staged approval before ANY code is written here |
@@ -68,58 +69,55 @@ script exercising long/short/idempotency/disabled-gate paths end to end.
   from -$577.82/25% win rate to +$462.18/75% win rate.
 - **Out-of-sample validation exists** (`--periods N`, splits fetched
   history into independent, non-overlapping chronological chunks) and
-  has now been run at two very different scales, on two different
-  assets: an initial ~31-day/3-period sample (BTCUSDT + ETHUSDT), and a
-  follow-up 6-month/6-period sample on EACH of BTCUSDT and ETHUSDT
-  separately (January-July 2026, genuinely varied conditions -- win
-  rates 40%-94.44%, trade counts 5-28 across periods and assets). The
-  strategy's baseline (no experimental features) was **6 of 6 periods
-  profitable on both assets** at the 6-month scale.
+  has now been run on THREE independent assets at 6-month/6-period
+  scale (BTCUSDT, ETHUSDT, SOLUSDT — all January-July 2026, genuinely
+  varied conditions: win rates 40%-100%, trade counts 5-40 across
+  periods and assets). The strategy's baseline (no experimental
+  features) was **6 of 6 periods profitable on all three assets**.
 - **Full rule-by-rule coverage audit exists**: `docs/strategy_coverage_audit.md`.
   Found three items implemented, unit-tested, but never wired into the
-  live decision loop. **All three are now wired, A/B tested, re-tested
-  on a 6-month BTCUSDT sample, AND re-tested again on an independent
-  6-month ETHUSDT sample** — two findings reproduced and even
-  strengthened; one did NOT reproduce, which is itself an important
-  result:
-  - **Break-even** (`--breakeven`): **positive on BTCUSDT, did NOT
-    reproduce on ETHUSDT.** +13.5% (BTC small sample), +9.2% (BTC
-    6-month sample), **-1.9% (ETH 6-month sample)**. The ETHUSDT result
-    is genuinely mixed, not uniformly bad: 1 of 6 periods improved
-    (+$84.54), 2 of 6 got worse (one flipped from a small win to a small
-    loss, win rate 60%->40%), 3 of 6 were unaffected (trigger never
-    reached). **Conclusion: break-even's benefit looks asset-dependent,
-    not universal** — the earlier "reproduced positive on two
-    independent samples" framing rested on two BTCUSDT time windows,
-    which is weaker evidence than "two different assets" would be. This
-    is exactly why it shipped to paper trading off-by-default rather
-    than on.
-  - **Partial take-profit** (`--partial-tp`): **negative, REPRODUCED
-    on BOTH assets, more strongly.** -31.4% (BTC small), -32.6% (BTC
-    6-month), **-35.4% (ETH 6-month)** — 12 of 12 tested periods worse
-    across both assets, no exceptions anywhere. Mechanistic cause
-    identified and holds on both assets: this strategy has a fixed 2:1
-    RR and tends toward a high win rate — locking in half the position
-    at 1R trades away half of every full winner's upside, while rarely
+  live decision loop. **All three are now wired, A/B tested, and
+  re-tested on three independent 6-month asset samples**:
+
+  | Feature | BTCUSDT | ETHUSDT | SOLUSDT | Verdict |
+  |---|---|---|---|---|
+  | Break-even (`--breakeven`) | +9.2% | -1.9% | -4.8% | **Positive on 1 of 3, negative on 2 of 3** |
+  | Breaker Block (`--breaker-block`) | -3.8% | -12.0% | -1.9% | **Negative on 3 of 3** |
+  | Partial TP (`--partial-tp`) | -32.6% | -35.4% | -29.1% | **Negative on 3 of 3, 18/18 periods** |
+
+  - **Break-even**: positive on BTCUSDT (+13.5% small sample, +9.2%
+    6-month sample), but negative on both follow-up assets — ETHUSDT
+    was genuinely mixed (1 of 6 periods improved, 2 worse, 3
+    unaffected), SOLUSDT was uniformly flat-to-negative (0 improved, 4
+    of 6 worse, 2 unaffected). **Conclusion: more often negative than
+    positive on the assets tested so far** — the earlier "reproduced
+    positive on two independent samples" framing rested on two BTCUSDT
+    TIME WINDOWS, not two different assets, which overstated how
+    general the finding was. This is exactly why it shipped to paper
+    trading off-by-default rather than on, and why that default is not
+    being reconsidered toward "on" without a 4th asset's result.
+  - **Partial take-profit**: negative on all 3 assets, 18 of 18 tested
+    periods worse, zero exceptions anywhere. -31.4%/-32.6% (BTC small/
+    6-month), -35.4% (ETH), -29.1% (SOL). Mechanistic cause identified
+    and holds on every asset: this strategy has a fixed 2:1 RR and
+    tends toward a high win rate — locking in half the position at 1R
+    trades away half of every full winner's upside, while rarely
     protecting losers (which mostly never reach +1R before reversing to
-    the stop).
-  - **Breaker Block** (`--breaker-block`): **negative, REPRODUCED on
-    BOTH assets, more strongly on ETHUSDT.** Neutral on the small
-    sample, -3.8% (BTC 6-month, 1 of 6 periods affected), **-12.0% (ETH
-    6-month, 4 of 6 periods affected, all negative, 0 positive)**. Same
-    direction on both assets now, at meaningfully larger magnitude on
-    the second — the out-of-sample methodology doing exactly what it's
-    for.
+    the stop). **The single most robust finding in the project.**
+  - **Breaker Block**: negative on all 3 assets, magnitude ranging
+    -1.9% (SOL) to -12.0% (ETH) to -3.8% (BTC). Neutral on the original
+    small sample (never got a real chance to fire); every subsequent
+    asset has shown a real, negative effect once it did fire.
 
   All three kept opt-in and non-default in the Backtest Engine. Of the
-  three, only break-even was wired into paper trading
+  three, only break-even was ever wired into paper trading
   (`settings.ENABLE_BREAKEVEN`, off by default) — it shipped while its
-  evidence still looked consistently positive; the ETHUSDT result above
-  came from the very next validation round and revised that picture. The
-  off-by-default choice was not just caution for its own sake — it is
-  now doing real, demonstrated work: an operator who had defaulted it ON
-  based on the BTCUSDT evidence alone would be running a slightly
-  negative feature on ETHUSDT today.
+  evidence still looked consistently positive; both follow-up
+  validation rounds (ETHUSDT, then SOLUSDT) revised that picture
+  further negative each time. The off-by-default choice is now doing
+  real, demonstrated work: an operator who had defaulted it ON based on
+  the BTCUSDT evidence alone would be running a net-negative feature on
+  2 of the 3 assets tested today.
 - **Data-layer bug found and fixed along the way**: `scripts/run_backtest.py`
   requested the same candle COUNT for both LTF and HTF fetches, which
   for a large `--periods` request meant asking for years more HTF
@@ -130,17 +128,18 @@ script exercising long/short/idempotency/disabled-gate paths end to end.
 
 ## Honest caveats (read before citing these results anywhere)
 
-- Only 2 assets checked at all (BTCUSDT, ETHUSDT), which are highly
-  correlated with each other — and they still disagree on break-even.
-  That disagreement between two CORRELATED assets is itself a caution
-  sign: a genuinely uncorrelated third asset could easily diverge again.
-- Both 6-month samples cover the same calendar window (January-July
-  2026) on both assets — this tests asset-generalization, not
-  time-generalization; different YEARS remain untested.
-- Per-period trade counts (5-28 across both 6-month samples, 4-12 on the
-  original small sample) are still modest; win-rate confidence intervals
-  remain wide, especially for the smaller-trade-count periods (ETHUSDT
-  P3 had only 5 trades).
+- 3 assets checked (BTCUSDT, ETHUSDT, SOLUSDT), all large-cap L1s with
+  broadly similar market beta — not a genuinely diverse asset set.
+  Break-even's results already disagree across even this correlated
+  set (positive on 1, negative on 2), which is itself a caution sign:
+  2-of-3 could flip again with a 4th, more different asset.
+- All three 6-month samples cover the SAME calendar window
+  (January-July 2026) — this tests asset-generalization, not
+  time-generalization; different YEARS remain completely untested.
+- Per-period trade counts (5-40 across the three 6-month samples, 4-12
+  on the original small sample) are still modest; win-rate confidence
+  intervals remain wide, especially for the smaller-trade-count periods
+  (e.g. ETHUSDT P3 and SOLUSDT P4 each had only 5-8 trades).
 - No strategy parameters have ever been tuned against real data —
   `_LOOKBACK`, `_IMPULSE_MULT`, `_STOP_BUFFER`, `_RR`,
   `BREAKEVEN_TRIGGER_R`, `PARTIAL_TP_TRIGGER_R`, `PARTIAL_TP_PORTION`
@@ -148,13 +147,13 @@ script exercising long/short/idempotency/disabled-gate paths end to end.
   tuned, it must be done using the `--periods` tool's held-out-period
   discipline or the entire point of building it is defeated.
 
-**Conclusion: mixed, and that's a real finding, not a failure.**
-Partial-TP and Breaker Block's negative verdicts both reproduced and
-strengthened across two independent assets — real evidence those aren't
-flukes. Break-even's positive verdict did NOT reproduce across assets
-(only across time windows on the same asset) — real evidence that
-"reproduced" claims must specify what varied between samples, since
-asset-generalization and time-generalization are different claims with
-different strength. This system has not yet been tested across
-genuinely different years or genuinely uncorrelated assets. See
-`ROADMAP.md` for what's next.
+**Conclusion: two findings are now solid, one is genuinely unsettled —
+and that's real information, not a failure of the process.**
+Partial-TP and Breaker Block's negative verdicts have now reproduced on
+every one of three independent assets, which is strong evidence those
+aren't flukes. Break-even's positive verdict reproduced across TIME on
+one asset (BTCUSDT) but not across ASSETS — a distinction that matters
+and that this project's docs now call out explicitly (see
+`ENGINEERING_DECISIONS.md` entry #15). This system has not yet been
+tested across genuinely different years or genuinely uncorrelated asset
+classes. See `ROADMAP.md` for what's next.

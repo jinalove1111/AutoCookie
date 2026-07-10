@@ -4,6 +4,66 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Re-validated all 3 audit findings on SOLUSDT (3rd asset): break-even now negative on 2 of 3 assets
+
+### Re-validated on a third, independent asset (ROADMAP item #1)
+Same methodology again: SOLUSDT/15m, `--candles 3000 --periods 6`,
+same four configurations, same January-July 2026 window. Baseline: **6
+of 6 periods profitable** (aggregate $4147.36 -- SOLUSDT's baseline win
+rates/PnL ran noticeably higher than BTC/ETH's this period, e.g. period
+2 was 100.00% win rate, 18/18 trades).
+
+| | P1 | P2 | P3 | P4 | P5 | P6 | Sum |
+|---|---|---|---|---|---|---|---|
+| Baseline | $631.31 | $743.90 | $337.93 | $184.68 | $1326.04 | $923.50 | $4147.36 |
+| Break-even | $579.84 | $743.90 | $221.15 | $184.68 | $1318.43 | $898.42 | **$3946.42 (-4.8%)** |
+| Breaker Block | $553.00 | $743.90 | $337.93 | $184.68 | $1326.04 | $923.50 | **$4069.05 (-1.9%)** |
+| Partial TP | $444.40 | $537.32 | $243.88 | $117.23 | $933.46 | $662.50 | **$2938.79 (-29.1%)** |
+
+### Three-asset picture (BTCUSDT / ETHUSDT / SOLUSDT, all 6-month/6-period)
+
+| Feature | BTC | ETH | SOL | Verdict |
+|---|---|---|---|---|
+| Break-even | +9.2% | -1.9% | -4.8% | **Positive on 1 of 3 assets, negative on 2 of 3** |
+| Breaker Block | -3.8% | -12.0% | -1.9% | **Negative on 3 of 3 assets** |
+| Partial TP | -32.6% | -35.4% | -29.1% | **Negative on 3 of 3 assets, 18 of 18 periods** |
+
+- **Break-even: now net-negative across assets tested.** This is a
+  further, more decisive escalation of the ETHUSDT finding (previous
+  entry, same file): what looked like "the most robust of the three
+  findings" after two BTCUSDT time windows is now negative on 2 of the 3
+  assets it has actually been tested on. SOLUSDT's break-even result
+  (0 of 6 periods improved, 4 of 6 worse, 2 unaffected) is not even
+  mixed the way ETHUSDT's was -- it is uniformly flat-to-negative.
+  Combined picture: break-even helped on BTCUSDT and hurt on both
+  ETHUSDT and SOLUSDT. The honest conclusion is no longer "asset-
+  dependent, could go either way" -- it is "more often negative than
+  positive on the assets tested so far," though 3 assets is still a
+  small sample of assets. `ENABLE_BREAKEVEN` remains off by default in
+  paper trading; this result is a reason to consider whether it should
+  ever become the recommended default, not just a reason for caution
+  about ETHUSDT specifically.
+- **Breaker Block: negative on all 3 assets now**, magnitude ranging
+  -1.9% (SOL) to -12.0% (ETH). Consistent direction, inconsistent size --
+  still enough to keep this un-recommended.
+- **Partial TP: negative on all 3 assets, 18 of 18 periods tested worse,
+  zero exceptions across three independent assets.** This is now the
+  single most robust finding in the project -- the mechanistic
+  explanation (fixed 2:1 RR + high win rate means partial exits trade
+  away more winner upside than they protect from losers) has held on
+  every asset tested without a single counterexample period.
+
+### Verified
+- `pytest backend/tests/` 190/190 passing (no code changes -- pure
+  research/validation round, matching this project's audit discipline).
+
+### Decision
+No code changes from this finding. Given break-even is now negative on
+a majority of tested assets, the next natural step (see `ROADMAP.md`) is
+to test a 4th asset before drawing a final conclusion either way --
+2-of-3 could still flip with more data, exactly as the 1-of-2 BTC-only
+picture did. `ENABLE_BREAKEVEN` stays off by default either way.
+
 ## [Unreleased] - Re-validated all 3 audit findings on ETHUSDT: break-even does NOT generalize, the other two do
 
 ### Re-validated on a second, independent asset (ROADMAP item #1)
