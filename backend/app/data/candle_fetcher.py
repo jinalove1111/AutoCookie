@@ -204,11 +204,29 @@ class CandleFetcher:
         page_limit: int = OKX_MAX_LIMIT,
         max_pages: int = 200,
         sleep_seconds: float = 0.25,
+        end_time_ms: int | None = None,
     ) -> list:
         """
         Assemble up to `total_candles` OHLCV candles for `symbol`/`timeframe`
         by paginating backward through OKX's `/market/history-candles`
         endpoint, sorted oldest -> newest.
+
+        `end_time_ms` (optional, default `None`): anchors the fetch to end
+        at this millisecond timestamp instead of "now". Without it, every
+        call is anchored to the most recent candle -- there was previously
+        no way to ask for a specific past window (e.g. "6 months ending
+        July 2024") without fetching everything from now back to that
+        window and discarding the rest, which for anything more than a
+        few months back would blow past `max_pages` long before reaching
+        the target window. With it, the first page's `after` cursor is
+        `end_time_ms` directly (OKX's `after=<ts>` already means
+        "strictly older than ts" -- see below), so pagination starts
+        exactly at the requested end point. This is what
+        `scripts/run_backtest.py --end-date` uses to validate the
+        strategy against genuinely different YEARS, not just different
+        assets in the same recent window (see
+        `ENGINEERING_DECISIONS.md`/`ROADMAP.md` on why asset-only
+        out-of-sample testing has diminishing returns).
 
         Why a separate endpoint/method rather than looping `fetch_ohlcv`:
         `/market/candles` (what `fetch_ohlcv` uses) has a hard total-history
@@ -247,7 +265,7 @@ class CandleFetcher:
         # pages).
         pages: list[list] = []
         collected = 0
-        after: str | None = None
+        after: str | None = str(end_time_ms) if end_time_ms is not None else None
 
         for _ in range(max_pages):
             if collected >= total_candles:

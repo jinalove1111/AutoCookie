@@ -461,3 +461,21 @@ it has now stayed negative on all 4 assets and 24 of 24 periods with no
 sign of reverting, so a real, robust effect and an apparent-but-fragile
 trend look different once enough independent samples exist; the risk is
 mistaking the latter for the former too early.
+
+**Follow-up (time-anchored `--end-date` testing)**: a third dimension
+was added -- `CandleFetcher.fetch_ohlcv_history()` gained `end_time_ms`,
+letting a fetch be anchored to a specific past date instead of always
+"now". The very first cross-year test (BTCUSDT, 2025-07-10 vs.
+2026-07-10) produced the single clearest data point yet: break-even
+flipped sign on the SAME asset (+9.2% in 2026, -1.9% in 2025). Combined
+with the cross-asset coin flip above, break-even has now shown no
+reliable direction along either axis that's been tested (asset, or
+time on the one asset checked both ways). Partial TP, again, held:
+-32.6% (2026) vs. -32.1% (2025), nearly identical. The practical lesson
+compounds: "how many time windows have been tested" needs the same
+skepticism as asset count and period count -- and, notably, ONE
+time-anchored test on ONE asset moved the break-even conclusion further
+than THREE additional assets did, suggesting time/regime may be a
+bigger driver of these effects than asset choice. This directly
+reprioritized `ROADMAP.md` toward more `--end-date` testing over more
+assets.

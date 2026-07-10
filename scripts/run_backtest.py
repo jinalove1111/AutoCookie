@@ -33,6 +33,13 @@ Exit codes:
   1 -> genuine failures: candle fetch/network error, zero candles returned,
        or an unexpected exception from the backtest engine itself.
 
+Time-anchored fetches (`--end-date YYYY-MM-DD`): by default this script
+fetches candles ending at "now". `--end-date` anchors the fetch to end at
+a specific past date instead, via `CandleFetcher.fetch_ohlcv_history`'s
+`end_time_ms` parameter -- this is what makes it possible to validate the
+strategy against a genuinely different YEAR/macro regime, not just
+different assets within the same recent window (see ROADMAP.md).
+
 HTF/LTF handling: `SignalEngine.generate_signal()` requires real, distinct
 `ltf_candles`/`htf_candles` series (HTF bias must come from a genuine
 higher-timeframe series, per docs/strategy_spec.md section 1). This script
@@ -50,6 +57,7 @@ from __future__ import annotations
 import argparse
 import math
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -75,15 +83,25 @@ from app.risk.risk_manager import RiskManager
 from app.strategy.signal_engine import SignalEngine
 
 
-def fetch_candles(symbol: str, timeframe: str, requested: int) -> list:
+def fetch_candles(
+    symbol: str, timeframe: str, requested: int, end_time_ms: int | None = None
+) -> list:
     """Fetch historical candles for `symbol`/`timeframe` via
     `CandleFetcher.fetch_ohlcv_history()` -- real deep pagination (see
     module docstring), not a single 300-candle-capped call. May return
     fewer than `requested` if OKX's actual history for this instrument/
     timeframe runs out first; that shortfall is printed as a note by the
     caller (via the returned count), not silently swallowed here.
+
+    `end_time_ms` (optional): anchors the fetch to end at this timestamp
+    instead of "now" -- see `CandleFetcher.fetch_ohlcv_history`'s
+    docstring. This is what `--end-date` uses to validate the strategy
+    against a specific past YEAR, not just "however far back `--candles`
+    happens to reach from today."
     """
-    return CandleFetcher().fetch_ohlcv_history(symbol, timeframe, total_candles=requested)
+    return CandleFetcher().fetch_ohlcv_history(
+        symbol, timeframe, total_candles=requested, end_time_ms=end_time_ms
+    )
 
 
 def htf_candle_count_for_span(ltf_timeframe: str, ltf_candle_count: int, htf_timeframe: str) -> int:
@@ -257,6 +275,21 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--end-date",
+        default=None,
+        help=(
+            "Anchor the fetch to end at this UTC date (format: YYYY-MM-DD) "
+            "instead of 'now' -- fetches the most recent --candles*--periods "
+            "candles ENDING at this date, going backward. Use this to "
+            "validate the strategy against a specific past YEAR/regime "
+            "rather than only whatever window --candles happens to reach "
+            "back to from today (see ROADMAP.md on why asset-only "
+            "out-of-sample testing has diminishing returns once several "
+            "assets in the same recent window have been checked). Default: "
+            "None (fetch ending at 'now', unchanged behavior)."
+        ),
+    )
+    parser.add_argument(
         "--output",
         default=str(DEFAULT_OUTPUT_PATH),
         help=(
@@ -274,9 +307,19 @@ def main() -> int:
     args = _parse_args()
     total_requested = args.candles * args.periods
 
+    end_time_ms: int | None = None
+    if args.end_date is not None:
+        try:
+            end_dt = datetime.strptime(args.end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            print(f"ERROR: --end-date {args.end_date!r} is not a valid YYYY-MM-DD date.")
+            return 1
+        end_time_ms = int(end_dt.timestamp() * 1000)
+        print(f"Anchoring fetch to end at {end_dt.isoformat()} (--end-date {args.end_date}).")
+
     # --- 1. Fetch historical LTF candles (real deep pagination, see docstring) ---
     try:
-        candles = fetch_candles(args.symbol, args.timeframe, total_requested)
+        candles = fetch_candles(args.symbol, args.timeframe, total_requested, end_time_ms)
     except Exception as exc:  # network/data errors are genuine failures
         print(f"ERROR: failed to fetch candles for {args.symbol}: {exc}")
         return 1
@@ -315,7 +358,9 @@ def main() -> int:
     # needed and took many minutes to page through).
     htf_requested = htf_candle_count_for_span(args.timeframe, total_requested, settings.HTF_TIMEFRAME)
     try:
-        htf_candles = fetch_candles(args.symbol, settings.HTF_TIMEFRAME, htf_requested)
+        htf_candles = fetch_candles(
+            args.symbol, settings.HTF_TIMEFRAME, htf_requested, end_time_ms
+        )
     except Exception as exc:  # network/data errors are genuine failures
         print(f"ERROR: failed to fetch HTF candles for {args.symbol}: {exc}")
         return 1

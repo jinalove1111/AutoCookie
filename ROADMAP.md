@@ -96,29 +96,50 @@ varied conditions):
   the three findings solid enough to actively recommend against, not
   just decline to recommend. See CHANGELOG.md for the full 4-asset
   comparison table.
+- ~~Add time-anchored fetching (`--end-date`) and run a first cross-year
+  test~~ — DONE. `CandleFetcher.fetch_ohlcv_history()` gained
+  `end_time_ms`; `run_backtest.py --end-date YYYY-MM-DD` anchors a fetch
+  to end at a specific past date instead of "now". First real use:
+  BTCUSDT 6-month/6-period, anchored to 2025-07-10 instead of the
+  existing 2026-07-10 window. **Break-even flips sign on the SAME
+  asset**: +9.2% (2026) vs. **-1.9%** (2025) — the clearest evidence yet
+  that this feature's effect is regime/time-dependent, not just
+  asset-dependent; there is now no dimension (asset OR time) along which
+  it has shown a reliable direction. Breaker Block had exactly 0.0%
+  effect in the 2025 window (never fired differently from baseline).
+  Partial TP reproduced almost exactly across YEARS too: -32.6% (2026)
+  vs. -32.1% (2025) — now confirmed across 4 assets in one time window
+  AND 2 time windows on one asset, the strongest evidence for any single
+  finding in this project. See CHANGELOG.md for the full table.
 
 See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all of this.
 
 ## Immediate (highest ROI, unblocked, no operator input needed)
 
-1. **Extend to other years, not just other assets** — all four 6-month
-   samples (BTC/ETH/SOL/XRP) cover the SAME calendar window (Jan-Jul
-   2026). Break-even and Breaker Block have now shown that asset choice
-   alone produces a coin-flip-like spread of results; a genuinely
-   different YEAR (different macro regime) is the next axis of
-   variation that hasn't been tested at all, and is likely to matter at
-   least as much as asset choice does.
-2. **Stop trying to find a "final verdict" on break-even/Breaker Block
-   from more assets alone** — 4 assets already show no reliable
-   direction for either. Further asset-only testing has diminishing
-   ROI; time-based testing (item #1) or accepting "asset/regime
-   dependent, no safe global default" as the actual conclusion are both
-   better uses of effort than a 5th or 6th asset in the same time
-   window.
-3. **`ENABLE_BREAKEVEN` stays off by default, permanently, not
-   provisionally** — the 4-asset coin-flip result means there is no
-   asset-agnostic direction to default toward. This is now a settled
-   design conclusion, not a "waiting for more data" placeholder.
+1. **Run more `--end-date` cross-year tests, prioritized over more
+   assets** — one time-anchored BTCUSDT test just produced a bigger
+   revision to the break-even story (a sign flip on the SAME asset)
+   than three additional assets combined. Natural next steps: (a) a
+   2024 window (further back, only 1 more day-count worth of pagination
+   given `--end-date` now works), (b) the same 2025 window on
+   ETHUSDT/SOLUSDT/XRPUSDT to see whether Partial TP's time-robustness
+   holds for them too, (c) a genuinely different SEASON within a year
+   (e.g. --end-date near a known volatility event) rather than only
+   different calendar years.
+2. **Break-even and Breaker Block: stop looking for a "final verdict" at
+   all — treat "no reliable direction across assets OR time" as the
+   actual, settled conclusion.** Both now show sign flips or
+   inconsistent effects across every axis tested (4 assets, 2 time
+   windows on the asset with the strongest original signal). Further
+   testing of either dimension alone has clearly diminishing ROI;
+   effort is better spent elsewhere (item #1's remaining value is
+   mostly about Partial TP and general regime-characterization, not
+   about resolving these two).
+3. **`ENABLE_BREAKEVEN` stays off by default, permanently** — reaffirmed,
+   now by a same-asset sign flip across time in addition to the earlier
+   cross-asset coin flip. This is not being revisited without a
+   fundamentally different kind of evidence (e.g. a parameter change
+   that's shown to correlate with the sign, not just "one more sample").
 
 ## Near-term (needs the above first, or is inherently larger scope)
 

@@ -4,6 +4,87 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Add time-anchored backtesting (`--end-date`); first cross-YEAR validation shows break-even flips sign on BTCUSDT itself
+
+### Added
+- `CandleFetcher.fetch_ohlcv_history()` gained an optional `end_time_ms`
+  parameter: anchors the fetch to end at a specific past millisecond
+  timestamp instead of always "now". Previously there was no way to
+  request a specific past window (e.g. "6 months ending July 2025")
+  without fetching everything from now back to that window and
+  discarding the rest -- for anything more than a few months back this
+  would blow past the `max_pages` safety cap long before reaching the
+  target. With `end_time_ms`, the first page's `after` cursor is set
+  directly to it (OKX's `after=<ts>` already means "strictly older than
+  ts"), so pagination starts exactly at the requested end point.
+- `scripts/run_backtest.py --end-date YYYY-MM-DD`: uses the above to
+  validate the strategy against a specific past year/regime instead of
+  only whichever window `--candles` happens to reach back to from today.
+  Threaded through both the LTF and HTF fetches so both series are
+  anchored to the same end point.
+- 1 new test in `test_candle_fetcher.py`
+  (`test_fetch_ohlcv_history_end_time_ms_anchors_first_page_instead_of_now`).
+
+### Why this matters
+Every out-of-sample test so far (BTC/ETH/SOL/XRP, all previous entries)
+covered the SAME calendar window (January-July 2026) -- testing whether
+results generalize across ASSETS, never across TIME. Given asset choice
+alone already produced a coin-flip spread for break-even (previous
+entry), time period was the obvious next axis to test, and there was no
+existing way to do it without an expensive full-depth fetch.
+
+### First cross-year validation: BTCUSDT, 6-month/6-period, anchored to end at 2025-07-10 (vs. the existing 2026 window)
+`--symbol BTCUSDT --timeframe 15m --candles 3000 --periods 6 --end-date
+2025-07-10`. Baseline: **6 of 6 periods profitable** ($1346.13) -- but
+in a visibly different regime: only 67 total trades across 6 periods
+(vs. BTC 2026's much higher count), period 1 had only 2 trades. The
+strategy finding SOME setups is regime-dependent, not just their
+profitability.
+
+| | P1 | P2 | P3 | P4 | P5 | P6 | Sum |
+|---|---|---|---|---|---|---|---|
+| Baseline (2025) | $61.82 | $387.70 | $338.23 | $182.27 | $247.76 | $128.36 | $1346.14 |
+| Break-even (2025) | $61.82 | $431.58 | $338.23 | $124.82 | $226.00 | $138.44 | **$1320.89 (-1.9%)** |
+| Breaker Block (2025) | $61.82 | $387.70 | $338.23 | $182.27 | $247.76 | $128.36 | **$1346.14 (0.0%)** |
+| Partial TP (2025) | $43.15 | $275.57 | $216.55 | $92.77 | $189.28 | $96.86 | **$914.18 (-32.1%)** |
+
+- **Break-even: flips sign on BTCUSDT itself, same asset, different
+  year.** 2026 window: +9.2%. 2025 window: **-1.9%**. This is the
+  clearest evidence yet that break-even's effect is regime/time-
+  dependent, not just asset-dependent -- even holding the asset constant,
+  changing the TIME WINDOW flips the sign. Combined with the 4-asset
+  coin-flip result (previous entry), there is now no dimension (asset OR
+  time) along which break-even has shown a reliable direction.
+  `ENABLE_BREAKEVEN` stays off by default, permanently.
+- **Breaker Block: exactly zero effect in the 2025 window** -- the
+  detector never altered signal generation in any of the 6 periods
+  (identical PnL to baseline in every period). Consistent with the
+  original small-sample finding (also zero effect) -- this feature
+  appears to only matter in some windows and not others, adding further
+  support to "not recommended, inconsistent effect" rather than a
+  confident "harmful."
+- **Partial TP: reproduces almost exactly, across a different YEAR this
+  time, not just a different asset.** -32.6% (BTC 2026) vs. **-32.1%**
+  (BTC 2025) -- nearly identical magnitude, all 6 periods worse. This is
+  now confirmed robust across 4 assets in one time window AND 2 time
+  windows on one asset -- the strongest possible form of evidence
+  gathered in this project so far for a single finding.
+
+### Verified
+- `pytest backend/tests/` 191/191 passing (190 + 1 new).
+- Feasibility-checked before committing to the full run: a 5-candle
+  direct fetch anchored to 2025-01-15 returned genuine
+  2025-01-14T22:45:00+00:00 -> ...23:45:00+00:00 timestamps, confirming
+  `end_time_ms` anchors correctly rather than silently falling back to
+  "now".
+
+### Decision
+No change to any default. This result promotes "test different years"
+over "test more assets" as the higher-ROI next step (see `ROADMAP.md`) --
+a single time-anchored asset test just produced a bigger revision to the
+break-even story (sign flip on the SAME asset) than three additional
+assets combined.
+
 ## [Unreleased] - Re-validated all 3 audit findings on XRPUSDT (4th asset): break-even and Breaker Block both flip back to genuinely mixed
 
 ### Re-validated on a fourth, independent asset (ROADMAP item #1)

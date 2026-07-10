@@ -228,6 +228,34 @@ def test_fetch_ohlcv_history_respects_max_pages_safety_cap(monkeypatch):
     assert len(candles) == 5 * OKX_MAX_LIMIT
 
 
+def test_fetch_ohlcv_history_end_time_ms_anchors_first_page_instead_of_now(monkeypatch):
+    """Without end_time_ms, the first page has no `after` param (OKX
+    defaults to "most recent"). With it, the FIRST request must already
+    carry `after=<end_time_ms>` so pagination starts at the requested
+    past window instead of "now" -- this is what makes it possible to
+    validate the strategy against a specific past YEAR without first
+    fetching (and discarding) everything from now back to that year.
+    """
+    import app.data.candle_fetcher as candle_fetcher_module
+
+    fake_get, calls = _make_fake_history(total_available=650)
+    monkeypatch.setattr(candle_fetcher_module.httpx, "get", fake_get)
+
+    anchor_ts = _BASE_MS - 200 * _STEP_MS
+
+    candles = CandleFetcher().fetch_ohlcv_history(
+        "BTCUSDT", "1h", total_candles=100, sleep_seconds=0, end_time_ms=anchor_ts
+    )
+
+    assert len(candles) == 100
+    assert calls[0]["after"] == str(anchor_ts)
+    # every returned candle must be strictly older than the anchor
+    anchor_dt = candle_fetcher_module.normalize_candles(
+        [_raw_row(anchor_ts)], exchange="okx", symbol="BTCUSDT", timeframe="1h"
+    )[0]["timestamp"]
+    assert all(c["timestamp"] < anchor_dt for c in candles)
+
+
 def test_fetch_ohlcv_since_param_now_sent_as_after_not_before(monkeypatch):
     """Regression pin for the exact bug fixed this round: `since` must map
     to OKX's `after` param (confirmed empirically to page backward/older),

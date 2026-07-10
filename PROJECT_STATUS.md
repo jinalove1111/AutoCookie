@@ -9,14 +9,16 @@ the "why" behind specific non-obvious engineering choices, see
 `ENGINEERING_DECISIONS.md`. For forward-looking prioritization, see
 `ROADMAP.md`.
 
-Last updated: 2026-07-10 (night CTO session: all 3 audit HIGH items
-wired, A/B tested, and re-validated across 6 months of real, diverse
-market data on FOUR independent assets. Break-even is wired into paper
-trading, off by default -- and the 4-asset result confirms that's the
-right permanent default: break-even shows no reliable cross-asset
-direction (2 positive, 2 negative). Partial TP is now the one finding
-solid enough to actively recommend against, having reproduced negative
-on all 4 assets and 24 of 24 tested periods).
+Last updated: 2026-07-11 (night CTO session: all 3 audit HIGH items
+wired, A/B tested, and re-validated across 6 months of real market data
+on FOUR independent assets AND, new this round, a second independent
+YEAR via a new `--end-date` time-anchored fetch capability. Break-even
+now shows NO reliable direction across either dimension -- it even
+flips sign on BTCUSDT alone between 2025 and 2026 -- so
+`ENABLE_BREAKEVEN` stays off by default, permanently. Partial TP is the
+one finding solid enough to actively recommend against, having
+reproduced negative across 4 assets (24/24 periods) AND across 2 years
+on BTCUSDT alone).
 
 ## One-paragraph summary
 
@@ -38,18 +40,18 @@ approval — this is by design, not an oversight.
 
 | Layer | Status | Notes |
 |---|---|---|
-| Data (candle fetch) | ✅ Complete | Real OKX public API, deep pagination via `/market/history-candles` (fixed a long-standing 300-candle cap bug), no API key needed |
+| Data (candle fetch) | ✅ Complete | Real OKX public API, deep pagination via `/market/history-candles` (fixed a long-standing 300-candle cap bug), no API key needed. `fetch_ohlcv_history()` can now anchor a fetch to end at a specific past date (`end_time_ms`), enabling genuine cross-YEAR backtesting via `run_backtest.py --end-date` |
 | Strategy Engine | ✅ Complete, actively validated | Bias/sweep/CHOCH/FVG/OB/zone-mitigation/entry-model all real, all tested. Breaker Block detection now wired in too (opt-in, `use_breaker_block`, A/B tested — see findings below) |
 | Risk Engine | ✅ Complete | RR floor, daily/weekly loss limits, trades/day cap, position sizing, DB-persisted circuit breaker — all enforced in both paper AND backtest |
-| Backtest Engine | ✅ Complete, actively used for research | Real fee/slippage/PnL, no-lookahead HTF cursor, multi-period out-of-sample splitting (`--periods`, HTF fetch now correctly sized to the LTF request's real time span), opt-in break-even (`--breakeven`, A/B **no reliable direction across 4 assets — 2 positive, 2 negative**), opt-in Breaker Block entries (`--breaker-block`, A/B **negative on 3 of 4 assets, one positive**), opt-in partial take-profit (`--partial-tp`, A/B **negative on all 4 tested assets, 24 of 24 tested periods worse**) |
-| Paper Trading | ✅ Complete | Real open/close/PnL against live OKX data, no real capital. Break-even stop management is wired here too (`settings.ENABLE_BREAKEVEN`, off by default, PERMANENTLY -- see research findings below) — the 4-asset coin-flip result means there is no asset-agnostic direction to ever default toward. Breaker Block and partial-TP remain backtest-only (no positive evidence justifying paper trading) |
+| Backtest Engine | ✅ Complete, actively used for research | Real fee/slippage/PnL, no-lookahead HTF cursor, multi-period out-of-sample splitting (`--periods`, HTF fetch now correctly sized to the LTF request's real time span), time-anchored fetching (`--end-date`), opt-in break-even (`--breakeven`, A/B **no reliable direction across 4 assets OR across 2 years on the same asset — even flips sign on BTCUSDT alone**), opt-in Breaker Block entries (`--breaker-block`, A/B **mostly negative across assets, zero effect in the 2025 BTCUSDT window**), opt-in partial take-profit (`--partial-tp`, A/B **negative on all 4 tested assets AND both tested years on BTCUSDT — the most robust finding in the project**) |
+| Paper Trading | ✅ Complete | Real open/close/PnL against live OKX data, no real capital. Break-even stop management is wired here too (`settings.ENABLE_BREAKEVEN`, off by default, PERMANENTLY -- see research findings below) — no reliable direction exists across assets OR across time (it flips sign on BTCUSDT alone between 2025 and 2026), so there is no direction to ever default toward. Breaker Block and partial-TP remain backtest-only (no positive evidence justifying paper trading) |
 | Portfolio/Journal | ✅ Complete | Real trade/signal persistence, daily/weekly/all-time reports |
 | Dashboard | ✅ Complete | All 5 endpoints (`status`, `positions`, `logs`, `risk-status`, `bias`, `signals`) real, DB/live-computed |
 | Live Trading | ❌ Not implemented, intentionally gated | `LiveBroker`, `exchange/okx_client.py`, `exchange/orangex_client.py` are all `NotImplementedError` stubs. Requires operator-approved API keys + staged approval before ANY code is written here |
 
 ## Test suite
 
-190 backend tests, 0 known failures, re-run 2x+ for flakiness on every
+191 backend tests, 0 known failures, re-run 2x+ for flakiness on every
 change in this session. Run: `cd backend && ./.venv/Scripts/python.exe -m pytest -q`
 (or the platform-appropriate venv path). No frontend test failures
 (`npx tsc --noEmit` clean as of the last frontend-touching change).
@@ -127,6 +129,22 @@ script exercising long/short/idempotency/disabled-gate paths end to end.
   operator who had defaulted it ON based on the BTCUSDT evidence alone
   would today be running a feature with literally no reliable expected
   sign on a randomly chosen asset.
+- **Cross-YEAR validation now exists too, not just cross-asset**: a new
+  `end_time_ms`/`--end-date` capability lets a backtest be anchored to
+  end at a specific past date instead of always "now". First real use:
+  BTCUSDT, same 6-month/6-period methodology, anchored to 2025-07-10
+  instead of 2026-07-10. Baseline was still 6 of 6 periods profitable,
+  but in a visibly different regime (67 total trades vs. many more in
+  2026, one period had only 2 trades). **Break-even flips sign on
+  BTCUSDT itself between the two years** (+9.2% in 2026, **-1.9%** in
+  2025) — the single clearest piece of evidence in the project that this
+  feature has no reliable direction along ANY tested dimension, asset or
+  time. Breaker Block had exactly 0.0% effect in the 2025 window
+  (identical to baseline in every period). Partial TP reproduced almost
+  exactly across years (-32.6% in 2026 vs. -32.1% in 2025) — now
+  confirmed negative across 4 assets in one time window AND 2 time
+  windows on one asset, the strongest evidentiary base for any finding
+  in this project.
 - **Data-layer bug found and fixed along the way**: `scripts/run_backtest.py`
   requested the same candle COUNT for both LTF and HTF fetches, which
   for a large `--periods` request meant asking for years more HTF
@@ -141,14 +159,14 @@ script exercising long/short/idempotency/disabled-gate paths end to end.
   tokens with broadly similar market beta — not a genuinely diverse
   asset set, and two of the three findings (break-even, Breaker Block)
   already show no unanimous direction even within this correlated set.
-- All four 6-month samples cover the SAME calendar window
-  (January-July 2026) — this tests asset-generalization, not
-  time-generalization; different YEARS remain completely untested, and
-  given asset choice alone produces a coin-flip spread for break-even,
-  time period is a real candidate for mattering just as much or more.
-- Per-period trade counts (5-40 across the four 6-month samples, 4-12 on
-  the original small sample) are still modest; win-rate confidence
-  intervals remain wide, especially for the smaller-trade-count periods.
+- Only 2 time windows checked at all (2025-07 and 2026-07, both anchored
+  to BTCUSDT only) — every other asset (ETH/SOL/XRP) is still tested in
+  the 2026 window alone. A 2024 window, or the 2025 window on the other
+  three assets, remain untested.
+- Per-period trade counts (2-40 across all samples so far, with the 2025
+  BTCUSDT window's period 1 at just 2 trades) are still modest in
+  places; win-rate confidence intervals remain wide, especially for the
+  smaller-trade-count periods.
 - No strategy parameters have ever been tuned against real data —
   `_LOOKBACK`, `_IMPULSE_MULT`, `_STOP_BUFFER`, `_RR`,
   `BREAKEVEN_TRIGGER_R`, `PARTIAL_TP_TRIGGER_R`, `PARTIAL_TP_PORTION`
@@ -156,16 +174,17 @@ script exercising long/short/idempotency/disabled-gate paths end to end.
   tuned, it must be done using the `--periods` tool's held-out-period
   discipline or the entire point of building it is defeated.
 
-**Conclusion: one finding is now solid, two are genuinely unresolved —
-and "unresolved" is itself a real, useful result, not a gap in the
-process.** Partial-TP's negative verdict has reproduced on every one of
-four independent assets with zero exceptions at the period level —
-strong enough to actively recommend against using it, not just decline
-to recommend it. Break-even and Breaker Block both show asset-dependent
-results with no reliable global direction; for break-even specifically,
-an apparent 2-of-3-negative trend reverted to a coin flip with a 4th
-asset, which is the clearest demonstration in this project so far of why
-small counts of ANYTHING (periods, assets) can manufacture the
-appearance of a trend that isn't real. This system has not yet been
-tested across genuinely different years. See `ROADMAP.md` for what's
-next.
+**Conclusion: one finding is now solid across every dimension tested, two
+are genuinely unresolved across every dimension tested — and
+"unresolved" is itself a real, useful result, not a gap in the
+process.** Partial-TP's negative verdict has now reproduced on 4
+independent assets (24/24 periods) AND across 2 independent years on the
+one asset checked both ways — as strong an evidentiary base as this
+project has produced for anything, strong enough to actively recommend
+against using it. Break-even and Breaker Block both show results with no
+reliable direction along EITHER axis: break-even flips sign both across
+assets (2 of 4 positive) and across time on the SAME asset (+9.2% to
+-1.9% on BTCUSDT alone). This is the clearest demonstration in this
+project so far of why small counts of ANYTHING (periods, assets, or now
+time windows) can manufacture the appearance of a trend that isn't real.
+See `ROADMAP.md` for what's next.
