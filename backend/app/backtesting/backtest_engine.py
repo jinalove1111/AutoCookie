@@ -172,6 +172,7 @@ class BacktestEngine:
         use_breakeven: bool = False,
         use_breaker_block: bool = False,
         use_partial_tp: bool = False,
+        require_full_confluence: bool = False,
     ) -> "BacktestResult":
         """Replays historical LTF candles (with a time-aligned, no-lookahead
         HTF slice at each step) through the Strategy Engine and Risk Engine
@@ -204,6 +205,17 @@ class BacktestEngine:
         A/B test evaluates -- see docs/strategy_coverage_audit.md and
         ENGINEERING_DECISIONS.md for why every new strategy behavior is
         tested one variable at a time).
+
+        `require_full_confluence` (default `False`, opt-in): threaded
+        straight through to `signal_engine.generate_signal(...,
+        require_full_confluence=...)` -- resolves a real spec/code
+        ambiguity in docs/strategy_spec.md section 6 by requiring BOTH a
+        matching sweep AND a matching CHOCH (not just one) before a
+        signal is produced. See
+        `app.strategy.entry_model.build_entry_model`'s docstring for the
+        full rationale. Default `False` preserves the exact prior
+        (looser) behavior for every existing caller; this is A/B tested
+        the same way as the other three flags above.
 
         Walk-forward, expanding window, one trade open at a time (no
         overlap): starts at index MIN_CANDLES - 1 so LTF signal generation
@@ -262,6 +274,7 @@ class BacktestEngine:
                 ltf_candles=ltf_candles[: i + 1],
                 htf_candles=htf_slice,
                 use_breaker_block=use_breaker_block,
+                require_full_confluence=require_full_confluence,
             )
             if signal is None:
                 i += 1

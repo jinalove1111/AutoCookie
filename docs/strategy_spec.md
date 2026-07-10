@@ -117,6 +117,29 @@ The Strategy Engine never places orders directly. It only ever produces a
 - Inputs (conceptual): all detection outputs above, current candle series.
 - Outputs (conceptual): an entry trigger condition (price level, entry type)
   or `None` if confluence is not met.
+- **Confluence strength — resolved, spec clarified against the
+  implementation (was ambiguous, now settled with A/B evidence; see
+  `docs/strategy_coverage_audit.md` row #9 and `ENGINEERING_DECISIONS.md`
+  for the full history):** the prose above ("bias, liquidity sweep,
+  CHOCH/MSS, FVG, and OB/Breaker Block have confluence") previously read
+  as requiring ALL of sweep AND CHOCH. The actual, correct rule —
+  confirmed by A/B backtesting `require_full_confluence=True` (require
+  BOTH) against the existing default (require EITHER) across 4 assets,
+  6-month/6-period each — is: bias must not be neutral, AND **at least
+  one** of liquidity sweep / CHOCH must be present and direction-matching
+  (not both), AND at least one FVG, order block, or breaker block must
+  agree with the bias direction. Requiring both sweep AND CHOCH cuts
+  trade frequency by ~76% (457 -> 110 trades across the 4-asset sample)
+  while producing an average per-trade PnL within 4% of the looser rule
+  (statistically indistinguishable given the resulting small per-period
+  sample sizes, some down to 0-2 trades) — i.e. it does not produce
+  meaningfully HIGHER-QUALITY trades, it just produces far FEWER of
+  essentially the same quality, cutting total realized profit by ~75%
+  in the process. `build_entry_model`'s default behavior (require
+  either) is therefore the correct, spec-conforming rule; the stricter
+  mode remains available as an opt-in (`require_full_confluence=True` /
+  `run_backtest.py --strict-confluence`) for further research but is not
+  recommended.
 
 ## 7. Signal Engine
 - Purpose: aggregate all detection modules into a final trade signal.

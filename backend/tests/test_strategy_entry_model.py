@@ -184,3 +184,68 @@ def test_build_entry_model_still_accepts_direction_matching_choch_alone():
 
     assert model is not None
     assert model["direction"] == "short"
+
+
+# --- require_full_confluence (opt-in strict-confluence mode) ---------------
+
+
+def test_build_entry_model_require_full_confluence_rejects_sweep_alone():
+    """Default (loose) behavior accepts sweep alone (no choch) -- see
+    test_build_entry_model_long_on_bullish_confluence. With
+    require_full_confluence=True, the SAME inputs must be rejected since
+    choch is missing.
+    """
+    model = build_entry_model(
+        "bullish", _SWEEP, None, _BULLISH_FVG, None, require_full_confluence=True
+    )
+    assert model is None
+
+
+def test_build_entry_model_require_full_confluence_rejects_choch_alone():
+    """Mirrors the sweep-alone case: choch alone (no sweep) is accepted by
+    default (see test_build_entry_model_still_accepts_direction_matching_
+    choch_alone) but must be rejected under require_full_confluence=True.
+    """
+    bearish_fvg = [{"type": "bearish", "top": 100, "bottom": 98, "index": 3}]
+    choch = {"type": "bearish_choch", "broken_level": 99, "broken_index": 2, "confirm_index": 4}
+
+    model = build_entry_model(
+        "bearish", None, choch, bearish_fvg, None, require_full_confluence=True
+    )
+    assert model is None
+
+
+def test_build_entry_model_require_full_confluence_accepts_sweep_and_choch_both():
+    """With BOTH a matching sweep AND a matching choch present,
+    require_full_confluence=True must still produce a valid entry --
+    the stricter mode narrows what's accepted, it doesn't break the
+    case it's designed to require.
+    """
+    choch = {"type": "bullish_choch", "broken_level": 99, "broken_index": 2, "confirm_index": 4}
+
+    model = build_entry_model(
+        "bullish", _SWEEP, choch, _BULLISH_FVG, None, require_full_confluence=True
+    )
+
+    assert model is not None
+    assert model["direction"] == "long"
+
+
+def test_build_entry_model_require_full_confluence_still_respects_direction_matching():
+    """require_full_confluence=True does not bypass the existing
+    direction-matching rule: a wrong-direction sweep alongside a
+    CORRECTLY matched choch still fails, since the wrong-direction sweep
+    doesn't count as "matching" at all (matching_sweep stays None).
+    """
+    wrong_direction_sweep = {"type": "buy_side", "level": 100, "swept_index": 1, "sweep_index": 4}
+    choch = {"type": "bullish_choch", "broken_level": 99, "broken_index": 2, "confirm_index": 4}
+
+    model = build_entry_model(
+        "bullish",
+        wrong_direction_sweep,
+        choch,
+        _BULLISH_FVG,
+        None,
+        require_full_confluence=True,
+    )
+    assert model is None

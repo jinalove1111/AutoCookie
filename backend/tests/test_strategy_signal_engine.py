@@ -231,6 +231,36 @@ def test_signal_engine_use_breaker_block_true_produces_a_real_short_signal():
     }
 
 
+# --- require_full_confluence (opt-in strict-confluence mode, resolves
+# the docs/strategy_spec.md section 6 spec/code ambiguity -- see
+# entry_model.build_entry_model's docstring for the full rationale) ---
+
+
+def test_signal_engine_require_full_confluence_rejects_sweep_only_real_setup():
+    """`_bullish_confluence_candles()` is a REAL setup (through the actual
+    detector pipeline, nothing mocked) that produces a signal via sweep
+    alone -- `choch_detected` is False for this fixture (confirmed: the
+    zigzag's structure never produces a bullish CHoCH here). Under the
+    default (loose) confluence rule this signal fires normally (see
+    test_signal_engine_generates_long_signal_on_real_confluence). Under
+    require_full_confluence=True, the SAME real setup must produce NO
+    signal, since choch is missing -- proving the parameter actually
+    threads through the real detector pipeline, not just the isolated
+    unit tests in test_strategy_entry_model.py.
+    """
+    ltf_candles = _bullish_confluence_candles()
+    htf_candles = _bullish_confluence_candles()
+
+    baseline_signal = SignalEngine().generate_signal("BTCUSDT", ltf_candles, htf_candles)
+    assert baseline_signal is not None
+    assert baseline_signal.choch_detected is False
+
+    strict_signal = SignalEngine().generate_signal(
+        "BTCUSDT", ltf_candles, htf_candles, require_full_confluence=True
+    )
+    assert strict_signal is None
+
+
 def _htf_bearish_candles() -> list[dict]:
     """Real lower-highs/lower-lows zigzag (bearish bias, same shape
     verified directly in test_strategy_bias.py), independent series from

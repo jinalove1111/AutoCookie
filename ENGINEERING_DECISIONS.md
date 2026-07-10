@@ -549,3 +549,47 @@ would incorrectly auto-clear it too and would need to become
 reason-aware first (e.g. only auto-reset when `reason` matches a
 drawdown-breach pattern). Documented as a caveat rather than solved
 preemptively for a trip reason that doesn't exist yet.
+
+---
+
+## 17. Confluence-strength ambiguity resolved by fixing the SPEC, not the code
+
+**Decision**: `docs/strategy_spec.md` section 6 was rewritten to
+explicitly state that the confluence rule requires EITHER a matching
+liquidity sweep OR a matching CHOCH (not both) -- matching
+`entry_model.build_entry_model`'s existing default behavior. The
+stricter reading (require both) was implemented as an opt-in
+(`require_full_confluence`), A/B tested, and rejected based on real
+evidence rather than assumed to be an improvement.
+
+**Why**: this is the fourth time in this project a "surely a stricter/
+more cautious rule is better" intuition was tested and found NOT to
+hold (after break-even, Breaker Block, and partial-TP). Requiring both
+sweep AND CHOCH across all 4 tested assets (BTC/ETH/SOL/XRP, 6-month/
+6-period each) cut trade count by 75.9% (457 -> 110) while producing a
+per-trade average PnL only 3.8% different from the looser rule --
+statistically indistinguishable given the resulting small per-period
+sample sizes (some periods dropped to 0-2 trades). The stricter rule
+does not filter FOR better trades; it just filters out MOST trades,
+including plenty of good ones, for no measurable quality gain. Total
+realized profit dropped ~75% as a direct, near-proportional consequence
+of trading 76% less often.
+
+**Alternative considered**: leave the spec's ambiguous wording alone and
+just document in `docs/strategy_coverage_audit.md` that the code is
+"intentionally looser than a strict reading of the spec." Rejected --
+an ambiguous spec that's silently overridden by code is worse than no
+spec at all; a future reader (human or agent) re-deriving intent from
+the spec text alone would reasonably conclude the code has a bug. Since
+real evidence now exists showing the looser behavior is correct (not
+just convenient), the spec should say so directly rather than staying
+vague forever.
+
+**Trade-off accepted**: `docs/strategy_spec.md` is no longer a
+"conceptual contract written before implementation" document in this
+one section -- it now cites specific A/B backtest numbers inline,
+mixing spec-level and evidence-level content. Accepted because the
+alternative (spec silent, evidence buried only in CHANGELOG.md) is
+exactly the kind of gap that let this ambiguity go unresolved for as
+long as it did in the first place -- the rule's actual definition
+should live where someone reading the spec would look for it.

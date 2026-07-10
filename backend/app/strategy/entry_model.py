@@ -30,15 +30,33 @@ def build_entry_model(
     fvg: list[dict],
     order_block: dict | None,
     breaker_block: dict | None = None,
+    require_full_confluence: bool = False,
 ) -> dict | None:
     """Combine bias/sweep/CHOCH/FVG/order-block(/breaker-block) signals into
     an entry candidate, or None.
 
-    Confluence rule: bias must not be neutral, AND at least one of
-    sweep/choch must be present *and match the bias direction*, AND at
-    least one FVG, order block, or breaker block must agree with the bias
-    direction. The zone (FVG, OB, or breaker) with the most recent index
-    is chosen as the entry zone.
+    Confluence rule (default, `require_full_confluence=False`): bias must
+    not be neutral, AND at least one of sweep/choch must be present *and
+    match the bias direction*, AND at least one FVG, order block, or
+    breaker block must agree with the bias direction. The zone (FVG, OB,
+    or breaker) with the most recent index is chosen as the entry zone.
+
+    `require_full_confluence` (opt-in, default `False` -- see
+    docs/strategy_coverage_audit.md row #9 and docs/strategy_spec.md
+    section 6): resolves a real spec/code ambiguity. Section 6's prose
+    ("once bias, liquidity sweep, CHOCH/MSS, FVG, and OB/Breaker Block
+    have confluence") reads as requiring ALL of sweep AND CHOCH, not
+    either one -- the actual code has always required only one of the two
+    (`sweep OR choch`), a strictly looser bar. When `True`, this
+    parameter requires BOTH `matching_sweep` AND `matching_choch` to be
+    present (the stricter, spec-literal reading) instead of either one.
+    The FVG/OB/breaker zone selection itself is UNCHANGED either way --
+    the spec's "FVG/OB" phrasing (a slash, not "and") already reads as
+    alternatives, not a simultaneous requirement, so only the sweep/CHOCH
+    half of the ambiguity is addressed here. Default `False` preserves
+    the exact prior behavior for every existing caller while this is A/B
+    tested, same discipline as `SignalEngine`'s `use_breaker_block` and
+    `BacktestEngine`'s `use_breakeven`/`use_partial_tp`.
 
     `breaker_block` (optional, default `None` -- existing callers that
     don't pass it get byte-for-byte the prior behavior) is a second,
@@ -83,8 +101,12 @@ def build_entry_model(
     matching_sweep = sweep if sweep is not None and sweep["type"] == wanted_sweep_type else None
     matching_choch = choch if choch is not None and choch["type"] == wanted_choch_type else None
 
-    if matching_sweep is None and matching_choch is None:
-        return None
+    if require_full_confluence:
+        if matching_sweep is None or matching_choch is None:
+            return None
+    else:
+        if matching_sweep is None and matching_choch is None:
+            return None
 
     zone: dict | None = None
     if order_block is not None and order_block["type"] == wanted_type:

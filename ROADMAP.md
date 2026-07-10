@@ -168,6 +168,29 @@ varied conditions):
   `app/config.py`. Verified via a real-temp-SQLite-DB script (3
   scenarios: auto-reset when clear, trips on a real breach, stays
   tripped while still breached).
+- ~~Resolve the spec/implementation ambiguity in confluence strength~~ —
+  DONE (audit item #9, a genuine core JadeCap rule with a real
+  spec-vs-code disagreement -- confirmed in scope per the operator's
+  "only core rules" instruction, unlike equal-highs/lows below). Added
+  opt-in `require_full_confluence` (`--strict-confluence` CLI flag),
+  A/B tested across all 4 assets, 6-month/6-period each: requiring BOTH
+  sweep AND CHOCH (the strict, spec-literal reading) cuts trade count
+  75.9% (457 -> 110) for a per-trade PnL only 3.8% different from the
+  looser default -- not meaningfully higher quality, just far fewer
+  trades of the same quality, costing ~75% of total profit.
+  **Resolved in favor of the existing (looser) implementation** —
+  `docs/strategy_spec.md` section 6 rewritten to explicitly state the
+  rule (sweep OR CHOCH, not both) with this evidence cited directly in
+  the spec text, closing the ambiguity for good. 5 new tests. See
+  CHANGELOG.md for the full comparison table.
+- ~~Equal-highs/equal-lows liquidity detection~~ — NOT implemented,
+  correctly out of scope. Confirmed (again, per the operator's explicit
+  "only if they are core JadeCap trading rules" instruction this round):
+  `docs/strategy_spec.md` section 2 does not define this rule at all —
+  it would be a NEW rule requiring a spec decision first, not an
+  ambiguity resolution in an existing rule (unlike confluence strength
+  above). Stays documented below as a candidate that needs a spec
+  addition before any implementation work, not attempted this round.
 
 See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all of this.
 
@@ -209,20 +232,15 @@ See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all of this.
    rate/RR profile, a smaller `PARTIAL_TP_TRIGGER_R` or a different
    `_RR` might change that conclusion -- worth investigating with proper
    held-out discipline, not by assumption.
-5. **Resolve the spec/implementation ambiguity in confluence strength**
-   (audit item #9) — `docs/strategy_spec.md` section 6 reads as requiring
-   bias + sweep + CHOCH + FVG/OB all in confluence; the actual code
-   requires only bias + (sweep OR choch) + (FVG OR OB), a strictly
-   looser bar. Decide, with backtest evidence, whether requiring stronger
-   confluence (more factors aligned) produces meaningfully better
-   trades, or whether the looser bar is correct and the spec wording
-   should be relaxed to match reality instead.
-6. **Equal-highs/equal-lows liquidity detection** (audit item #3) —
-   `detect_liquidity_sweep()` only recognizes single swing-point sweeps;
-   real SMC also treats clusters of near-equal highs/lows as a stronger
-   resting-liquidity signal. Neither the spec nor the code currently
-   defines this — would need a spec addition first, then implementation,
-   then the same A/B discipline as every other change here.
+5. **Equal-highs/equal-lows liquidity detection** (audit item #3) — spec
+   addition required first (see "Done" above for why this is
+   deliberately NOT implemented yet): `detect_liquidity_sweep()` only
+   recognizes single swing-point sweeps; real SMC also treats clusters
+   of near-equal highs/lows as a stronger resting-liquidity signal.
+   Neither the spec nor the code currently defines this. If/when the
+   operator decides this should become a specified core rule, the
+   sequence is: spec addition first, then implementation, then the same
+   A/B discipline as every other change here.
 
 ## Phase 2 (deferred, out of scope for Phase 1 — do not implement yet)
 

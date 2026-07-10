@@ -15,9 +15,15 @@ tested assets (BTC/ETH/SOL/XRP). Hardened risk controls: circuit breaker
 now auto-resets once a fresh daily/weekly check clears, closing a real
 gap where a trip previously halted trading permanently with no
 operator-facing reset path. Real-balance integration explicitly deferred
-to gate #4 by operator decision. Scope locked by operator directive this
-round: Phase 1 = JadeCap only, tracked against 4 explicit gates, see
-below. All 3 audit HIGH items wired, A/B tested, and
+to gate #4 by operator decision. Resolved the confluence-strength spec
+ambiguity (audit item #9, a genuine core rule) with real A/B evidence
+across all 4 assets -- the existing looser rule is confirmed correct,
+`docs/strategy_spec.md` rewritten to remove the ambiguity. Equal-highs/
+equal-lows liquidity detection deliberately NOT implemented -- confirmed
+not a currently-specified core rule, so out of scope per operator
+instruction. Scope locked by operator directive this round: Phase 1 =
+JadeCap only, tracked against 4 explicit gates, see below. All 3 audit
+HIGH items wired, A/B tested, and
 re-validated across 6 months of real market data on FOUR independent
 assets AND a second independent YEAR via a new `--end-date` time-anchored
 fetch capability. Break-even shows NO reliable direction across either
@@ -61,7 +67,7 @@ approval — this is by design, not an oversight.
 | Layer | Status | Notes |
 |---|---|---|
 | Data (candle fetch) | ✅ Complete | Real OKX public API, deep pagination via `/market/history-candles` (fixed a long-standing 300-candle cap bug), no API key needed. `fetch_ohlcv_history()` can now anchor a fetch to end at a specific past date (`end_time_ms`), enabling genuine cross-YEAR backtesting via `run_backtest.py --end-date` |
-| Strategy Engine | ✅ Complete, actively validated | Bias/sweep/CHOCH/FVG/OB/zone-mitigation/entry-model all real, all tested. Breaker Block detection now wired in too (opt-in, `use_breaker_block`, A/B tested — see findings below) |
+| Strategy Engine | ✅ Complete, actively validated | Bias/sweep/CHOCH/FVG/OB/zone-mitigation/entry-model all real, all tested. Breaker Block detection now wired in too (opt-in, `use_breaker_block`, A/B tested — see findings below). Confluence-strength spec ambiguity RESOLVED — the existing looser rule (sweep OR CHOCH) is confirmed correct with A/B evidence; `require_full_confluence`/`--strict-confluence` available as an opt-in but not recommended |
 | Risk Engine | ✅ Complete | RR floor, daily/weekly loss limits, trades/day cap, position sizing, DB-persisted circuit breaker — all enforced in both paper AND backtest. Circuit breaker now auto-resets once a fresh daily/weekly check clears (previously a documented gap — see `ENGINEERING_DECISIONS.md` #16). Sizing/loss-limit math still keys off `PLACEHOLDER_ACCOUNT_BALANCE`, intentionally, until Phase 1 gate #4 |
 | Backtest Engine | ✅ Complete, actively used for research | Real fee/slippage/PnL, no-lookahead HTF cursor, multi-period out-of-sample splitting (`--periods`, HTF fetch now correctly sized to the LTF request's real time span), time-anchored fetching (`--end-date`), walk-forward validation (`--walk-forward`, explicit PASS/FAIL criteria — PASSED for BTCUSDT baseline), opt-in break-even (`--breakeven`, A/B **no reliable direction across 4 assets OR across 2 years on the same asset — even flips sign on BTCUSDT alone**), opt-in Breaker Block entries (`--breaker-block`, A/B **mostly negative across assets, zero effect in the 2025 BTCUSDT window**), opt-in partial take-profit (`--partial-tp`, A/B **negative on all 4 tested assets AND both tested years on BTCUSDT — the most robust finding in the project**) |
 | Paper Trading | ✅ Complete | Real open/close/PnL against live OKX data, no real capital. Break-even stop management is wired here too (`settings.ENABLE_BREAKEVEN`, off by default, PERMANENTLY -- see research findings below) — no reliable direction exists across assets OR across time (it flips sign on BTCUSDT alone between 2025 and 2026), so there is no direction to ever default toward. Breaker Block and partial-TP remain backtest-only (no positive evidence justifying paper trading) |
@@ -71,7 +77,7 @@ approval — this is by design, not an oversight.
 
 ## Test suite
 
-201 backend tests, 0 known failures, re-run 2x+ for flakiness on every
+206 backend tests, 0 known failures, re-run 2x+ for flakiness on every
 change in this session. Run: `cd backend && ./.venv/Scripts/python.exe -m pytest -q`
 (or the platform-appropriate venv path). No frontend test failures
 (`npx tsc --noEmit` clean as of the last frontend-touching change).
@@ -181,6 +187,25 @@ script exercising long/short/idempotency/disabled-gate paths end to end.
   second half that performed flat-or-better than the first. Zero
   degradation detected on any asset. Phase 1 gate #2 is now closed for
   the current asset set.
+- **Confluence-strength spec ambiguity resolved with real A/B evidence**:
+  `docs/strategy_spec.md` section 6's prose previously read as requiring
+  ALL of bias + sweep + CHOCH + FVG/OB in confluence; the actual code
+  had always required only bias + (sweep OR CHOCH) + (FVG OR OB), a
+  strictly looser bar (`docs/strategy_coverage_audit.md` row #9). Added
+  opt-in `require_full_confluence` (`--strict-confluence`), A/B tested
+  across all 4 assets, 6-month/6-period each: requiring BOTH sweep AND
+  CHOCH cuts trade count 75.9% (457 -> 110 across the 4-asset sample)
+  for a per-trade PnL only 3.8% different from the looser default --
+  not meaningfully higher quality, just far fewer trades of the same
+  quality, costing ~75% of total realized profit. **Resolved in favor
+  of the existing looser implementation** -- the spec text itself was
+  rewritten to state the confluence rule explicitly (sweep OR CHOCH),
+  closing the ambiguity for good rather than leaving it open. This is
+  the fourth time in this project that "does adding a stricter/more
+  cautious rule actually help" was tested rather than assumed, and the
+  fourth time the answer required real data to determine (break-even:
+  yes on one asset, no on others; Breaker Block: mostly no; partial-TP:
+  no; strict confluence: no).
 - **Data-layer bug found and fixed along the way**: `scripts/run_backtest.py`
   requested the same candle COUNT for both LTF and HTF fetches, which
   for a large `--periods` request meant asking for years more HTF

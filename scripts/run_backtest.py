@@ -151,6 +151,7 @@ def run_backtest(
     use_breakeven: bool = False,
     use_breaker_block: bool = False,
     use_partial_tp: bool = False,
+    require_full_confluence: bool = False,
 ) -> Any:
     """Replay `ltf_candles`/`htf_candles` once through the real
     Strategy/Risk/Backtest engines."""
@@ -165,6 +166,7 @@ def run_backtest(
         use_breakeven=use_breakeven,
         use_breaker_block=use_breaker_block,
         use_partial_tp=use_partial_tp,
+        require_full_confluence=require_full_confluence,
     )
 
 
@@ -372,6 +374,23 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--strict-confluence",
+        action="store_true",
+        default=False,
+        help=(
+            "Require BOTH a matching liquidity sweep AND a matching CHOCH "
+            "(not just one) before a signal is produced -- resolves a real "
+            "spec/code ambiguity in docs/strategy_spec.md section 6, which "
+            "reads as requiring ALL of sweep+CHOCH+FVG/OB in confluence, "
+            "while the actual (default) code has always required only one "
+            "of sweep/CHOCH. See app.strategy.entry_model.build_entry_model's "
+            "require_full_confluence docstring for the full rationale. "
+            "A/B-testable, not a proven improvement; run the same "
+            "--symbol/--timeframe/--candles/--periods with and without this "
+            "flag and compare."
+        ),
+    )
+    parser.add_argument(
         "--walk-forward",
         action="store_true",
         default=False,
@@ -443,6 +462,7 @@ def main() -> int:
     print(f"Break-even stop management: {'ENABLED' if args.breakeven else 'disabled'}")
     print(f"Breaker Block entries: {'ENABLED' if args.breaker_block else 'disabled'}")
     print(f"Partial take-profit: {'ENABLED' if args.partial_tp else 'disabled'}")
+    print(f"Strict confluence (sweep AND choch): {'ENABLED' if args.strict_confluence else 'disabled'}")
     print(f"Fetched {len(candles)} candles for {args.symbol}/{args.timeframe}.")
     if len(candles) < total_requested:
         print(
@@ -510,6 +530,7 @@ def main() -> int:
                 use_breakeven=args.breakeven,
                 use_breaker_block=args.breaker_block,
                 use_partial_tp=args.partial_tp,
+                require_full_confluence=args.strict_confluence,
             )
         except Exception as exc:  # unexpected engine failure is a genuine failure
             print(f"ERROR: backtest engine raised an exception on period {period_num}: {exc}")

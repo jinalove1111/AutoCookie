@@ -44,6 +44,7 @@ class SignalEngine:
         ltf_candles: list,
         htf_candles: list,
         use_breaker_block: bool = False,
+        require_full_confluence: bool = False,
     ) -> "TradeSignal | None":
         """Analyze market structure for `symbol` and produce a TradeSignal, or None.
 
@@ -58,6 +59,13 @@ class SignalEngine:
         for every existing caller (`scripts/run_paper.py`,
         `BacktestEngine.run()`'s own default) while this is A/B tested,
         same discipline as `BacktestEngine`'s `use_breakeven`.
+
+        `require_full_confluence` (default `False`, opt-in -- see
+        `entry_model.build_entry_model`'s docstring for the full
+        rationale): resolves a real spec/code ambiguity in
+        docs/strategy_spec.md section 6 by requiring BOTH a matching
+        sweep AND a matching CHOCH (not just one) before a signal is
+        produced. Passed straight through to `build_entry_model`.
 
         `ltf_candles` and `htf_candles` must be genuinely distinct candle
         series (the project's `DEFAULT_TIMEFRAME` and `HTF_TIMEFRAME`
@@ -144,7 +152,15 @@ class SignalEngine:
             ):
                 breaker_block = None
 
-        model = build_entry_model(bias, sweep, choch, fvg_zones, order_block, breaker_block)
+        model = build_entry_model(
+            bias,
+            sweep,
+            choch,
+            fvg_zones,
+            order_block,
+            breaker_block,
+            require_full_confluence=require_full_confluence,
+        )
         if model is None:
             return None
 

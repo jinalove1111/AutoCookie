@@ -4,6 +4,80 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Resolve confluence-strength spec ambiguity (core JadeCap rule, Phase 1)
+
+### Scope note
+Per the operator's continued Phase 1 scope lock: implemented ONLY the
+core-rule ambiguity (confluence strength -- already a real, specified
+JadeCap rule with a genuine spec-vs-code disagreement). Did NOT
+implement equal-highs/equal-lows liquidity detection, since the spec
+does not currently define that rule at all (confirmed:
+`docs/strategy_spec.md` section 2 has no equal-highs/lows language) --
+per the operator's explicit instruction to implement "only if they are
+core JadeCap trading rules," adding an entirely new, unspecified rule
+is out of scope here and remains documented in `ROADMAP.md` as a
+future item requiring a spec decision first.
+
+### Added
+- `app.strategy.entry_model.build_entry_model(..., require_full_confluence:
+  bool = False)`: when `True`, requires BOTH a matching liquidity sweep
+  AND a matching CHOCH (not just one) before producing an entry
+  candidate -- the stricter, spec-literal reading of
+  `docs/strategy_spec.md` section 6's prose. Default `False` preserves
+  the existing (looser, `sweep OR choch`) behavior for every caller.
+- `SignalEngine.generate_signal(..., require_full_confluence: bool =
+  False)` and `BacktestEngine.run(..., require_full_confluence: bool =
+  False)`: threaded straight through, same opt-in pattern as
+  `use_breaker_block`/`use_breakeven`/`use_partial_tp`.
+- `run_backtest.py --strict-confluence` CLI flag.
+- 5 new tests: 4 in `test_strategy_entry_model.py` (rejects sweep-alone,
+  rejects choch-alone, accepts both-present, still respects direction
+  matching under the strict rule) + 1 integration test in
+  `test_strategy_signal_engine.py` proving the parameter threads through
+  the REAL detector pipeline (not just synthetic unit-test dicts) using
+  an existing real fixture that has sweep but no choch.
+
+### A/B tested across all 4 assets (BTC/ETH/SOL/XRP), 6-month/6-period each
+Default (loose, `sweep OR choch`) vs. `--strict-confluence` (`sweep AND
+choch`):
+
+| | Baseline trades | Baseline PnL | Strict trades | Strict PnL |
+|---|---|---|---|---|
+| BTCUSDT | 111 | $1935.35 | 31 | $684.29 |
+| ETHUSDT | 106 | $2725.22 | 18 | $548.26 |
+| SOLUSDT | 124 | $4198.32 | 37 | $957.74 |
+| XRPUSDT | 116 | $2849.89 | 24 | $734.29 |
+| **Sum** | **457** | **$11708.78** | **110** | **$2924.58** |
+
+- Trade count: **-75.9%** (457 -> 110).
+- Total PnL: **-75.0%** ($11708.78 -> $2924.58) -- almost exactly
+  proportional to the trade-count drop.
+- Average PnL per trade: $25.62 (baseline) vs. $26.59 (strict) -- a
+  **+3.8%** difference, well within noise given the strict mode's
+  resulting small per-period sample sizes (as low as 0-2 trades in
+  several periods).
+- Profitable periods: 24/24 (baseline) vs. 21/24 (strict) -- 3 periods
+  flipped non-positive under strict confluence, two of which were
+  ZERO-trade periods (not genuine losses) and one a trivial -$7.58 on
+  only 2 trades.
+
+### Conclusion: resolved in favor of the existing (looser) implementation
+Requiring both sweep AND CHOCH does NOT produce meaningfully
+higher-quality trades -- per-trade PnL is statistically indistinguishable
+from the looser rule. It only produces far FEWER trades of essentially
+the same quality, cutting total realized profit by ~75%. The spec's
+ambiguous wording is the thing that needed fixing, not the code:
+`docs/strategy_spec.md` section 6 now explicitly states the confluence
+rule requires EITHER sweep or CHOCH (matching the implementation), with
+this A/B evidence cited directly in the spec text. `require_full_
+confluence=True` / `--strict-confluence` remain available as an opt-in
+for further research (e.g. as an input to a future parameter sweep) but
+are not recommended.
+
+### Verified
+- `pytest backend/tests/` 206/206 passing (201 + 5 new).
+- Real backtests across 4 assets (table above), not just unit tests.
+
 ## [Unreleased] - Circuit breaker auto-reset (production-ready risk controls, Phase 1)
 
 ### Scope decision (operator)
