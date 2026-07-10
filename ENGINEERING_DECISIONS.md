@@ -497,3 +497,55 @@ than THREE additional assets did, suggesting time/regime may be a
 bigger driver of these effects than asset choice. This directly
 reprioritized `ROADMAP.md` toward more `--end-date` testing over more
 assets.
+
+---
+
+## 16. Circuit breaker auto-resets via the drawdown-check caller, not via internal date-math
+
+**Decision**: `scripts/run_paper.py::_check_drawdown_and_maybe_trip` now
+calls `circuit_breaker.reset()` when the breaker is currently tripped
+but a fresh daily/weekly check both pass. `CircuitBreaker`/
+`PersistentCircuitBreaker` themselves gained NO new date-boundary logic
+-- the reset decision lives entirely in the caller that already computes
+fresh, correctly-scoped PnL every iteration.
+
+**Why**: `CircuitBreaker.reset()`'s docstring had long flagged this as
+an explicit gap ("day-boundary scheduling... is a future milestone's
+responsibility"), and in practice there was no way to clear a trip at
+all short of manually editing the database -- no dashboard endpoint, no
+CLI, nothing. For risk controls billed as "production-ready" (Phase 1
+checklist item), a limit that can never un-trip itself is a real defect,
+not a minor gap: `MAX_DAILY_LOSS_PERCENT`/`MAX_WEEKLY_LOSS_PERCENT` are
+inherently periodic by definition, so a trip caused by one bad day
+should not permanently halt trading on all subsequent good days.
+
+The key insight that made this cheap to fix correctly: `TradeJournal.
+generate_daily_report()`/`generate_weekly_report()` are ALREADY
+UTC-calendar-day / ISO-calendar-week scoped (built for the loss-limit
+checks themselves). That means `_check_drawdown_and_maybe_trip` already
+recomputes the CORRECT "as of right now" daily/weekly PnL on every
+iteration -- once a new day/week genuinely begins, those numbers
+naturally reflect only the new period without any additional date
+tracking. So the fix needed no new state (no "when was this tripped,
+has a day passed" bookkeeping) -- just: if currently tripped AND the
+fresh check now passes, reset.
+
+**Alternative considered**: give `CircuitBreaker` its own
+`tripped_at`-based auto-expiry (e.g. "auto-reset 24 hours after
+`tripped_at`"). Rejected -- a fixed time-since-trip window doesn't
+actually match a UTC-calendar-day boundary (a trip at 23:50 UTC would
+"expire" at 23:50 the next day, not at UTC midnight), and would require
+`CircuitBreaker` to know about calendar semantics it currently has zero
+dependency on. Piggybacking on the drawdown-check caller's already-
+correct day/week-scoped queries is both simpler and more accurate.
+
+**Trade-off accepted**: the auto-reset logic implicitly assumes every
+trip routes through this one drawdown-check call site (true today -- it
+is the only `trip()` call site in the codebase, documented explicitly in
+that function's docstring). If a future trip reason unrelated to
+drawdown is ever added (e.g. "exchange API failure", mentioned as a
+hypothetical in `circuit_breaker.py`'s module docstring), this logic
+would incorrectly auto-clear it too and would need to become
+reason-aware first (e.g. only auto-reset when `reason` matches a
+drawdown-breach pattern). Documented as a caveat rather than solved
+preemptively for a trip reason that doesn't exist yet.

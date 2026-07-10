@@ -4,6 +4,62 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Circuit breaker auto-reset (production-ready risk controls, Phase 1)
+
+### Scope decision (operator)
+Per the operator's Phase 1 scope lock, real-balance integration
+(`settings.PLACEHOLDER_ACCOUNT_BALANCE` -> a real, live-queried exchange
+balance) is explicitly deferred to Phase 1 gate #4 (Small Live
+Validation), not built now -- paper trading has no real capital
+regardless, so the fixed placeholder is honest and sufficient until real
+capital is actually at risk. Documented in `app/config.py` and
+`ROADMAP.md`'s Phase 1 gate table. Instead, this round hardens the
+EXISTING risk controls (in scope: "build production-ready risk
+controls" from the Phase 1 checklist, without expanding architecture).
+
+### Fixed
+- **Circuit breaker had no auto-reset mechanism at all.** Once tripped
+  (e.g. a daily loss limit breach), `CircuitBreaker.reset()`'s own
+  docstring already flagged this as a known gap ("day-boundary
+  scheduling... is a future milestone's responsibility"), and no
+  operator-facing reset path existed anywhere (no dashboard endpoint, no
+  CLI) -- a trip halted ALL future trading PERMANENTLY until someone
+  manually edited the database. For a "production-ready" risk control,
+  a limit that can never un-trip itself is a real gap: `MAX_DAILY_LOSS_
+  PERCENT`/`MAX_WEEKLY_LOSS_PERCENT` are inherently periodic limits, so
+  a trip should clear once the offending period has genuinely rolled
+  over.
+- `scripts/run_paper.py::_check_drawdown_and_maybe_trip` now auto-resets
+  a currently-tripped breaker when a fresh check finds BOTH daily and
+  weekly loss limits no longer breached. Works correctly with no new
+  date-math of its own: `TradeJournal.generate_daily_report()`/
+  `generate_weekly_report()` are already UTC-calendar-day/ISO-calendar-
+  week SCOPED, so once a new day/week genuinely begins, "today"/"this
+  week"'s realized PnL naturally reflects only the new period -- a trip
+  caused by a prior period's loss clears on its own the next time this
+  runs. An alert fires on auto-reset too (not just on trip), so an
+  operator watching Telegram/Discord sees trading resume, not just that
+  it stopped.
+- Documented caveat (not hidden): this assumes every trip currently
+  routes through this one drawdown-check call site (true today -- it's
+  the only `trip()` call site in the codebase). If a future trip reason
+  unrelated to drawdown is ever added (e.g. "exchange API failure",
+  mentioned as a possibility in `circuit_breaker.py`'s module docstring),
+  auto-clearing based on drawdown alone would be wrong and this logic
+  would need to become reason-aware first.
+- `CircuitBreaker.reset()`'s docstring updated to point at the new
+  caller-level auto-reset instead of describing it as an open gap.
+
+### Verified
+- `pytest backend/tests/` 201/201 passing (no new unit tests --
+  `_check_drawdown_and_maybe_trip` isn't independently pytest-covered,
+  matching this repo's existing convention that `run_paper.py` has no
+  direct pytest coverage).
+- Real-temp-SQLite-DB script exercising all 3 scenarios: (1) a tripped
+  breaker with no current breach auto-resets, (2) a real daily-loss
+  breach (-1.5% against a 1% limit) trips a fresh breaker, (3) a
+  still-breached day does NOT incorrectly auto-reset. All passed.
+
 ## [Unreleased] - Phase 1 gate #2 closed: walk-forward validation PASSES on all 4 tested assets
 
 ### Ran `--walk-forward` on the remaining 3 assets (BTCUSDT already done, previous entry)

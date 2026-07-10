@@ -64,6 +64,16 @@ class Settings(BaseSettings):
     # percentages, consistently, across scripts/run_paper.py and the
     # /dashboard/risk-status endpoint (both need the exact same base or
     # their percentages would silently disagree).
+    #
+    # Scope decision (operator, 2026-07-11, Phase 1 scope lock): this
+    # placeholder is INTENTIONALLY kept for the entire Phase 1 pipeline
+    # (Backtest -> Walk-Forward -> Paper Trading). Paper trading has no
+    # real capital regardless, so a fixed placeholder is honest and
+    # sufficient. Replacing it with a real, live-queried exchange balance
+    # is explicitly deferred to Phase 1 gate #4 (Small Live Validation,
+    # see ROADMAP.md) -- that is the point where a real balance feed
+    # becomes unavoidable (real capital, real risk), not before. Do not
+    # build real-balance wiring during Phase 1 without operator approval.
     PLACEHOLDER_ACCOUNT_BALANCE: float = 10000.0
 
     # --- Alerts ---

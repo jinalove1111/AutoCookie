@@ -28,8 +28,8 @@ Walk-Forward -> Paper Trading -> Small Live Validation.
 |---|---|---|
 | 1. Backtest | ✅ Complete, extensively validated | 4 assets (BTC/ETH/SOL/XRP) x 2026, BTCUSDT also x 2025 — see "Done" below and `CHANGELOG.md` |
 | 2. Walk-forward validation | ✅ CLOSED — PASSED on all 4 tested assets | `run_backtest.py --walk-forward` — explicit PASS/FAIL criteria (profitable-period ratio, max losing streak, degradation trend), not a parameter-refitting walk-forward (no tunable params exist yet — see `ENGINEERING_DECISIONS.md` #8). BTC/ETH/SOL/XRP 2026 baselines: **all PASSED** (24/24 periods profitable, 0 losing streaks anywhere, every asset's second half flat-or-better than its first) |
-| 3. Paper trading | ✅ Pipeline complete and running | `scripts/run_paper.py` — real open/close/PnL against live OKX data, no real capital. Break-even wired in (off by default, permanently — see research findings) |
-| 4. Small live validation | ❌ Not started, intentionally gated | Requires operator-issued API keys + staged approval — explicit stop condition, not a CTO-mode decision |
+| 3. Paper trading | ✅ Pipeline complete and running | `scripts/run_paper.py` — real open/close/PnL against live OKX data, no real capital. Break-even wired in (off by default, permanently — see research findings). Risk controls (RR floor, daily/weekly loss limits, circuit breaker, position sizing) all real and enforced. Circuit breaker now auto-resets once a fresh daily/weekly check clears (previously a documented gap — a trip halted trading permanently with no operator-facing reset path) |
+| 4. Small live validation | ❌ Not started, intentionally gated | Requires operator-issued API keys + staged approval — explicit stop condition, not a CTO-mode decision. **Scope decision (operator, 2026-07-11)**: replacing `settings.PLACEHOLDER_ACCOUNT_BALANCE` (fixed $10,000 constant used for position sizing and loss-limit math) with a real, live-queried exchange balance is explicitly deferred to THIS gate, not built during Phase 1 paper trading — paper trading has no real capital regardless, so the placeholder is honest and sufficient until real capital is actually at risk |
 
 ## Done (this session, night CTO mode)
 
@@ -153,6 +153,21 @@ varied conditions):
   strategy's forward-time consistency, not the mixed experimental
   features (break-even/Breaker Block/partial-TP), which stay separately
   tracked.
+- ~~Harden risk controls: circuit breaker auto-reset~~ — DONE (Phase 1
+  checklist item "build production-ready risk controls"). Found and
+  fixed a real gap: the circuit breaker had NO auto-reset mechanism at
+  all and no operator-facing reset path (no dashboard endpoint, no
+  CLI) — once tripped, trading halted permanently until someone
+  manually edited the database. `run_paper.py::_check_drawdown_and_
+  maybe_trip` now auto-resets once a fresh daily/weekly check both pass
+  again, relying on `TradeJournal`'s reports already being UTC-day/
+  ISO-week scoped (no new date-math needed). Alerts fire on auto-reset
+  too, not just on trip. Real-balance integration
+  (`PLACEHOLDER_ACCOUNT_BALANCE`) explicitly deferred to Phase 1 gate #4
+  per operator decision — see the Phase 1 gate table above and
+  `app/config.py`. Verified via a real-temp-SQLite-DB script (3
+  scenarios: auto-reset when clear, trips on a real breach, stays
+  tripped while still breached).
 
 See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all of this.
 
@@ -243,12 +258,14 @@ Documented here so they aren't lost, not started.
   requires, IN ORDER: (a) out-of-sample validation across genuinely
   different market regimes (substantial progress -- 6-month results now
   exist for FOUR assets AND 2 years on BTCUSDT, walk-forward validation
-  built and PASSED for BTCUSDT baseline, but two of the three
+  built and PASSED for ALL FOUR assets, but two of the three
   experimental features show no reliable direction across assets OR
-  time, and gates #2/#3 need to be completed for the other assets too,
-  see items #1-2 above), (b) operator-issued OKX API keys with
-  withdrawal
-  disabled, (c) a small live-capital limit agreed with the operator, (d)
+  time — see items #1-2 above for remaining cross-year work), (b)
+  replacing `settings.PLACEHOLDER_ACCOUNT_BALANCE` with a real,
+  live-queried exchange balance (explicitly deferred here, not built
+  during Phase 1 paper trading — see the Phase 1 gate table above), (c)
+  operator-issued OKX API keys with withdrawal
+  disabled, (d) a small live-capital limit agreed with the operator, (e)
   step-by-step operator approval at each stage per
   `docs/live_trading_checklist.md`. None of this proceeds without the
   operator present — API credential provisioning and live-trading

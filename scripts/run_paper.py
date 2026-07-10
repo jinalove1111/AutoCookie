@@ -341,6 +341,30 @@ def _check_drawdown_and_maybe_trip(
     reported and treated as 0.0% (no breach) rather than aborting the
     iteration -- this is an approximate, not production-grade, risk check
     (see settings.PLACEHOLDER_ACCOUNT_BALANCE in app/config.py).
+
+    Auto-reset (Phase 1 risk-controls hardening -- previously a documented
+    gap: `CircuitBreaker.reset()`'s own docstring used to say day-boundary
+    auto-reset was "a future milestone's responsibility", and no
+    operator-facing reset path existed at all, meaning a trip halted
+    trading PERMANENTLY until someone manually edited the database). If
+    `circuit_breaker` is currently tripped but THIS call's fresh
+    daily/weekly checks BOTH pass, the breaker is reset here. This works
+    correctly without any date-math of its own because
+    `generate_daily_report()`/`generate_weekly_report()` are already
+    UTC-calendar-day/ISO-calendar-week SCOPED -- once a new day/week
+    genuinely begins, "today"/"this week"'s realized PnL naturally
+    reflects only the new period, so a trip caused by a prior period's
+    loss clears on its own the next time this runs, without needing to
+    track "when was the trip" separately. An alert fires on auto-reset
+    too (not just on trip), so an operator watching Telegram/Discord sees
+    trading resume, not just that it stopped. Caveat, documented not
+    hidden: this assumes every trip currently routes through THIS
+    function (true today -- it's the only trip() call site in the
+    codebase); if a future trip reason unrelated to daily/weekly drawdown
+    is ever added (e.g. "exchange API failure", mentioned as a
+    possibility in circuit_breaker.py's module docstring), auto-clearing
+    it here based on drawdown alone would be wrong and this logic would
+    need to become reason-aware first.
     """
     try:
         daily_report = TradeJournal().generate_daily_report()
@@ -379,6 +403,17 @@ def _check_drawdown_and_maybe_trip(
         reason = "; ".join(breaches)
         circuit_breaker.trip(reason)
         message = f"Circuit breaker tripped: {reason}"
+        print(f"ALERT: {message}")
+        send_telegram_alert(message)
+        send_discord_alert(message)
+    elif circuit_breaker.is_tripped():
+        prior_reason = circuit_breaker.reason
+        circuit_breaker.reset()
+        message = (
+            f"Circuit breaker auto-reset: daily/weekly loss limits no longer "
+            f"breached (daily PnL {daily_pnl_percent:.2f}%, weekly PnL "
+            f"{weekly_pnl_percent:.2f}%; was tripped for: {prior_reason})"
+        )
         print(f"ALERT: {message}")
         send_telegram_alert(message)
         send_discord_alert(message)

@@ -1,6 +1,19 @@
 # HANDOFF — JadeCap Automated Trading Bot
 
-## 상태: (CEO/CTO 스코프락 세션) walk-forward validation(Phase 1 게이트 #2)을 **4개 자산 전부에 대해 실행 완료 — 전부 PASSED**. BTC($237→$408)/ETH($367→$541)/SOL($586→$814)/XRP($474→$476) 전부 6/6 수익 기간, 연속손실 0, 퇴화 없음(오히려 모든 자산에서 후반부가 전반부와 같거나 더 좋음) — 24/24 기간 만장일치. **Phase 1 게이트 #2가 현재 테스트된 자산 범위에서 공식적으로 CLOSED됨**. 코드 변경 없음(기존 walk-forward 도구 재사용, 순수 실행 라운드). 전체 `pytest` 201/201 유지. Live 관련 코드는 여전히 전무 — Small Live(게이트 #4)는 operator의 명시적 승인 대기 중
+## 상태: (CEO/CTO 스코프락 세션) operator가 "PLACEHOLDER_ACCOUNT_BALANCE를 실제 잔고 소스로 교체할지" 질문에 **"옵션 1 — Phase 1은 placeholder 유지, 실제 잔고 연동은 Phase 1 게이트 #4(Small Live Validation)로 문서화만 하고 구현하지 말 것"**을 명시적으로 선택함. 이에 따라 (a) `app/config.py`/`ROADMAP.md`에 이 결정을 명시적으로 기록하고, (b) 대신 "production-ready risk controls" 항목에 실제로 기여하는 기존 리스크 로직 감사를 진행 — **실제 프로덕션 갭 발견 및 수정**: circuit breaker에 auto-reset 메커니즘이 전혀 없었고(코드 docstring에 이미 "미래 마일스톤 책임"이라고 명시된 채 방치돼 있었음) operator가 트립을 해제할 방법도 전무했음(대시보드 엔드포인트도, CLI도 없음) — 즉 한 번 트립되면 누군가 DB를 직접 수정하지 않는 한 **영구적으로** 거래가 중단되는 구조였음. `run_paper.py::_check_drawdown_and_maybe_trip`가 이제 최신 daily/weekly 체크가 둘 다 통과하면 자동으로 breaker를 reset하도록 수정(TradeJournal의 리포트가 이미 UTC-일/ISO-주 단위로 스코프되어 있어서 별도 날짜 계산 없이도 정확하게 작동함). auto-reset 시에도 Telegram/Discord 알림 발송. 실제 임시 SQLite DB로 3개 시나리오(무손상 시 auto-reset / 실제 손실 시 트립 / 손실 지속 시 auto-reset 안 함) 전부 검증 통과. 전체 `pytest` 201/201 유지(신규 pytest 테스트는 추가 안 함 — run_paper.py 관례 유지). Live 관련 코드는 여전히 전무 — Small Live(게이트 #4)는 operator의 명시적 승인 대기 중
+
+## 전체 회차 (production-ready risk controls: circuit breaker auto-reset 신규 구현 — operator의 PLACEHOLDER_ACCOUNT_BALANCE 스코프 결정 처리 포함)
+- [x] **operator 질문에 대한 답변 처리**: "PLACEHOLDER_ACCOUNT_BALANCE를 실제 잔고 소스로 지금 교체해야 하는가?"라는 질문을 드렸고, operator가 **옵션 1(Phase 1은 placeholder 유지, 실제 연동은 Gate #4로 문서화만)**을 명시적으로 선택 — "스코프 확장하지 말라"는 재확인 포함
+- [x] `app/config.py`의 `PLACEHOLDER_ACCOUNT_BALANCE` 주석에 이 결정을 명시적으로 기록(operator 승인 없이 Phase 1 중 실제 잔고 연동 작업 시작 금지)
+- [x] `ROADMAP.md`의 Phase 1 게이트 표(게이트 #3, #4)와 "Explicitly NOT started" 섹션의 Live Trading 항목에 이 결정 반영
+- [x] **"production-ready risk controls" 항목에 실제 기여하는 작업 선정**: 기존 리스크 코드(`position_sizing.py`/`drawdown_guard.py`/`circuit_breaker.py`/`risk_manager.py`) 감사 — position sizing과 drawdown guard는 이미 견고했음. **circuit breaker에서 실제 프로덕션 갭 발견**: `CircuitBreaker.reset()`의 기존 docstring 자체가 "day-boundary auto-reset은 미래 마일스톤 책임"이라고 명시하고 있었고, 실제로 operator가 트립을 해제할 방법이 코드베이스 어디에도 없었음(대시보드 엔드포인트 없음, CLI 없음) — 즉 한 번이라도 daily/weekly loss limit을 건드리면 DB를 수동으로 고치지 않는 한 **영구적으로** 거래가 중단되는 구조
+- [x] **수정**: `scripts/run_paper.py::_check_drawdown_and_maybe_trip`에 auto-reset 분기 추가 — breaker가 트립된 상태에서 이번 호출의 최신 daily/weekly 체크가 **둘 다** 통과하면 자동으로 `.reset()` 호출. `TradeJournal.generate_daily_report()`/`generate_weekly_report()`가 이미 UTC-달력일/ISO-달력주 단위로 스코프되어 있으므로, 새 날짜/주가 시작되면 "오늘"/"이번 주" PnL이 자연스럽게 새 기간만 반영하게 되어 별도의 날짜 추적 로직이 전혀 필요 없음(핵심 통찰). auto-reset 시에도 Telegram/Discord 알림 발송(트립 때만이 아니라)
+- [x] **명시적으로 문서화한 전제조건(숨기지 않음)**: 이 auto-reset 로직은 "모든 트립이 이 drawdown-check 경로를 통해서만 발생한다"고 가정함(현재는 사실 — 코드베이스에 `trip()` 호출 지점이 여기 하나뿐). 향후 drawdown과 무관한 트립 사유(예: 거래소 API 장애)가 추가되면 이 로직은 reason-aware하게 재작업 필요 — `circuit_breaker.py` 모듈 docstring이 이미 그런 가능성을 언급하고 있었음
+- [x] `CircuitBreaker.reset()` docstring을 "열린 갭"에서 "caller가 처리함"으로 갱신
+- [x] **실측 검증(pytest 아님 — run_paper.py 관례 유지)**: 임시 SQLite DB로 (1) 무손상 상태에서 트립된 breaker가 auto-reset됨 (2) 실제 -1.5% 일일 손실(1% 한도 위반)이 fresh breaker를 트립시킴 (3) 손실이 그대로 남아있는 날은 auto-reset 안 되고 계속 트립 유지 — 3개 시나리오 전부 통과
+- [x] 전체 `pytest backend/tests/` **201/201 유지**(신규 코드지만 run_paper.py 관례상 pytest 커버리지 추가 안 함, 실측으로 대체)
+- [x] `CHANGELOG.md`(신규 Unreleased 섹션)/`ROADMAP.md`(Phase 1 게이트 표 갱신, Done 섹션에 신규 항목)/`PROJECT_STATUS.md`(Risk Engine 레이어·게이트 표 갱신)/`ENGINEERING_DECISIONS.md`(항목 #16 신규) 갱신
+- [x] git commit/push 예정 (`origin/master`) — operator의 스코프락 지시("Backtest→Walk-Forward→Paper Trading→Small Live 완료 전까지 목표 불변, 계속 자율 진행")에 따라 계속 진행
 
 ## 전체 회차 (walk-forward validation을 나머지 3개 자산에도 실행 — Phase 1 게이트 #2, 4개 자산 전부 PASSED로 CLOSED)
 - [x] 직전 회차에서 BTCUSDT만 `--walk-forward` 실행했었음 — ROADMAP.md "Immediate" 1순위였던 "나머지 3개 자산(ETH/SOL/XRP)도 실행"을 이어서 진행
@@ -450,10 +463,11 @@
 ## 현재 위치
 **operator 스코프락 발효 중**: Phase 1 목표는 오직 "JadeCap 하나를 수익성 있는 자동매매 시스템으로 완성"하는 것 — Backtest → Walk-Forward → Paper Trading → Small Live 4개 게이트로만 진행 판단. 멀티전략/퀀트 리서치 플랫폼 등은 명시적으로 Phase 2(ROADMAP.md에 문서화만, 구현 금지)로 이동됨.
 
-**Phase 1 게이트 현황**: (1) Backtest ✅ 완료(4자산×2026 + BTC×2025) (2) Walk-Forward ✅ **CLOSED — 4개 자산 전부 PASSED**(24/24 기간 수익, 연속손실 0, 퇴화 없음) (3) Paper Trading ✅ 파이프라인 완료·가동 중(break-even 배선, 기본 비활성) (4) Small Live ❌ operator 승인 대기.
+**Phase 1 게이트 현황**: (1) Backtest ✅ 완료(4자산×2026 + BTC×2025) (2) Walk-Forward ✅ **CLOSED — 4개 자산 전부 PASSED**(24/24 기간 수익, 연속손실 0, 퇴화 없음) (3) Paper Trading ✅ 파이프라인 완료·가동 중, 리스크 컨트롤 강화됨(circuit breaker auto-reset 신규) (4) Small Live ❌ operator 승인 대기, 실제 잔고 연동도 이 게이트로 명시적으로 이연됨.
 
 Strategy > Risk > Backtest > Paper Trading > Dashboard 전 계층의 배관 갭은 전부 해소됨. 감사 HIGH 항목 3개 전부 A/B 검증 완료 — 4개 자산(BTC/ETH/SOL/XRP, 전부 2026년) + BTCUSDT의 2개 연도(2025/2026)까지 검증. **break-even**: 자산 축(2승2패)과 시간 축(BTC 단독으로도 +9.2%↔-1.9% 부호 반전) 양쪽 다 신뢰 방향 없음 — `ENABLE_BREAKEVEN` 기본 False **영구 확정**. **Breaker Block**: 대체로 부정, 일관성 약함. **Partial TP**: 4개 자산 + BTC 2개 연도 전부 일관되게 부정 — 유일하게 "적극 비추천" 근거를 갖춘 항목. **다음 최고-ROI 후보 (Phase 1 게이트 완료 우선순위)**:
 - **`--end-date`로 추가 교차-연도 검증**: (a) 2024년으로 더 과거, (b) ETH/SOL/XRP도 2025년으로 검증(walk-forward도 함께 실행해 2025년 데이터에 대한 게이트 #2 재확인 가능)
+- **리스크 컨트롤 추가 감사 후보**: circuit breaker auto-reset은 완료됐지만, `RiskManager`/`DrawdownGuard`의 다른 엣지 케이스(예: 음수 RR, NaN 입력 등)도 "production-ready" 관점에서 추가 점검 여지 있음(낮은 우선순위 — 현재까지 발견된 실제 버그는 없음)
 - **break-even/Breaker Block에 대해 "최종 결론 찾기"를 그만두는 것 고려**: 자산·시간 두 축 모두에서 신뢰 방향이 없다는 게 이미 충분히 확정적인 결론
 - **`_LOOKBACK`/`_IMPULSE_MULT`/`_STOP_BUFFER`/`_RR`/`BREAKEVEN_TRIGGER_R`/`PARTIAL_TP_TRIGGER_R`/`PARTIAL_TP_PORTION` 파라미터 재검토**: 파라미터 스윕을 한다면 **반드시** `--periods`로 나눈 일부 기간에서만 스윕하고 나머지는 최종 확인에만 사용
 - **scope 경계**: `/dashboard/signals`는 `run_paper.py`에서만 배선(`run_backtest.py`는 의도적으로 안 건드림)

@@ -44,9 +44,16 @@ class CircuitBreaker:
     def reset(self) -> None:
         """Clear tripped state back to False and clear reason/timestamp.
 
-        Note: this only resets the in-memory state on request. Day-boundary
-        scheduling (auto-reset "until next trading day") is a future
-        milestone's responsibility.
+        This method itself only resets in-memory state on request -- it has
+        no day-boundary logic of its own. Day-boundary auto-reset (was
+        previously a documented gap here) is now handled by the caller:
+        `scripts/run_paper.py::_check_drawdown_and_maybe_trip` calls this
+        automatically once a fresh daily/weekly check both pass again,
+        relying on `TradeJournal`'s reports already being UTC-day/ISO-week
+        scoped rather than adding date math to this class. See that
+        function's docstring for the full rationale and its documented
+        caveat (assumes every trip routes through that one drawdown-check
+        call site).
         """
         self.tripped = False
         self.reason = None

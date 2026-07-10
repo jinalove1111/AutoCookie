@@ -11,7 +11,11 @@ the "why" behind specific non-obvious engineering choices, see
 
 Last updated: 2026-07-11 (night CTO session: built walk-forward
 validation, Phase 1 gate #2 -- now CLOSED, PASSED unanimously on all 4
-tested assets (BTC/ETH/SOL/XRP). Scope locked by operator directive this
+tested assets (BTC/ETH/SOL/XRP). Hardened risk controls: circuit breaker
+now auto-resets once a fresh daily/weekly check clears, closing a real
+gap where a trip previously halted trading permanently with no
+operator-facing reset path. Real-balance integration explicitly deferred
+to gate #4 by operator decision. Scope locked by operator directive this
 round: Phase 1 = JadeCap only, tracked against 4 explicit gates, see
 below. All 3 audit HIGH items wired, A/B tested, and
 re-validated across 6 months of real market data on FOUR independent
@@ -33,8 +37,8 @@ section for ideas explicitly out of scope until these 4 gates clear.
 |---|---|
 | 1. Backtest | ✅ Complete — 4 assets x 2026, BTCUSDT also x 2025 |
 | 2. Walk-forward validation | ✅ CLOSED — PASSED on all 4 tested assets (24/24 periods profitable, 0 losing streaks, no degradation anywhere) |
-| 3. Paper trading | ✅ Pipeline complete and running (`scripts/run_paper.py`), no real capital |
-| 4. Small live validation | ❌ Not started — requires operator-issued API keys + staged approval |
+| 3. Paper trading | ✅ Pipeline complete and running (`scripts/run_paper.py`), no real capital. Risk controls hardened (circuit breaker now auto-resets) |
+| 4. Small live validation | ❌ Not started — requires operator-issued API keys + staged approval + real balance integration (`PLACEHOLDER_ACCOUNT_BALANCE` explicitly deferred here, operator decision) |
 
 ## One-paragraph summary
 
@@ -58,7 +62,7 @@ approval — this is by design, not an oversight.
 |---|---|---|
 | Data (candle fetch) | ✅ Complete | Real OKX public API, deep pagination via `/market/history-candles` (fixed a long-standing 300-candle cap bug), no API key needed. `fetch_ohlcv_history()` can now anchor a fetch to end at a specific past date (`end_time_ms`), enabling genuine cross-YEAR backtesting via `run_backtest.py --end-date` |
 | Strategy Engine | ✅ Complete, actively validated | Bias/sweep/CHOCH/FVG/OB/zone-mitigation/entry-model all real, all tested. Breaker Block detection now wired in too (opt-in, `use_breaker_block`, A/B tested — see findings below) |
-| Risk Engine | ✅ Complete | RR floor, daily/weekly loss limits, trades/day cap, position sizing, DB-persisted circuit breaker — all enforced in both paper AND backtest |
+| Risk Engine | ✅ Complete | RR floor, daily/weekly loss limits, trades/day cap, position sizing, DB-persisted circuit breaker — all enforced in both paper AND backtest. Circuit breaker now auto-resets once a fresh daily/weekly check clears (previously a documented gap — see `ENGINEERING_DECISIONS.md` #16). Sizing/loss-limit math still keys off `PLACEHOLDER_ACCOUNT_BALANCE`, intentionally, until Phase 1 gate #4 |
 | Backtest Engine | ✅ Complete, actively used for research | Real fee/slippage/PnL, no-lookahead HTF cursor, multi-period out-of-sample splitting (`--periods`, HTF fetch now correctly sized to the LTF request's real time span), time-anchored fetching (`--end-date`), walk-forward validation (`--walk-forward`, explicit PASS/FAIL criteria — PASSED for BTCUSDT baseline), opt-in break-even (`--breakeven`, A/B **no reliable direction across 4 assets OR across 2 years on the same asset — even flips sign on BTCUSDT alone**), opt-in Breaker Block entries (`--breaker-block`, A/B **mostly negative across assets, zero effect in the 2025 BTCUSDT window**), opt-in partial take-profit (`--partial-tp`, A/B **negative on all 4 tested assets AND both tested years on BTCUSDT — the most robust finding in the project**) |
 | Paper Trading | ✅ Complete | Real open/close/PnL against live OKX data, no real capital. Break-even stop management is wired here too (`settings.ENABLE_BREAKEVEN`, off by default, PERMANENTLY -- see research findings below) — no reliable direction exists across assets OR across time (it flips sign on BTCUSDT alone between 2025 and 2026), so there is no direction to ever default toward. Breaker Block and partial-TP remain backtest-only (no positive evidence justifying paper trading) |
 | Portfolio/Journal | ✅ Complete | Real trade/signal persistence, daily/weekly/all-time reports |
