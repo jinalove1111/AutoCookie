@@ -14,12 +14,13 @@ def candle(open_: float, high: float, low: float, close: float, ts: str) -> dict
 
 
 def _base_candles() -> list[dict]:
-    """9 quiet candles (range ~1) + 1 bearish candle (the order block) +
-    1 impulsive bullish candle (range >> 1.5x the rolling average range).
+    """15 quiet candles (range ~1, matching order_block._LOOKBACK=15) + 1
+    bearish candle (the order block) + 1 impulsive bullish candle (range
+    >> 1.8x the rolling average range, matching order_block._IMPULSE_MULT=1.8).
     """
-    candles = [candle(100, 101, 100, 100.5, f"t{i}") for i in range(9)]
-    candles.append(candle(101, 101, 99, 99, "t9"))  # bearish -> order block candidate
-    candles.append(candle(100, 111, 99, 110, "t10"))  # impulsive bullish move
+    candles = [candle(100, 101, 100, 100.5, f"t{i}") for i in range(15)]
+    candles.append(candle(101, 101, 99, 99, "t15"))  # bearish -> order block candidate
+    candles.append(candle(100, 111, 99, 110, "t16"))  # impulsive bullish move
     return candles
 
 
@@ -37,8 +38,8 @@ def test_detect_order_block_finds_bearish_candle_before_bullish_impulse():
         "type": "bullish",
         "top": 101,
         "bottom": 99,
-        "index": 9,
-        "impulse_index": 10,
+        "index": 15,
+        "impulse_index": 16,
     }
 
 
@@ -48,14 +49,14 @@ def test_detect_breaker_block_none_when_zone_never_closed_through():
 
 
 def test_detect_breaker_block_flips_type_after_close_through_and_retest():
-    """After the bullish order block (top=101, bottom=99, index=9) is
+    """After the bullish order block (top=101, bottom=99, index=15) is
     fully closed through (a later close < bottom) and then retested from
     below (a later high wicks back up into the zone), the same zone is
     returned with `type` flipped to bearish.
     """
     candles = _base_candles()
-    candles.append(candle(99.4, 99.5, 98.5, 98.6, "t11"))  # closes through bottom (99)
-    candles.append(candle(98.6, 99.3, 98.5, 99.2, "t12"))  # retest: high (99.3) >= bottom (99)
+    candles.append(candle(99.4, 99.5, 98.5, 98.6, "t17"))  # closes through bottom (99)
+    candles.append(candle(98.6, 99.3, 98.5, 99.2, "t18"))  # retest: high (99.3) >= bottom (99)
 
     result = detect_breaker_block(candles)
 
@@ -63,6 +64,6 @@ def test_detect_breaker_block_flips_type_after_close_through_and_retest():
         "type": "bearish",
         "top": 101,
         "bottom": 99,
-        "index": 9,
-        "retest_index": 12,
+        "index": 15,
+        "retest_index": 18,
     }

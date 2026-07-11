@@ -82,7 +82,7 @@ def test_signal_engine_generates_long_signal_on_real_confluence():
     assert signal.direction == "long"
     assert signal.htf_bias == "bullish"
     assert signal.sweep_type == "sell_side"
-    assert signal.rr == 2.0
+    assert signal.rr == 2.5
     assert signal.status == "pending"
     assert signal.stop_loss < signal.entry_price < signal.take_profit
     assert signal.fvg_zone is not None
@@ -179,14 +179,16 @@ def _bearish_breaker_setup_candles() -> list[dict]:
     breaker block when `use_breaker_block=True` -- proving it's a real,
     independent zone source, not incidental.
     """
-    candles = [candle(100, 101, 100, 100.5, f"t{i}") for i in range(9)]
-    candles.append(candle(101, 101, 99, 99, "t9"))  # bearish base candle -> bullish OB [99, 101]
-    candles.append(candle(100, 111, 99, 110, "t10"))  # bullish impulse confirms the OB
-    candles.append(candle(99.4, 99.5, 98.5, 98.6, "t11"))  # closes through bottom (99)
-    candles.append(candle(98.6, 99.3, 98.5, 99.2, "t12"))  # retest -> confirms bearish breaker
+    # 15 quiet candles (matching order_block._LOOKBACK=15), then the
+    # base/impulse/close-through/retest sequence, then the sweep.
+    candles = [candle(100, 101, 100, 100.5, f"t{i}") for i in range(15)]
+    candles.append(candle(101, 101, 99, 99, "t15"))  # bearish base candle -> bullish OB [99, 101]
+    candles.append(candle(100, 111, 99, 110, "t16"))  # bullish impulse confirms the OB
+    candles.append(candle(99.4, 99.5, 98.5, 98.6, "t17"))  # closes through bottom (99)
+    candles.append(candle(98.6, 99.3, 98.5, 99.2, "t18"))  # retest -> confirms bearish breaker
     # buy_side sweep: wicks above the swing high at 111 (the impulse
     # candle itself) and closes back below it.
-    candles.append(candle(110, 112, 105, 110, "t13"))
+    candles.append(candle(110, 112, 105, 110, "t19"))
     return candles
 
 
@@ -226,8 +228,8 @@ def test_signal_engine_use_breaker_block_true_produces_a_real_short_signal():
         "type": "bearish",
         "top": 101,
         "bottom": 99,
-        "index": 9,
-        "retest_index": 12,
+        "index": 15,
+        "retest_index": 18,
     }
 
 

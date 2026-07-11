@@ -8,19 +8,35 @@ Risk Engine before reaching Execution.
 
 from __future__ import annotations
 
-# Not derived from backtesting/optimization -- reasonable starting defaults,
-# not yet tuned against real performance data. RR=2.0 is a common baseline
-# minimum reward:risk for this style of setup (also mirrors
-# `Settings.MIN_RR` in config.py, so Risk Engine's floor and the Strategy
-# Engine's own target already agree); revisit once real backtest results
-# exist to justify a different value.
-_RR = 2.0
-# 0.1% beyond the far edge of the zone: a small buffer so the stop sits
-# just outside the zone rather than exactly on its boundary (a stop exactly
-# on the boundary could get tagged by the same wick that respects the
-# zone). The specific 0.1% figure is an arbitrary small buffer, not derived
-# from volatility/ATR data -- not yet tuned.
-_STOP_BUFFER = 0.001
+# TUNED (2026-07-11, Phase 1 controlled parameter sweep -- see
+# docs/parameter_sweep_report.md, ENGINEERING_DECISIONS.md, and
+# ROADMAP.md for the full methodology/evidence). Previously 2.0
+# ("reasonable starting default, not yet tuned"). A one-at-a-time sweep
+# (holding all other strategy constants at their defaults) found 2.5
+# robust across: in-sample selection (BTCUSDT, 8 chronological periods),
+# held-out out-of-sample validation (4 further BTCUSDT periods untouched
+# during selection), cross-asset validation (ETHUSDT/SOLUSDT/XRPUSDT,
+# all showing consistent improvement), AND a cross-YEAR check (BTCUSDT
+# anchored to 2025 instead of 2026, +33.5% PnL, same profitable-period
+# ratio) -- the last of these specifically because this project has
+# separately found that cross-asset robustness alone is NOT sufficient
+# evidence (break-even's effect flipped sign across years on a single
+# asset; see ENGINEERING_DECISIONS.md #15/#16). NOTE: `Settings.MIN_RR`
+# in config.py (the Risk Engine's floor, currently 2) is a DIFFERENT,
+# independently-configured constant -- this one is the Strategy Engine's
+# own TARGET ratio for where take-profit is placed, not a risk-approval
+# threshold; they no longer need to match numerically (they still both
+# happen to be >= 2, coincidentally).
+_RR = 2.5
+# TUNED (2026-07-11, same sweep/evidence as _RR above). Previously
+# 0.001 (0.1%, "arbitrary small buffer, not derived from volatility/ATR
+# data"). The sweep tested a narrow band around the old default
+# (0.05%-0.2%) and found 0.15% robust across the same four validation
+# stages as _RR. Still not ATR/volatility-derived -- that remains a
+# genuinely different, untested idea (see docs/parameter_sweep_report.md
+# for why the sweep's range stayed deliberately narrow around the prior
+# default rather than exploring that).
+_STOP_BUFFER = 0.0015
 
 
 def build_entry_model(

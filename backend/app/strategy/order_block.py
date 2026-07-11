@@ -6,7 +6,7 @@ Any resulting signal is validated by the Risk Engine before reaching
 Execution.
 
 Impulse strength is measured against the average candle range of the prior
-10 candles (a rolling window, not the whole series) so the "strong move"
+15 candles (a rolling window, not the whole series) so the "strong move"
 threshold adapts to recent volatility instead of one fixed dataset-wide
 average.
 """
@@ -15,20 +15,31 @@ from __future__ import annotations
 
 from .utils import cf
 
-# Neither constant is derived from backtesting/optimization -- both are
-# reasonable starting defaults, not yet tuned against real performance
-# data.
+# TUNED (2026-07-11, Phase 1 controlled parameter sweep -- see
+# docs/parameter_sweep_report.md, ENGINEERING_DECISIONS.md, and
+# ROADMAP.md for the full methodology/evidence). A one-at-a-time sweep
+# (holding entry_model._RR/_STOP_BUFFER and the other of these two
+# constants at their defaults) found both values below robust across
+# in-sample selection, held-out out-of-sample validation, cross-asset
+# validation (ETHUSDT/SOLUSDT/XRPUSDT), AND a cross-YEAR check (BTCUSDT
+# anchored to 2025) -- see entry_model.py's _RR docstring for why the
+# cross-year check specifically mattered.
 #
-# _LOOKBACK = 10: a rolling window "long enough to average out single-candle
-# noise, short enough to still track recent (not stale) volatility" -- 10
-# was picked as a round-number compromise between those two pulls, not
-# derived from a statistical test on real data.
-_LOOKBACK = 10
-# _IMPULSE_MULT = 1.5: the impulse candle's range must exceed the rolling
-# average range by 50% to count as a "strong move" rather than ordinary
-# chop -- 1.5x is an arbitrary round threshold chosen for the same reason
-# (a plausible starting cutoff), not backtested/tuned.
-_IMPULSE_MULT = 1.5
+# _LOOKBACK = 15 (previously 10): a rolling window "long enough to
+# average out single-candle noise, short enough to still track recent
+# (not stale) volatility". The sweep tested 5/10/15/20 and found 15
+# robust; 10 (the old default) itself remained a perfectly reasonable
+# choice, but 15 showed consistently better per-trade quality (higher
+# average R) across every validation stage without sacrificing trade
+# count or profitable-period consistency.
+_LOOKBACK = 15
+# _IMPULSE_MULT = 1.8 (previously 1.5): the impulse candle's range must
+# exceed the rolling average range by 80% (was 50%) to count as a
+# "strong move" rather than ordinary chop -- a stricter confirmation bar
+# than before. The sweep tested 1.2/1.5/1.8/2.1 and found 1.8 robust;
+# 1.2 (looser) FAILED its own in-sample walk-forward check outright
+# (more signals, but of measurably worse and less consistent quality).
+_IMPULSE_MULT = 1.8
 
 
 def _range(candle: object) -> float:

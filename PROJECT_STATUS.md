@@ -9,29 +9,23 @@ the "why" behind specific non-obvious engineering choices, see
 `ENGINEERING_DECISIONS.md`. For forward-looking prioritization, see
 `ROADMAP.md`.
 
-Last updated: 2026-07-11 (night CTO session: built walk-forward
-validation, Phase 1 gate #2 -- now CLOSED, PASSED unanimously on all 4
-tested assets (BTC/ETH/SOL/XRP). Hardened risk controls: circuit breaker
-now auto-resets once a fresh daily/weekly check clears, closing a real
-gap where a trip previously halted trading permanently with no
-operator-facing reset path. Real-balance integration explicitly deferred
-to gate #4 by operator decision. Resolved the confluence-strength spec
-ambiguity (audit item #9, a genuine core rule) with real A/B evidence
-across all 4 assets -- the existing looser rule is confirmed correct,
-`docs/strategy_spec.md` rewritten to remove the ambiguity. Equal-highs/
-equal-lows liquidity detection deliberately NOT implemented -- confirmed
-not a currently-specified core rule, so out of scope per operator
-instruction. Scope locked by operator directive this round: Phase 1 =
-JadeCap only, tracked against 4 explicit gates, see below. All 3 audit
-HIGH items wired, A/B tested, and
-re-validated across 6 months of real market data on FOUR independent
-assets AND a second independent YEAR via a new `--end-date` time-anchored
-fetch capability. Break-even shows NO reliable direction across either
-dimension -- it even flips sign on BTCUSDT alone between 2025 and 2026 --
-so `ENABLE_BREAKEVEN` stays off by default, permanently. Partial TP is
-the one finding solid enough to actively recommend against, having
-reproduced negative across 4 assets (24/24 periods) AND across 2 years
-on BTCUSDT alone).
+Last updated: 2026-07-11 (night CTO session, latest round: completed a
+controlled parameter sweep of JadeCap's 4 core-rule constants -- all 4
+candidates cleared in-sample, out-of-sample, cross-asset (4/4), AND a
+cross-year check, and were ADOPTED as new defaults (`_RR` 2.0->2.5,
+`_STOP_BUFFER` 0.001->0.0015, `_LOOKBACK` 10->15, `_IMPULSE_MULT`
+1.5->1.8): +66.7% PnL on the standard BTC 2026 methodology, walk-forward
+still PASSED cleanly. Full methodology and every number in
+`docs/parameter_sweep_report.md`. Earlier this session: resolved the
+confluence-strength spec ambiguity with A/B evidence (existing looser
+rule confirmed correct); hardened risk controls (circuit breaker
+auto-reset, closing a real "trip halts trading permanently" gap); closed
+Phase 1 gate #2 (walk-forward validation) on all 4 assets under the old
+defaults, since re-confirmed on BTCUSDT under the new ones. Scope locked
+by operator directive: Phase 1 = JadeCap only, tracked against 4
+explicit gates below. See `CHANGELOG.md` for the full chronological
+history of this session's break-even/Breaker Block/partial-TP/
+confluence-strength/parameter-sweep findings).
 
 ## Phase 1 gate status (operator scope lock)
 
@@ -41,8 +35,8 @@ section for ideas explicitly out of scope until these 4 gates clear.
 
 | Gate | Status |
 |---|---|
-| 1. Backtest | ✅ Complete — 4 assets x 2026, BTCUSDT also x 2025 |
-| 2. Walk-forward validation | ✅ CLOSED — PASSED on all 4 tested assets (24/24 periods profitable, 0 losing streaks, no degradation anywhere) |
+| 1. Backtest | ✅ Complete — 4 assets x 2026, BTCUSDT also x 2025. Controlled parameter sweep complete, 4 tuned defaults adopted (+66.7% PnL vs. old defaults on BTC 2026) |
+| 2. Walk-forward validation | ✅ CLOSED under old defaults (24/24 periods profitable across 4 assets); re-confirmed PASSED on BTCUSDT under the new tuned defaults (ETH/SOL/XRP re-confirmation at standard scale still pending, see `ROADMAP.md`) |
 | 3. Paper trading | ✅ Pipeline complete and running (`scripts/run_paper.py`), no real capital. Risk controls hardened (circuit breaker now auto-resets) |
 | 4. Small live validation | ❌ Not started — requires operator-issued API keys + staged approval + real balance integration (`PLACEHOLDER_ACCOUNT_BALANCE` explicitly deferred here, operator decision) |
 
@@ -67,7 +61,7 @@ approval — this is by design, not an oversight.
 | Layer | Status | Notes |
 |---|---|---|
 | Data (candle fetch) | ✅ Complete | Real OKX public API, deep pagination via `/market/history-candles` (fixed a long-standing 300-candle cap bug), no API key needed. `fetch_ohlcv_history()` can now anchor a fetch to end at a specific past date (`end_time_ms`), enabling genuine cross-YEAR backtesting via `run_backtest.py --end-date` |
-| Strategy Engine | ✅ Complete, actively validated | Bias/sweep/CHOCH/FVG/OB/zone-mitigation/entry-model all real, all tested. Breaker Block detection now wired in too (opt-in, `use_breaker_block`, A/B tested — see findings below). Confluence-strength spec ambiguity RESOLVED — the existing looser rule (sweep OR CHOCH) is confirmed correct with A/B evidence; `require_full_confluence`/`--strict-confluence` available as an opt-in but not recommended |
+| Strategy Engine | ✅ Complete, actively validated | Bias/sweep/CHOCH/FVG/OB/zone-mitigation/entry-model all real, all tested. Breaker Block detection now wired in too (opt-in, `use_breaker_block`, A/B tested — see findings below). Confluence-strength spec ambiguity RESOLVED — the existing looser rule (sweep OR CHOCH) is confirmed correct with A/B evidence; `require_full_confluence`/`--strict-confluence` available as an opt-in but not recommended. Core-rule constants TUNED via controlled parameter sweep (`entry_model._RR`=2.5, `_STOP_BUFFER`=0.0015, `order_block._LOOKBACK`=15, `_IMPULSE_MULT`=1.8 — all previously untuned defaults) — see `docs/parameter_sweep_report.md` |
 | Risk Engine | ✅ Complete | RR floor, daily/weekly loss limits, trades/day cap, position sizing, DB-persisted circuit breaker — all enforced in both paper AND backtest. Circuit breaker now auto-resets once a fresh daily/weekly check clears (previously a documented gap — see `ENGINEERING_DECISIONS.md` #16). Sizing/loss-limit math still keys off `PLACEHOLDER_ACCOUNT_BALANCE`, intentionally, until Phase 1 gate #4 |
 | Backtest Engine | ✅ Complete, actively used for research | Real fee/slippage/PnL, no-lookahead HTF cursor, multi-period out-of-sample splitting (`--periods`, HTF fetch now correctly sized to the LTF request's real time span), time-anchored fetching (`--end-date`), walk-forward validation (`--walk-forward`, explicit PASS/FAIL criteria — PASSED for BTCUSDT baseline), opt-in break-even (`--breakeven`, A/B **no reliable direction across 4 assets OR across 2 years on the same asset — even flips sign on BTCUSDT alone**), opt-in Breaker Block entries (`--breaker-block`, A/B **mostly negative across assets, zero effect in the 2025 BTCUSDT window**), opt-in partial take-profit (`--partial-tp`, A/B **negative on all 4 tested assets AND both tested years on BTCUSDT — the most robust finding in the project**) |
 | Paper Trading | ✅ Complete | Real open/close/PnL against live OKX data, no real capital. Break-even stop management is wired here too (`settings.ENABLE_BREAKEVEN`, off by default, PERMANENTLY -- see research findings below) — no reliable direction exists across assets OR across time (it flips sign on BTCUSDT alone between 2025 and 2026), so there is no direction to ever default toward. Breaker Block and partial-TP remain backtest-only (no positive evidence justifying paper trading) |
@@ -77,7 +71,7 @@ approval — this is by design, not an oversight.
 
 ## Test suite
 
-206 backend tests, 0 known failures, re-run 2x+ for flakiness on every
+215 backend tests, 0 known failures, re-run 2x+ for flakiness on every
 change in this session. Run: `cd backend && ./.venv/Scripts/python.exe -m pytest -q`
 (or the platform-appropriate venv path). No frontend test failures
 (`npx tsc --noEmit` clean as of the last frontend-touching change).
@@ -187,6 +181,35 @@ script exercising long/short/idempotency/disabled-gate paths end to end.
   second half that performed flat-or-better than the first. Zero
   degradation detected on any asset. Phase 1 gate #2 is now closed for
   the current asset set.
+- **Controlled parameter sweep completed and adopted**: JadeCap's four
+  core-rule constants (`entry_model._RR`/`_STOP_BUFFER`,
+  `order_block._LOOKBACK`/`_IMPULSE_MULT`) were previously disclosed as
+  "reasonable defaults, not tuned against real performance data". A
+  one-at-a-time sweep (never a full grid — avoids the overfitting risk
+  of testing 256 combinations at once), selecting candidates by
+  robustness (walk-forward pass, meaningful trade count,
+  profitable-period ratio and average-R both >= baseline) rather than
+  highest profit, found a robust improvement for all four: `_RR`
+  2.0->2.5, `_STOP_BUFFER` 0.001->0.0015, `_LOOKBACK` 10->15,
+  `_IMPULSE_MULT` 1.5->1.8. Each cleared in-sample selection (BTCUSDT),
+  held-out out-of-sample validation (never inspected during selection),
+  AND cross-asset validation (ETHUSDT/SOLUSDT/XRPUSDT). Before adopting,
+  the combined 4-parameter profile was ALSO checked against BTCUSDT
+  anchored to 2025 (a cross-YEAR check, added beyond the operator's
+  original sweep scope specifically because this project already found
+  cross-asset robustness alone insufficient for break-even) — held up:
+  +33.5% PnL, same profitable-period count. A final confirmatory run on
+  this project's standard reporting scale (BTC 2026, `--periods 6
+  --walk-forward`) showed **+66.7% PnL with walk-forward still PASSING
+  cleanly** (0 losing streak, no degradation). Full methodology, every
+  number, and explicitly stated caveats (the validation window is still
+  only ~6 months plus one 2025 spot-check; interaction effects between
+  the four parameters were only spot-checked, not fully swept) in
+  `docs/parameter_sweep_report.md`. A real, if unplanned, finding along
+  the way: `BacktestEngine`'s walk-forward scan is far worse than linear
+  in period length (3000 candles ~88s vs. 1500 candles ~7s) — the
+  initial sweep attempt at the usual 3000-candle scale ran 80+ minutes
+  with zero visible output before being killed and redesigned.
 - **Confluence-strength spec ambiguity resolved with real A/B evidence**:
   `docs/strategy_spec.md` section 6's prose previously read as requiring
   ALL of bias + sweep + CHOCH + FVG/OB in confluence; the actual code

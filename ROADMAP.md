@@ -26,8 +26,8 @@ Walk-Forward -> Paper Trading -> Small Live Validation.
 
 | Gate | Status | Evidence |
 |---|---|---|
-| 1. Backtest | ✅ Complete, extensively validated | 4 assets (BTC/ETH/SOL/XRP) x 2026, BTCUSDT also x 2025 — see "Done" below and `CHANGELOG.md`. Every core rule in `docs/strategy_coverage_audit.md` is now implemented, tested, and (where ever ambiguous) resolved with A/B evidence — zero remaining HIGH-priority items, see that doc's summary |
-| 2. Walk-forward validation | ✅ CLOSED — PASSED on all 4 tested assets | `run_backtest.py --walk-forward` — explicit PASS/FAIL criteria (profitable-period ratio, max losing streak, degradation trend), not a parameter-refitting walk-forward (no tunable params exist yet — see `ENGINEERING_DECISIONS.md` #8). BTC/ETH/SOL/XRP 2026 baselines: **all PASSED** (24/24 periods profitable, 0 losing streaks anywhere, every asset's second half flat-or-better than its first) |
+| 1. Backtest | ✅ Complete, extensively validated | 4 assets (BTC/ETH/SOL/XRP) x 2026, BTCUSDT also x 2025 — see "Done" below and `CHANGELOG.md`. Every core rule in `docs/strategy_coverage_audit.md` is now implemented, tested, and (where ever ambiguous) resolved with A/B evidence — zero remaining HIGH-priority items, see that doc's summary. **Controlled parameter sweep complete** (`docs/parameter_sweep_report.md`): 4 tuned defaults adopted (`_RR` 2.0->2.5, `_STOP_BUFFER` 0.001->0.0015, `_LOOKBACK` 10->15, `_IMPULSE_MULT` 1.5->1.8), all cleared in-sample + out-of-sample + cross-asset + cross-year validation, +66.7% PnL on the standard BTC 2026 methodology with walk-forward still passing cleanly |
+| 2. Walk-forward validation | ✅ CLOSED — PASSED on all 4 assets under the OLD defaults; re-confirmed PASSED on BTCUSDT under the NEW (tuned) defaults | `run_backtest.py --walk-forward` — explicit PASS/FAIL criteria (profitable-period ratio, max losing streak, degradation trend). BTC/ETH/SOL/XRP 2026 baselines (old defaults): **all PASSED** (24/24 periods profitable, 0 losing streaks anywhere). Since the 2026-07-11 parameter sweep changed the defaults, BTCUSDT was re-confirmed PASSED under the new constants (6/6 profitable, 0 losing streak, no degradation, +66.7% PnL vs. the old-default run); ETH/SOL/XRP have NOT yet been re-run at the standard 3000-candle/6-period scale under the new defaults (only at the sweep's own 1500-candle/8-period cross-asset validation scale, where all held up) — see item #1 below |
 | 3. Paper trading | ✅ Pipeline complete and running | `scripts/run_paper.py` — real open/close/PnL against live OKX data, no real capital. Break-even wired in (off by default, permanently — see research findings). Risk controls (RR floor, daily/weekly loss limits, circuit breaker, position sizing) all real and enforced. Circuit breaker now auto-resets once a fresh daily/weekly check clears (previously a documented gap — a trip halted trading permanently with no operator-facing reset path) |
 | 4. Small live validation | ❌ Not started, intentionally gated | Requires operator-issued API keys + staged approval — explicit stop condition, not a CTO-mode decision. **Scope decision (operator, 2026-07-11)**: replacing `settings.PLACEHOLDER_ACCOUNT_BALANCE` (fixed $10,000 constant used for position sizing and loss-limit math) with a real, live-queried exchange balance is explicitly deferred to THIS gate, not built during Phase 1 paper trading — paper trading has no real capital regardless, so the placeholder is honest and sufficient until real capital is actually at risk |
 
@@ -191,26 +191,51 @@ varied conditions):
   ambiguity resolution in an existing rule (unlike confluence strength
   above). Stays documented below as a candidate that needs a spec
   addition before any implementation work, not attempted this round.
+- ~~Controlled parameter sweep (`_RR`/`_STOP_BUFFER`/`_LOOKBACK`/
+  `_IMPULSE_MULT`)~~ — DONE. One-at-a-time sweep, in-sample selection by
+  robustness (not highest profit) on BTCUSDT, validated on held-out
+  out-of-sample periods, then ETHUSDT/SOLUSDT/XRPUSDT, then a cross-year
+  check (BTCUSDT 2025) added specifically because cross-asset robustness
+  alone was already shown insufficient (break-even). **All 4 candidates
+  ADOPTED as new defaults**: `_RR` 2.0->2.5, `_STOP_BUFFER`
+  0.001->0.0015, `_LOOKBACK` 10->15, `_IMPULSE_MULT` 1.5->1.8. Standard-
+  scale confirmatory run (BTC 2026, `--periods 6 --walk-forward`):
+  **+66.7% PnL, walk-forward still PASSED**. Full methodology, every
+  number, and stated caveats in `docs/parameter_sweep_report.md`.
+  Discovered along the way: `BacktestEngine`'s walk-forward scan is far
+  worse than linear in period length (3000 candles ~88s vs. 1500
+  candles ~7s) — an initial sweep attempt at the usual 3000-candle scale
+  ran 80+ minutes with no visible progress before being killed and
+  redesigned.
 
 See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all of this.
 
 ## Immediate (highest ROI, unblocked, no operator input needed)
 
-1. **Run more `--end-date` cross-year tests, prioritized over more
+1. **Re-run walk-forward validation on ETHUSDT/SOLUSDT/XRPUSDT at the
+   standard 3000-candle/6-period scale under the NEW tuned defaults** —
+   only BTCUSDT has been re-confirmed at that scale so far (the sweep's
+   own cross-asset check used smaller 1500-candle/8-period windows,
+   where all 3 held up, but a full standard-scale re-confirmation for
+   all 4 assets would close Phase 1 gate #2 out completely under the
+   new constants, matching how gate #2 was originally closed for the
+   old defaults).
+2. **Run more `--end-date` cross-year tests, prioritized over more
    assets** — one time-anchored BTCUSDT test just produced a bigger
    revision to the break-even story (a sign flip on the SAME asset)
    than three additional assets combined. Natural next steps: (a) a
    2024 window (further back, only 1 more day-count worth of pagination
    given `--end-date` now works), (b) the same 2025 window on
    ETHUSDT/SOLUSDT/XRPUSDT to see whether Partial TP's time-robustness
-   holds for them too.
-2. **Break-even and Breaker Block: stop looking for a "final verdict" at
+   holds for them too. Should now also re-run under the NEW tuned
+   defaults, not the old ones.
+3. **Break-even and Breaker Block: stop looking for a "final verdict" at
    all — treat "no reliable direction across assets OR time" as the
    actual, settled conclusion.** Both now show sign flips or
    inconsistent effects across every axis tested (4 assets, 2 time
    windows on the asset with the strongest original signal). Further
    testing of either dimension alone has clearly diminishing ROI.
-3. **`ENABLE_BREAKEVEN` stays off by default, permanently** — reaffirmed,
+4. **`ENABLE_BREAKEVEN` stays off by default, permanently** — reaffirmed,
    now by a same-asset sign flip across time in addition to the earlier
    cross-asset coin flip. This is not being revisited without a
    fundamentally different kind of evidence (e.g. a parameter change
@@ -218,21 +243,21 @@ See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all of this.
 
 ## Near-term (needs the above first, or is inherently larger scope)
 
-4. **Parameter sweep of `_LOOKBACK`/`_IMPULSE_MULT`/`_STOP_BUFFER`/`_RR`/
-   `BREAKEVEN_TRIGGER_R`/`PARTIAL_TP_TRIGGER_R`/`PARTIAL_TP_PORTION`** —
-   all seven are disclosed-as-untuned defaults. **Hard rule,
-   non-negotiable**: any sweep MUST reserve a subset of `--periods`
-   output as a genuinely held-out test set never inspected until the
-   final decision. Tuning against the same periods used to pick the
-   "best" value and then reporting that value's performance on those
-   same periods is not validation, it's overfitting with extra steps —
-   this is exactly the failure mode the out-of-sample tooling exists to
-   prevent (see `ENGINEERING_DECISIONS.md` entry on this). Given Partial
-   TP's negative result was explained by this strategy's SPECIFIC win-
-   rate/RR profile, a smaller `PARTIAL_TP_TRIGGER_R` or a different
-   `_RR` might change that conclusion -- worth investigating with proper
-   held-out discipline, not by assumption.
-5. **Equal-highs/equal-lows liquidity detection** (audit item #3) — spec
+5. **Parameter sweep of `BREAKEVEN_TRIGGER_R`/`PARTIAL_TP_TRIGGER_R`/
+   `PARTIAL_TP_PORTION`** — deliberately EXCLUDED from the 2026-07-11
+   controlled sweep (see `docs/parameter_sweep_report.md` §1): those
+   three only affect the break-even/partial-TP EXPERIMENTAL features,
+   which are off by default with negative-or-inconsistent evidence, so
+   tuning their triggers wasn't part of MVP-baseline hardening. Given
+   Partial TP's negative result was explained by this strategy's
+   SPECIFIC win-rate/RR profile (which the `_RR` sweep just changed from
+   2.0 to 2.5), a smaller `PARTIAL_TP_TRIGGER_R` or re-testing against
+   the NEW `_RR` might change that conclusion -- worth investigating
+   with the same in-sample/out-of-sample/cross-asset/cross-year
+   discipline used for the core-rule sweep, not by assumption. **Hard
+   rule, non-negotiable, unchanged**: any sweep MUST reserve genuinely
+   held-out data never inspected until the final decision.
+6. **Equal-highs/equal-lows liquidity detection** (audit item #3) — spec
    addition required first (see "Done" above for why this is
    deliberately NOT implemented yet): `detect_liquidity_sweep()` only
    recognizes single swing-point sweeps; real SMC also treats clusters

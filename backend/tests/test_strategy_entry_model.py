@@ -17,7 +17,7 @@ def test_build_entry_model_long_on_bullish_confluence():
     assert model is not None
     assert model["direction"] == "long"
     assert model["entry_price"] == 110
-    assert model["rr"] == 2.0
+    assert model["rr"] == 2.5
     # stop_loss just below the zone bottom (108), take_profit 2x the risk above entry.
     assert model["stop_loss"] < 108
     assert model["take_profit"] > model["entry_price"]

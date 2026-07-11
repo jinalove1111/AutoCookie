@@ -4,6 +4,112 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Controlled parameter sweep: adopt 4 tuned defaults (Phase 1)
+
+### Added
+- `scripts/parameter_sweep.py` (checked in, reproducible): one-at-a-time
+  controlled sweep tool for JadeCap's four core-rule constants
+  (`entry_model._RR`, `entry_model._STOP_BUFFER`, `order_block._LOOKBACK`,
+  `order_block._IMPULSE_MULT`). Monkey-patches the target module constant
+  for the duration of each configuration (always restored, even on
+  error), fetches candle data once per asset and reuses it across every
+  configuration, and reuses `run_backtest.py`'s existing
+  `split_into_periods`/`walk_forward_report` rather than reimplementing
+  period logic. See `docs/parameter_sweep_report.md` for the full
+  methodology and results.
+- `BacktestResult` trade dicts gained `stop_loss`, `take_profit`, and
+  `risk_per_unit` fields (previously only `entry_price`/`exit_price`/
+  `pnl` etc.) -- enables real R-multiple analysis (`pnl / (size *
+  risk_per_unit)`) for any caller, not just this sweep. Purely additive,
+  no existing caller affected (confirmed: no exact-dict-equality
+  assertions existed on trade records).
+- `profit_factor()`/`expectancy()`/`average_r()` pure metric functions
+  in `parameter_sweep.py`, with 9 new unit tests
+  (`test_parameter_sweep.py`).
+
+### Performance finding (discovered mid-sweep, not the main result)
+`BacktestEngine`'s walk-forward scan is empirically far worse than
+linear in period length: a 3000-candle period took ~88s, a 1500-candle
+period ~7s -- a 12x speedup for 2x fewer candles. An initial sweep
+attempt using this project's usual 3000-candle periods ran for 80+
+minutes with zero visible output (Python's stdout block-buffering when
+piped, compounded by the sheer per-configuration cost) before being
+killed and redesigned: 1500-candle periods (still ~6 months of data
+across 12 periods) plus real-time per-period progress logging
+(`flush=True`) brought the full sweep (17 BTC in-sample configs + 4 OOS
+validations + cross-asset validation on 3 more assets) down to a
+tractable 4049s (~67 minutes).
+
+### Swept and ADOPTED (all 4 candidates cleared every validation gate)
+Methodology: in-sample selection (BTCUSDT, 8 of 12 periods) by
+robustness (walk-forward pass, meaningful trade count, profitable-period
+ratio and average-R both >= baseline) -- NOT highest profit -- then
+held-out out-of-sample validation (4 untouched periods), then
+cross-asset validation (ETHUSDT/SOLUSDT/XRPUSDT), then (added beyond the
+original scope, see rationale below) a cross-YEAR check.
+
+| Parameter | Old | New | In-sample | OOS | Cross-asset (3/3) |
+|---|---|---|---|---|---|
+| `_RR` | 2.0 | **2.5** | 7/8 profitable, avg-R 0.927 vs 0.643 baseline | 4/4 profitable (was 3/4) | held up on all 3 |
+| `_STOP_BUFFER` | 0.001 | **0.0015** | 6/8 profitable, avg-R 0.767 vs 0.643 | 4/4 profitable (was 3/4) | held up on all 3 |
+| `_LOOKBACK` | 10 | **15** | 6/8 profitable, avg-R 0.741 vs 0.643 | held up | held up on all 3 |
+| `_IMPULSE_MULT` | 1.5 | **1.8** | 6/8 profitable, avg-R 0.791 vs 0.643 | held up | held up on all 3 |
+
+Looser-than-default values (`_LOOKBACK=5`, `_IMPULSE_MULT=1.2`) FAILED
+their own in-sample walk-forward check outright -- more signals, but
+measurably worse and less consistent. `_RR=1.5` produced 0 trades
+(rejected downstream by `RiskManager.MIN_RR=2`, a real, disclosed, not
+special-cased result).
+
+### Cross-year check (beyond the operator's original sweep scope)
+This project separately found that cross-asset robustness does NOT
+guarantee cross-time robustness (break-even's effect flipped sign across
+years on BTCUSDT alone -- see `ENGINEERING_DECISIONS.md` #15/#16). Before
+finalizing, the combined 4-parameter profile was tested against BTCUSDT
+anchored to 2025 instead of 2026: **+33.5% PnL ($1147.45 -> $1531.27),
+same profitable-period count (9/12)**. Also confirmed on this project's
+standard reporting scale (`--candles 3000 --periods 6 --walk-forward`,
+BTCUSDT 2026): **+66.7% PnL ($1935.35 -> $3227.08)**, walk-forward still
+PASSED cleanly (0 losing streak, no degradation, second half actually
+outperformed the first).
+
+### Changed
+- `entry_model._RR`: 2.0 -> 2.5.
+- `entry_model._STOP_BUFFER`: 0.001 -> 0.0015.
+- `order_block._LOOKBACK`: 10 -> 15.
+- `order_block._IMPULSE_MULT`: 1.5 -> 1.8.
+- All four constants' inline comments rewritten from "reasonable
+  starting default, not yet tuned" to document the tuning evidence
+  directly at the constant.
+- Two test fixtures (`test_strategy_order_block.py`,
+  `test_strategy_signal_engine.py`) extended from 9 quiet candles to 15
+  (matching the new `_LOOKBACK`) so their order-block/breaker-block
+  detection scenarios still trigger under the stricter constants;
+  affected exact-index assertions updated accordingly. Two `rr == 2.0`
+  assertions updated to `2.5`.
+- `docs/strategy_spec.md`/`docs/strategy_coverage_audit.md`: constants
+  no longer described as "untuned defaults".
+
+### Verified
+- `pytest backend/tests/` 215/215 passing (206 + 9 new for
+  `parameter_sweep.py`'s metric functions).
+- Real backtests: in-sample (BTC x4 params x4 values), out-of-sample
+  (BTC held-out), cross-asset (ETH/SOL/XRP), cross-year (BTC 2025),
+  and a final confirmatory run on the standard 3000-candle/6-period
+  scale -- see `docs/parameter_sweep_report.md` for every number.
+
+### Decision
+All four candidates ADOPTED as new defaults -- not just reported and
+left at the old values -- because all four cleared every validation
+gate in the methodology, including a cross-year check that goes beyond
+what the operator's original instructions required, added specifically
+because this project already has a concrete example (break-even) of a
+finding that looked robust across assets but wasn't robust across time.
+See `docs/parameter_sweep_report.md` §8 for the full caveats (the
+in-sample/cross-asset window is still only ~6 months plus one 2025
+spot-check; interaction effects between the four parameters were only
+spot-checked, not fully swept).
+
 ## [Unreleased] - Resolve confluence-strength spec ambiguity (core JadeCap rule, Phase 1)
 
 ### Scope note

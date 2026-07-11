@@ -549,5 +549,15 @@ class BacktestEngine:
             "partial_tp_triggered": partial_tp_triggered,
             "partial_tp_exit_price": partial_exit_price,
             "partial_tp_pnl": (partial_raw_pnl - partial_fee) if partial_tp_triggered else None,
+            # Planned (pre-trade) stop_loss/take_profit and the ORIGINAL
+            # per-unit risk distance -- added for R-multiple analysis
+            # (e.g. scripts/parameter_sweep.py's Average R metric).
+            # `risk_per_unit` is the distance used for POSITION SIZING
+            # (computed above, before any breakeven/partial-tp move), so
+            # `pnl / (size * risk_per_unit)` is a real, comparable
+            # R-multiple even for trades where the effective stop moved.
+            "stop_loss": stop_loss,
+            "take_profit": take_profit,
+            "risk_per_unit": risk_per_unit,
         }
         return trade, exit_index, account_balance

@@ -593,3 +593,59 @@ alternative (spec silent, evidence buried only in CHANGELOG.md) is
 exactly the kind of gap that let this ambiguity go unresolved for as
 long as it did in the first place -- the rule's actual definition
 should live where someone reading the spec would look for it.
+
+---
+
+## 18. Parameter sweep monkey-patches module constants; doesn't add CLI flags for values likely to stay at defaults
+
+**Decision**: `scripts/parameter_sweep.py` sweeps `entry_model._RR`/
+`_STOP_BUFFER` and `order_block._LOOKBACK`/`_IMPULSE_MULT` by directly
+overwriting the module attribute for the duration of each test
+(`setattr(module, attr, value)`, always restored in a `finally` block),
+rather than adding a new constructor/CLI parameter to
+`build_entry_model()`/`detect_order_block()` the way `use_breaker_block`/
+`require_full_confluence`/`use_breakeven` were added as real, permanent
+opt-in parameters.
+
+**Why**: those other flags represent genuinely NEW BEHAVIOR that a
+caller might reasonably want to toggle in production (paper trading,
+future backtests) — they earned a real parameter. These four constants
+are different: per the operator's own methodology (step 10, "keep the
+original defaults if no robust improvement is proven"), the expected
+outcome of a sweep is usually "no change" — building permanent CLI
+surface area for values that will likely never move from their default
+is speculative complexity for a one-time research question, not a
+feature. Monkey-patching is scoped exactly to the sweep script's own
+process and always restored, so it cannot leak into or affect any other
+code path.
+
+**Consequence when the sweep DID find robust improvements**: all four
+candidates cleared every validation gate (see `docs/parameter_sweep_
+report.md`), so the actual module constants were changed directly in
+`entry_model.py`/`order_block.py` (not left as sweep-only findings) —
+the minimal, correct change once a real conclusion exists, matching this
+decision's own reasoning: no new indirection was needed, because the
+right long-term state was simply "the default is now this value",
+exactly what changing the constant achieves.
+
+**Alternative considered**: add real, permanent parameters (`rr=2.0`,
+`stop_buffer=0.001`, etc.) to `build_entry_model()`/`detect_order_block()`
+regardless of the sweep's outcome, on the theory that "future sweeps
+will need this anyway". Rejected — per this project's established
+"opt-in flag threaded end-to-end before any default changes" pattern
+(decision #10), a real parameter implies a real, currently-supported use
+case for varying it at runtime; no such use case exists yet for these
+four constants (unlike `use_breakeven`, which paper trading genuinely
+needs to toggle via `settings.ENABLE_BREAKEVEN`). Adding the plumbing
+preemptively for a hypothetical future sweep would be exactly the kind
+of scope expansion the operator's Phase 1 lock explicitly prohibits.
+
+**Trade-off accepted**: re-running a similar sweep in the future (e.g.
+after the deferred `BREAKEVEN_TRIGGER_R`/`PARTIAL_TP_TRIGGER_R`/
+`PARTIAL_TP_PORTION` sweep, see `ROADMAP.md`) requires either extending
+`parameter_sweep.py`'s own `PARAMETERS` dict (already designed to make
+this cheap — see that file) or writing a similar monkey-patching
+harness for those constants too, rather than reusing pre-built CLI
+flags. Accepted because `parameter_sweep.py` itself is the reusable
+artifact — the harness pattern, not a growing set of flags on
+`run_backtest.py`, is what's meant to be reused.
