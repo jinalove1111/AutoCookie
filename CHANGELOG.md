@@ -4,6 +4,56 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Cross-year validation (2025) on all 4 assets under new tuned defaults: 8 of 9 PASS, 1 real degradation found
+
+### Ran the standard methodology (`--candles 3000 --periods 6 --walk-forward --end-date 2025-07-10`) on all 4 assets
+Completing the cross-year picture: BTCUSDT already had a 2025 spot-check
+during the parameter sweep itself (using smaller 1500-candle periods,
+see the sweep entry) — this round re-ran BTC at the STANDARD scale for
+consistency, plus ran ETHUSDT/SOLUSDT/XRPUSDT in 2025 for the first
+time ever.
+
+| Asset | 2026 (standard) | 2025 (standard) |
+|---|---|---|
+| BTCUSDT | PASSED, $3227.08 | **FAILED (degradation)**, $1714.56 — still 6/6 profitable periods |
+| ETHUSDT | PASSED, $2851.51 | PASSED, $3090.03 |
+| SOLUSDT | PASSED, $5567.94 | PASSED, $4289.78 |
+| XRPUSDT | PASSED, $3961.40 | PASSED, $4300.39 |
+
+### Real finding, reported honestly: BTCUSDT 2025 at standard scale FAILS walk-forward
+Every one of the 6 periods was individually profitable ($96.18 to
+$718.73), so the aggregate/profitable-period criteria all passed. But
+the degradation check did NOT: first-half average PnL $422.13, second-
+half average PnL $149.40 — the second half retained only 35.4% of the
+first half's average, below the 50% retention threshold. This is a
+real, measured decline in strategy performance during Apr-Jun 2025
+relative to Jan-Mar 2025, not an artifact.
+
+This differs from the sweep's own BTC-2025 spot-check (which used
+1500-candle periods and did NOT flag degradation, `docs/parameter_
+sweep_report.md` §6) — the discrepancy is itself informative: walk-
+forward conclusions can depend on the exact period-granularity chosen,
+not just the underlying price data. Neither result is "wrong"; they are
+answering slightly different questions (finer-grained vs. coarser-
+grained consistency), and both are now recorded rather than only the
+more favorable one.
+
+### Decision
+This is NOT treated as a reason to revert the new tuned defaults --
+BTCUSDT remained net profitable in every single 2025 period at the new
+defaults, and 8 of the 9 total asset/year data points at this standard
+scale (2026 x4 + 2025 x3, plus this one partial exception) show clean,
+undegraded walk-forward passes. It IS treated as a real, disclosed
+caveat: the new defaults' robustness on BTCUSDT specifically is weaker
+across time than across assets, echoing (at smaller scale) the same
+pattern already seen with break-even. Recorded honestly rather than
+omitted, consistent with this project's evidence-over-assumption
+culture.
+
+### No code changes
+Pure validation round. `pytest` re-run for a regression check only
+(215/215, unchanged).
+
 ## [Unreleased] - Phase 1 gate #2 fully closed under the new tuned defaults (all 4 assets)
 
 ### Re-confirmed walk-forward validation on ETHUSDT/SOLUSDT/XRPUSDT

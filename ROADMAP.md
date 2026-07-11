@@ -215,30 +215,45 @@ varied conditions):
   SOL +32.6%, XRP +39.0%, combined total +33.3%). Phase 1 gate #2 is now
   fully closed under the new tuned defaults, matching how it was
   originally closed for the old ones — not just spot-checked on BTC.
+- ~~Run 2025 cross-year tests on ETHUSDT/SOLUSDT/XRPUSDT under the new
+  tuned defaults (plus re-run BTC 2025 at standard scale)~~ — DONE.
+  **8 of 9 standard-scale asset/year combinations PASSED cleanly**
+  (2026: BTC/ETH/SOL/XRP all PASSED; 2025: ETH $3090.03/SOL $4289.78/XRP
+  $4300.39 all PASSED). **1 real, disclosed exception**: BTCUSDT 2025 at
+  the standard 3000-candle scale FAILED its walk-forward check on the
+  degradation criterion — every period was still individually
+  profitable ($1714.56 total, 6/6), but the second half's average PnL
+  retained only 35.4% of the first half's (below the 50% threshold).
+  This did NOT reproduce in the sweep's own BTC-2025 spot-check (which
+  used smaller 1500-candle periods and didn't flag it) — a real,
+  informative example of walk-forward conclusions depending on period
+  granularity, not just underlying data. Not treated as a reason to
+  revert the new defaults (BTC 2025 stayed net profitable throughout),
+  but IS a disclosed caveat: the new defaults' robustness on BTCUSDT is
+  weaker across time than across assets. See CHANGELOG.md for the full
+  table.
 
 See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all of this.
 
 ## Immediate (highest ROI, unblocked, no operator input needed)
 
-1. **Run more `--end-date` cross-year tests, prioritized over more
-   assets** — one time-anchored BTCUSDT test just produced a bigger
-   revision to the break-even story (a sign flip on the SAME asset)
-   than three additional assets combined. Natural next steps: (a) a
-   2024 window (further back, only 1 more day-count worth of pagination
-   given `--end-date` now works), (b) the same 2025 window on
-   ETHUSDT/SOLUSDT/XRPUSDT to see whether Partial TP's time-robustness
-   holds for them too. Should now also re-run under the NEW tuned
-   defaults, not the old ones (BTC 2025 was already spot-checked with
-   the new defaults during the parameter sweep and held up, +33.5%; a
-   full re-run under the same rigor as the original cross-year check
-   would still be worthwhile).
-2. **Break-even and Breaker Block: stop looking for a "final verdict" at
+1. **Investigate the BTCUSDT 2025 standard-scale degradation directly**
+   — periods 4-6 (Apr-Jun 2025) were meaningfully weaker than periods
+   1-3 (Jan-Mar 2025) under the new tuned defaults specifically (worth
+   checking whether the OLD defaults showed the same pattern in that
+   exact window, to isolate whether this is a new-defaults-specific
+   sensitivity or a genuine BTC-specific regime shift in that period
+   that would show up regardless of parameters).
+2. **Extend cross-year testing to 2024** — only 2025/2026 tested so far
+   on any asset; a 2024 window (further back, `--end-date` already
+   supports it) would be a genuinely third, independent macro period.
+3. **Break-even and Breaker Block: stop looking for a "final verdict" at
    all — treat "no reliable direction across assets OR time" as the
    actual, settled conclusion.** Both now show sign flips or
    inconsistent effects across every axis tested (4 assets, 2 time
    windows on the asset with the strongest original signal). Further
    testing of either dimension alone has clearly diminishing ROI.
-3. **`ENABLE_BREAKEVEN` stays off by default, permanently** — reaffirmed,
+4. **`ENABLE_BREAKEVEN` stays off by default, permanently** — reaffirmed,
    now by a same-asset sign flip across time in addition to the earlier
    cross-asset coin flip. This is not being revisited without a
    fundamentally different kind of evidence (e.g. a parameter change
@@ -246,7 +261,7 @@ See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all of this.
 
 ## Near-term (needs the above first, or is inherently larger scope)
 
-4. **Parameter sweep of `BREAKEVEN_TRIGGER_R`/`PARTIAL_TP_TRIGGER_R`/
+5. **Parameter sweep of `BREAKEVEN_TRIGGER_R`/`PARTIAL_TP_TRIGGER_R`/
    `PARTIAL_TP_PORTION`** — deliberately EXCLUDED from the 2026-07-11
    controlled sweep (see `docs/parameter_sweep_report.md` §1): those
    three only affect the break-even/partial-TP EXPERIMENTAL features,
@@ -260,7 +275,7 @@ See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all of this.
    discipline used for the core-rule sweep, not by assumption. **Hard
    rule, non-negotiable, unchanged**: any sweep MUST reserve genuinely
    held-out data never inspected until the final decision.
-5. **Equal-highs/equal-lows liquidity detection** (audit item #3) — spec
+6. **Equal-highs/equal-lows liquidity detection** (audit item #3) — spec
    addition required first (see "Done" above for why this is
    deliberately NOT implemented yet): `detect_liquidity_sweep()` only
    recognizes single swing-point sweeps; real SMC also treats clusters

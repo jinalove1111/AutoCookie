@@ -665,3 +665,26 @@ unanimously, with PnL improving on every asset (ETH +4.6%, SOL +32.6%,
 XRP +39.0%). This closes gate #2 to the SAME evidentiary standard it was
 originally closed to, not a lesser one just because the new defaults
 happened to be found via a faster-scale tool.
+
+**Follow-up (cross-year check reveals a genuine period-granularity
+sensitivity)**: extending the standard-scale check to 2025 on all 4
+assets surfaced something the sweep's own smaller-scale (1500-candle)
+BTC-2025 spot-check had NOT: at the standard 3000-candle/6-period scale,
+BTCUSDT 2025 fails its walk-forward degradation check (every period
+individually profitable, but the second half retained only 35.4% of the
+first half's average PnL — the smaller-scale check's different period
+boundaries happened not to isolate this same pattern). This is not a
+contradiction to resolve by picking "the right" period size — it is
+direct, first-hand evidence that walk-forward degradation conclusions
+are sensitive to where period boundaries fall, not just what the
+underlying price data says. The practical consequence: a single
+period-size choice (even this project's own "standard" 3000-candle
+scale) should be treated as one lens on the data, not the final word:
+a result that looks clean at one granularity and degraded at another is
+genuinely ambiguous, not resolved in favor of whichever run happened
+first or looked better. Documented in `docs/parameter_sweep_report.md`
+and `PROJECT_STATUS.md` rather than silently kept as only the more
+favorable (1500-candle) result — the entire discipline this project has
+built around "reproduced" claims (decision #15) applies here too:
+"passed walk-forward" must specify at what granularity, the same way it
+must specify on what asset or in what time window.

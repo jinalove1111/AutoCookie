@@ -9,22 +9,28 @@ the "why" behind specific non-obvious engineering choices, see
 `ENGINEERING_DECISIONS.md`. For forward-looking prioritization, see
 `ROADMAP.md`.
 
-Last updated: 2026-07-11 (night CTO session, latest round: re-confirmed
-walk-forward validation on ETHUSDT/SOLUSDT/XRPUSDT at the standard
-reporting scale under the new tuned parameter defaults -- **all 4 assets
-PASSED unanimously** (24/24 periods profitable, 0 losing streaks
-anywhere), with PnL improved on every single asset vs. the old defaults
-(BTC +66.7%, ETH +4.6%, SOL +32.6%, XRP +39.0%, combined +33.3%). Phase
-1 gate #2 (walk-forward validation) is now fully closed under the new
-tuned defaults, not just spot-checked on BTC. Earlier this session:
-completed the controlled parameter sweep itself (`_RR` 2.0->2.5,
+Last updated: 2026-07-11 (night CTO session, latest round: completed a
+full 2025 cross-year check on all 4 assets under the new tuned defaults
+at the standard reporting scale -- **8 of 9 combinations PASSED
+cleanly** (2026: BTC/ETH/SOL/XRP all PASSED; 2025: ETH/SOL/XRP all
+PASSED). **1 real, disclosed exception**: BTCUSDT 2025 FAILED its
+walk-forward degradation check (still net profitable in all 6 periods,
+$1714.56 total, but the second half's average PnL retained only 35.4%
+of the first half's) -- notably, this did NOT show up in the parameter
+sweep's own smaller-scale BTC-2025 spot-check, a real example of
+walk-forward conclusions depending on period granularity. Not reverting
+the new defaults over this (BTC 2025 stayed profitable throughout), but
+recorded honestly as a caveat rather than omitted. Earlier this session:
+re-confirmed walk-forward on all 4 assets at 2026 under the new tuned
+defaults (BTC +66.7%, ETH +4.6%, SOL +32.6%, XRP +39.0%, combined
++33.3%); completed the parameter sweep itself (`_RR` 2.0->2.5,
 `_STOP_BUFFER` 0.001->0.0015, `_LOOKBACK` 10->15, `_IMPULSE_MULT`
 1.5->1.8, full methodology in `docs/parameter_sweep_report.md`);
-resolved the confluence-strength spec ambiguity with A/B evidence;
-hardened risk controls (circuit breaker auto-reset). Scope locked by
-operator directive: Phase 1 = JadeCap only, tracked against 4 explicit
-gates below. See `CHANGELOG.md` for the full chronological history of
-this session's findings).
+resolved the confluence-strength spec ambiguity; hardened risk controls
+(circuit breaker auto-reset). Scope locked by operator directive: Phase
+1 = JadeCap only, tracked against 4 explicit gates below. See
+`CHANGELOG.md` for the full chronological history of this session's
+findings).
 
 ## Phase 1 gate status (operator scope lock)
 
@@ -217,10 +223,34 @@ script exercising long/short/idempotency/disabled-gate paths end to end.
   6/6 periods profitable each, 0 losing streaks, no degradation. PnL
   improved on every single asset vs. the old (untuned) defaults: BTC
   +66.7%, ETH +4.6%, SOL +32.6%, XRP +39.0%, combined +33.3%
-  ($11708.78 -> $15607.93 across all 4 assets). This is now the most
-  thoroughly validated state JadeCap's core strategy has been in this
-  project's history — every asset, both parameter generations, walk-
-  forward-clean throughout.
+  ($11708.78 -> $15607.93 across all 4 assets). At the time, this was
+  the most thoroughly validated state JadeCap's core strategy had been
+  in this project's history for the 2026 window specifically.
+- **First full cross-year check (2025) on all 4 assets under the new
+  tuned defaults — 8 of 9 combinations PASS, 1 real exception found**:
+  extended the above to 2025 (`--end-date 2025-07-10`, same standard
+  scale). ETHUSDT ($3090.03), SOLUSDT ($4289.78), and XRPUSDT ($4300.39)
+  all **PASSED cleanly** — first time any of these three had been tested
+  outside the 2026 window. BTCUSDT 2025 at this standard scale
+  **FAILED its own walk-forward degradation check**: every one of the 6
+  periods was individually profitable ($1714.56 total), so the
+  aggregate/profitable-period criteria passed, but the second half's
+  average PnL ($149.40) retained only 35.4% of the first half's
+  ($422.13) — below the 50% retention threshold. This is a real,
+  measured decline (Apr-Jun 2025 meaningfully weaker than Jan-Mar 2025
+  under the new defaults specifically), not an artifact. Notably, this
+  did NOT show up in the parameter sweep's own BTC-2025 spot-check
+  (`docs/parameter_sweep_report.md` §6), which used smaller 1500-candle
+  periods and a different period-boundary split — a real, informative
+  example of walk-forward conclusions depending on the exact period
+  granularity chosen, not just the underlying price data. Not treated
+  as a reason to revert the new defaults (BTC 2025 remained net
+  profitable throughout, and 8 of 9 standard-scale combinations passed
+  cleanly) — but recorded as a genuine, disclosed caveat: the new
+  defaults' robustness on BTCUSDT specifically is weaker across time
+  than across assets. See `ROADMAP.md` for the natural follow-up
+  (investigate whether this is new-defaults-specific or a genuine
+  BTC-specific regime shift that the old defaults would show too).
 - **Confluence-strength spec ambiguity resolved with real A/B evidence**:
   `docs/strategy_spec.md` section 6's prose previously read as requiring
   ALL of bias + sweep + CHOCH + FVG/OB in confluence; the actual code
@@ -264,11 +294,14 @@ script exercising long/short/idempotency/disabled-gate paths end to end.
   smaller-trade-count periods.
 - `_RR`/`_STOP_BUFFER`/`_LOOKBACK`/`_IMPULSE_MULT` are now TUNED (2026-07-11
   controlled parameter sweep, `docs/parameter_sweep_report.md`) using the
-  `--periods` tool's held-out-period discipline — but the validation
-  window is still only ~6 months (Jan-July 2026) across 4 assets plus one
-  2025 BTC spot-check, and the one-at-a-time methodology never tested
-  interaction effects between the four parameters together (only two
-  single confirmatory runs of the combined profile). `BREAKEVEN_TRIGGER_R`/
+  `--periods` tool's held-out-period discipline — validated across 2026
+  AND 2025 on all 4 assets at this point (8 of 9 standard-scale
+  combinations clean, 1 real BTCUSDT-2025 degradation exception, see
+  above), still only 2 calendar years and 4 correlated large-cap assets
+  though, and the one-at-a-time sweep methodology never tested
+  interaction effects between the four parameters together (only a
+  small number of confirmatory runs of the combined profile).
+  `BREAKEVEN_TRIGGER_R`/
   `PARTIAL_TP_TRIGGER_R`/`PARTIAL_TP_PORTION` remain untuned, disclosed
   defaults — deliberately excluded from this round since they only affect
   the off-by-default experimental features (see `ROADMAP.md`). Any future

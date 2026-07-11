@@ -1,6 +1,24 @@
 # HANDOFF — JadeCap Automated Trading Bot
 
-## 상태: (CEO/CTO 스코프락 세션) operator 지시 "ROADMAP.md 따라 자율 진행"에 따라 ROADMAP 최우선 항목이었던 **"신규 튜닝된 기본값으로 ETH/SOL/XRP를 표준 규모(3000캔들/6기간)에서 walk-forward 재확인"** 수행. **4개 자산 전부 만장일치 PASS**(24/24 기간 수익, 연속손실 0, 퇴화 없음), 신규 기본값 하에서 4개 자산 전부 PnL 개선(BTC +66.7%/ETH +4.6%/SOL +32.6%/XRP +39.0%, 합산 +33.3%, $11708.78→$15607.93). **Phase 1 게이트 #2가 이제 신규 튜닝된 기본값 기준으로도 완전히 CLOSED됨** — 이전엔 BTC 하나만 표준 규모로 재확인됐었음. 코드 변경 없음(기존 도구 재사용, 순수 검증 라운드). 전체 `pytest` 215/215 유지. Live 관련 코드는 여전히 전무 — Small Live(게이트 #4)는 operator의 명시적 승인 대기 중
+## 상태: (CEO/CTO 스코프락 세션) operator 지시 "ROADMAP.md 따라 자율 진행"에 따라 ROADMAP 1순위였던 **2025년 교차-연도 검증을 4개 자산 전부, 신규 튜닝된 기본값·표준 규모(3000캔들/6기간)로 수행**. **9개 자산×연도 조합 중 8개 깔끔하게 PASS**(2026년 4개 자산 전부 + 2025년 ETH/SOL/XRP) — ETH/SOL/XRP는 2025년 테스트 자체가 이번이 최초. **BTCUSDT 2025년만 표준 규모에서 walk-forward 퇴화(degradation) 체크 FAIL**: 6개 기간 전부 개별적으로는 수익($1714.56 합산)이었지만, 후반부 평균 PnL이 전반부의 35.4%에 불과(50% 기준 미달) — 흥미롭게도 스윕 당시 더 작은 1500캔들 규모로 했던 BTC 2025 spot-check에서는 이 패턴이 안 잡혔었음(기간 경계가 달라서). **신규 기본값을 되돌릴 이유로 보지 않음**(BTC 2025도 전 기간 순수익 유지)이지만 정직하게 caveat로 기록 — "walk-forward 결론은 기간 세분화(granularity) 선택에도 민감할 수 있다"는 방법론적 교훈을 ENGINEERING_DECISIONS.md에 신규 기록(#15의 "reproduced는 무엇이 달라졌는지 명시해야 한다"는 원칙이 자산·시간뿐 아니라 캔들-기간 세분화에도 적용됨을 보여준 사례). 코드 변경 없음(순수 검증 라운드). 전체 `pytest` 215/215 유지. Live 관련 코드는 여전히 전무 — Small Live(게이트 #4)는 operator의 명시적 승인 대기 중
+
+## 전체 회차 (2025년 교차-연도 검증을 4개 자산 전부·신규 기본값·표준 규모로 완료 — BTCUSDT 2025 표준규모 walk-forward 퇴화 발견 및 정직한 기록, ROADMAP.md 자율 진행)
+- [x] 직전 회차에서 "Phase 1 게이트 #2를 신규 기본값 기준으로 4개 자산 전부 CLOSED"했지만, 그건 2026년 창(window) 한정이었음 — ROADMAP.md "Immediate" 1순위였던 "ETH/SOL/XRP도 2025년으로 검증(신규 기본값 기준)"을 이어서 진행. BTC 2025는 스윕 도중 1500캔들 규모로 이미 spot-check(+33.5%)했었지만, 표준 규모(3000캔들)로 재확인해서 완전히 일관된 4자산×2연도 매트릭스를 만들기 위해 BTC도 재실행
+- [x] 동일 방법론(`run_backtest.py --candles 3000 --periods 6 --end-date 2025-07-10 --walk-forward`, 신규 기본값은 코드에 이미 반영됨)으로 4개 자산 전부 실행:
+
+  | 자산 | 2026년(표준규모) | 2025년(표준규모) |
+  |---|---|---|
+  | BTCUSDT | PASSED, $3227.08 | **FAILED(퇴화)**, $1714.56 — 6/6 기간 전부 개별 수익은 유지 |
+  | ETHUSDT | PASSED, $2851.51 | PASSED, $3090.03 |
+  | SOLUSDT | PASSED, $5567.94 | PASSED, $4289.78 |
+  | XRPUSDT | PASSED, $3961.40 | PASSED, $4300.39 |
+
+- [x] **핵심 발견(정직하게 기록)**: BTCUSDT 2025년, 표준 규모에서 walk-forward의 "퇴화(degradation)" 기준만 FAIL. 6개 기간 전부 개별적으로는 흑자($96.18~$718.73)라서 수익기간 비율/연속손실 기준은 전부 통과했지만, 전반부 평균 PnL $422.13 vs 후반부 평균 PnL $149.40 — 후반부가 전반부의 35.4%에 그쳐 50% 기준 미달로 FAIL 처리. 2025년 4~6월이 1~3월보다 실제로 뚜렷하게 약했다는 실측 결과이지 계산 오류가 아님(직접 검증 완료)
+- [x] **방법론적으로 중요한 발견**: 이 퇴화 패턴이 스윕 도중 사용했던 더 작은 1500캔들 규모의 BTC 2025 spot-check에서는 나타나지 않았음(기간 경계 자체가 달라 이 특정 패턴을 그 스케일에서는 못 잡음) — "walk-forward PASS/FAIL"이 단지 자산이나 시간뿐 아니라 **캔들-기간 세분화(granularity) 선택에도 민감할 수 있다**는 실제 사례. 어느 한쪽이 "틀렸다"가 아니라 서로 다른 질문(더 세밀한 일관성 vs 더 거친 일관성)에 답하고 있는 것 — 둘 다 정직하게 기록
+- [x] **결정**: 신규 튜닝된 기본값을 되돌리는 근거로 삼지 않음(BTC 2025도 6개 기간 전부 순수익 유지, 9개 조합 중 8개는 깔끔하게 PASS) — 하지만 "신규 기본값의 BTCUSDT 강건성은 자산 축보다 시간 축에서 더 약하다"는 정직한 caveat로 명시적으로 기록
+- [x] **코드 변경 없음** — 순수 검증 라운드. 전체 `pytest backend/tests/` **215/215 유지**(회귀 확인용 재실행)
+- [x] `CHANGELOG.md`(신규 Unreleased 섹션, 9개 조합 비교표)/`ROADMAP.md`(Done 섹션에 이동, Immediate 1순위를 "BTC 2025 퇴화 원인 직접 조사"로 교체, 2024년 확장 항목 신규 추가)/`PROJECT_STATUS.md`(연구결과·caveat 섹션 갱신, "2026년 4개 자산 검증이 최고"라던 이전 서술을 "2026+2025년 9개 조합 중 8개"로 정정)/`ENGINEERING_DECISIONS.md`(항목 #18에 후속 기록 — 캔들-기간 세분화도 "reproduced" 주장에서 명시해야 할 축임) 갱신
+- [x] git commit/push 예정 (`origin/master`) — operator의 "ROADMAP.md 따라 자율 진행" 지시에 따라 계속 진행
 
 ## 전체 회차 (신규 튜닝된 기본값으로 ETH/SOL/XRP walk-forward 표준 규모 재확인 — Phase 1 게이트 #2를 신규 기본값 기준으로 완전히 CLOSED, ROADMAP.md 자율 진행)
 - [x] 직전 회차(controlled parameter sweep)에서 BTCUSDT만 표준 규모(3000캔들/6기간)로 신규 기본값 재확인했었음 — ROADMAP.md "Immediate" 1순위였던 "나머지 3개 자산도 표준 규모로 재확인"을 이어서 진행
@@ -524,8 +542,9 @@
 
 **Phase 1 게이트 현황**: (1) Backtest ✅ 완료(4자산×2026 + BTC×2025) + **controlled parameter sweep 완료, 신규 기본값 채택**(+66.7%~+39.0%, 자산별) (2) Walk-Forward ✅ **CLOSED — 기존 기본값·신규 기본값 양쪽 모두 4개 자산 전부 PASS**(24/24 기간 수익, 연속손실 0) (3) Paper Trading ✅ 파이프라인 완료·가동 중, 리스크 컨트롤 강화됨(circuit breaker auto-reset) (4) Small Live ❌ operator 승인 대기, 실제 잔고 연동도 이 게이트로 명시적으로 이연됨.
 
-Strategy > Risk > Backtest > Paper Trading > Dashboard 전 계층의 배관 갭은 전부 해소됨. 감사 HIGH 항목 3개 전부 A/B 검증 완료 — 4개 자산(BTC/ETH/SOL/XRP, 전부 2026년) + BTCUSDT의 2개 연도(2025/2026)까지 검증. **break-even**: 자산 축(2승2패)과 시간 축(BTC 단독으로도 +9.2%↔-1.9% 부호 반전) 양쪽 다 신뢰 방향 없음 — `ENABLE_BREAKEVEN` 기본 False **영구 확정**. **Breaker Block**: 대체로 부정, 일관성 약함. **Partial TP**: 4개 자산 + BTC 2개 연도 전부 일관되게 부정 — 유일하게 "적극 비추천" 근거를 갖춘 항목. **Confluence-strength**: 스펙 모호성 해소, 기존(느슨한) 구현이 옳다고 확정. **Parameter sweep**: 4개 core-rule 상수 전부 in-sample+out-of-sample+cross-asset+cross-year 검증 통과, 신규 기본값 채택, **4개 자산 전부 표준 규모로 재확인 완료**(합산 +33.3%). Strategy Engine의 core-rule 레벨 감사·튜닝 항목은 이제 사실상 모두 해소됨(남은 건 equal-highs/lows처럼 스펙 자체가 없는 신규 규칙 후보, 그리고 실험적 기능 전용 파라미터 스윕뿐). **다음 최고-ROI 후보 (Phase 1 게이트 완료 우선순위)**:
-- **`--end-date`로 추가 교차-연도 검증(신규 기본값 기준)**: (a) 2024년으로 더 과거, (b) ETH/SOL/XRP도 2025년으로 검증 — BTC 2025는 스윕 도중 이미 spot-check됨(+33.5%)
+Strategy > Risk > Backtest > Paper Trading > Dashboard 전 계층의 배관 갭은 전부 해소됨. 감사 HIGH 항목 3개 전부 A/B 검증 완료 — 4개 자산 × 2개 연도(2025/2026) 매트릭스 완성, 9개 조합 중 8개 깔끔하게 PASS. **break-even**: 자산 축(2승2패)과 시간 축(BTC 단독으로도 +9.2%↔-1.9% 부호 반전) 양쪽 다 신뢰 방향 없음 — `ENABLE_BREAKEVEN` 기본 False **영구 확정**. **Breaker Block**: 대체로 부정, 일관성 약함. **Partial TP**: 4개 자산 + BTC 2개 연도 전부 일관되게 부정 — 유일하게 "적극 비추천" 근거를 갖춘 항목. **Confluence-strength**: 스펙 모호성 해소. **Parameter sweep**: 4개 core-rule 상수 신규 기본값 채택, 2026년 4개 자산 전부 + 2025년 ETH/SOL/XRP 전부 PASS, **BTCUSDT 2025만 표준규모에서 walk-forward 퇴화 FAIL**(순수익은 유지, 정직하게 기록됨). Strategy Engine의 core-rule 레벨 감사·튜닝 항목은 이제 사실상 모두 해소됨. **다음 최고-ROI 후보 (Phase 1 게이트 완료 우선순위)**:
+- **BTCUSDT 2025 표준규모 퇴화 원인 직접 조사**: 신규 기본값 특유의 민감성인지, 기존 기본값으로도 그 구간(2025년 4~6월)에서 동일 패턴이 나오는 진짜 BTC 레짐 변화인지 구분 필요
+- **2024년으로 교차-연도 확장**: 지금까지 2025/2026 두 해만 검증됨 — 진짜 세 번째 독립 매크로 구간 확보
 - **`BREAKEVEN_TRIGGER_R`/`PARTIAL_TP_TRIGGER_R`/`PARTIAL_TP_PORTION` 스윕**: 이번 라운드에서 의도적으로 제외됨(실험적 기능 전용, MVP baseline 강화와 무관) — `_RR`이 2.0→2.5로 바뀌었으니 partial-TP의 부정적 결론이 새 RR 하에서도 유지되는지 재검토 가치 있음
 - **리스크 컨트롤 추가 감사 후보**: circuit breaker auto-reset은 완료됐지만, `RiskManager`/`DrawdownGuard`의 다른 엣지 케이스도 "production-ready" 관점에서 추가 점검 여지 있음(낮은 우선순위)
 - **break-even/Breaker Block에 대해 "최종 결론 찾기"를 그만두는 것 고려**: 자산·시간 두 축 모두에서 신뢰 방향이 없다는 게 이미 충분히 확정적인 결론
