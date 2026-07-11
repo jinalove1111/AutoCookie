@@ -4,6 +4,42 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Phase 1 gate #2 fully closed under the new tuned defaults (all 4 assets)
+
+### Re-confirmed walk-forward validation on ETHUSDT/SOLUSDT/XRPUSDT
+Following the parameter sweep (previous entry), only BTCUSDT had been
+re-confirmed at this project's standard reporting scale (`--candles
+3000 --periods 6 --walk-forward`) under the new tuned defaults. Ran the
+same check on the remaining 3 assets:
+
+| Asset | Old defaults PnL | New (tuned) defaults PnL | Change | Walk-forward |
+|---|---|---|---|---|
+| BTCUSDT | $1935.35 | $3227.08 | **+66.7%** | PASSED (previous entry) |
+| ETHUSDT | $2725.22 | $2851.51 | **+4.6%** | **PASSED** (6/6, 0 losing streak) |
+| SOLUSDT | $4198.32 | $5567.94 | **+32.6%** | **PASSED** (6/6, 0 losing streak) |
+| XRPUSDT | $2849.89 | $3961.40 | **+39.0%** | **PASSED** (6/6, 0 losing streak) |
+| **Total** | **$11708.78** | **$15607.93** | **+33.3%** | **24/24 periods profitable, unanimous** |
+
+All 4 assets: 6/6 periods profitable, 0 losing streaks, no degradation
+in any asset (every asset's second-half average PnL was flat-or-better
+than its first half). Phase 1 gate #2 (walk-forward validation) is now
+**fully closed under the new tuned defaults**, matching how it was
+originally closed for the old defaults -- not just spot-checked on one
+asset.
+
+### No code changes
+Pure validation round -- reused the walk-forward tooling from earlier
+entries. `pytest` re-run for a regression check only (215/215,
+unchanged).
+
+### Decision
+The tuned parameter set (`_RR=2.5`, `_STOP_BUFFER=0.0015`,
+`_LOOKBACK=15`, `_IMPULSE_MULT=1.8`) is now validated at the standard
+reporting scale across all 4 tested assets, not just BTCUSDT. Combined
+with the parameter sweep's own in-sample/out-of-sample/cross-asset/
+cross-year evidence, this is the most thoroughly validated state
+JadeCap's core strategy has been in this project's history.
+
 ## [Unreleased] - Controlled parameter sweep: adopt 4 tuned defaults (Phase 1)
 
 ### Added

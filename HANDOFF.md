@@ -1,6 +1,23 @@
 # HANDOFF — JadeCap Automated Trading Bot
 
-## 상태: (CEO/CTO 스코프락 세션) operator 지시 "controlled parameter sweep 진행"에 따라 JadeCap 4개 core-rule 상수(`entry_model._RR`/`_STOP_BUFFER`, `order_block._LOOKBACK`/`_IMPULSE_MULT`)를 대상으로 통제된 스윕 수행. **4개 파라미터 전부 in-sample/out-of-sample/cross-asset(4자산)/cross-year 검증을 모두 통과 — 신규 기본값으로 채택**: `_RR` 2.0→2.5, `_STOP_BUFFER` 0.001→0.0015, `_LOOKBACK` 10→15, `_IMPULSE_MULT` 1.5→1.8. BTC 2026 표준 방법론(6기간/3000캔들)에서 **+66.7% PnL**, walk-forward 여전히 PASS(연속손실 0, 퇴화 없음). 스윕 도중 성능 이슈 발견 및 해결: `BacktestEngine`의 walk-forward 스캔이 기간 길이에 대해 선형보다 훨씬 나쁜 확장성을 보임(3000캔들 88초 vs 1500캔들 7초) — 초기 시도(3000캔들 규모)는 80분 넘게 출력 없이 멈춰있어 강제 종료 후 1500캔들/실시간 progress logging으로 재설계, 총 4049초(67분)에 완료. 전체 `pytest` 215/215 통과(206+9, 신규 메트릭 함수 테스트). 스윕 리포트는 `docs/parameter_sweep_report.md`에 전체 방법론·모든 수치·명시적 caveat와 함께 기록됨. Live 관련 코드는 여전히 전무 — Small Live(게이트 #4)는 operator의 명시적 승인 대기 중
+## 상태: (CEO/CTO 스코프락 세션) operator 지시 "ROADMAP.md 따라 자율 진행"에 따라 ROADMAP 최우선 항목이었던 **"신규 튜닝된 기본값으로 ETH/SOL/XRP를 표준 규모(3000캔들/6기간)에서 walk-forward 재확인"** 수행. **4개 자산 전부 만장일치 PASS**(24/24 기간 수익, 연속손실 0, 퇴화 없음), 신규 기본값 하에서 4개 자산 전부 PnL 개선(BTC +66.7%/ETH +4.6%/SOL +32.6%/XRP +39.0%, 합산 +33.3%, $11708.78→$15607.93). **Phase 1 게이트 #2가 이제 신규 튜닝된 기본값 기준으로도 완전히 CLOSED됨** — 이전엔 BTC 하나만 표준 규모로 재확인됐었음. 코드 변경 없음(기존 도구 재사용, 순수 검증 라운드). 전체 `pytest` 215/215 유지. Live 관련 코드는 여전히 전무 — Small Live(게이트 #4)는 operator의 명시적 승인 대기 중
+
+## 전체 회차 (신규 튜닝된 기본값으로 ETH/SOL/XRP walk-forward 표준 규모 재확인 — Phase 1 게이트 #2를 신규 기본값 기준으로 완전히 CLOSED, ROADMAP.md 자율 진행)
+- [x] 직전 회차(controlled parameter sweep)에서 BTCUSDT만 표준 규모(3000캔들/6기간)로 신규 기본값 재확인했었음 — ROADMAP.md "Immediate" 1순위였던 "나머지 3개 자산도 표준 규모로 재확인"을 이어서 진행
+- [x] 동일 방법론(`run_backtest.py --candles 3000 --periods 6 --walk-forward`, 신규 기본값은 이미 코드에 반영돼 있어 플래그 불필요)으로 3개 자산 전부 실행:
+
+  | 자산 | 기존 기본값 PnL | 신규(튜닝) 기본값 PnL | 변화 | Walk-Forward |
+  |---|---|---|---|---|
+  | BTCUSDT | $1935.35 | $3227.08 | **+66.7%** | PASSED(직전 회차) |
+  | ETHUSDT | $2725.22 | $2851.51 | **+4.6%** | **PASSED**(6/6, 연속손실 0) |
+  | SOLUSDT | $4198.32 | $5567.94 | **+32.6%** | **PASSED**(6/6, 연속손실 0) |
+  | XRPUSDT | $2849.89 | $3961.40 | **+39.0%** | **PASSED**(6/6, 연속손실 0) |
+  | **합계** | **$11708.78** | **$15607.93** | **+33.3%** | **24/24 기간 수익, 만장일치** |
+
+- [x] **결과**: 4개 자산 전부 6/6 수익 기간, 연속손실 0, 어느 자산에서도 퇴화 없음, 신규 기본값이 4개 자산 전부에서 기존 기본값보다 더 나은 성과. **Phase 1 게이트 #2가 신규 튜닝된 기본값 기준으로 완전히 CLOSED됨** — BTC 하나만이 아니라 원래 게이트가 닫혔을 때와 동일한 기준(4개 자산 전부, 표준 규모)으로 재확인됨
+- [x] **코드 변경 없음** — 순수 검증 라운드, 기존 walk-forward 도구 재사용. 전체 `pytest backend/tests/` **215/215 유지**(회귀 확인용 재실행)
+- [x] `CHANGELOG.md`(신규 Unreleased 섹션, 4자산 비교표)/`ROADMAP.md`(Phase 1 게이트 표 갱신, Immediate 1순위 항목 Done으로 이동, 번호 재정렬)/`PROJECT_STATUS.md`(게이트 표·연구결과·caveat 섹션의 stale "untuned" 서술 갱신)/`ENGINEERING_DECISIONS.md`(항목 #18에 후속 기록 — 스윕 자체는 더 작은 1500캔들 규모를 썼으므로, 게이트 #2가 원래 닫혔을 때와 "동일한" 기준으로 재확인하는 게 왜 중요했는지) 갱신
+- [x] git commit/push 예정 (`origin/master`) — operator의 "ROADMAP.md 따라 자율 진행" 지시에 따라 계속 진행
 
 ## 전체 회차 (controlled parameter sweep 수행 — 4개 core-rule 상수 신규 기본값 채택, operator 지시 처리)
 - [x] **operator 지시 처리**: "controlled parameter sweep 진행" — 신규 전략 규칙 추가 금지, 스코프 확장 금지, 아키텍처 변경 금지, 전체 데이터셋에 대한 최적화 금지. 필수 방법론 10단계(작은 파라미터 셋 정의/각 파라미터 문서화/in-sample·out-of-sample·walk-forward 분할/in-sample에서만 최적화/robustness 기준으로 후보 선정/held-out 데이터로 검증/거부 기준 적용/8개 지표로 baseline과 비교/넓은 안정 구간 선호/robust 개선 없으면 기본값 유지) 전부 준수
@@ -505,11 +522,10 @@
 ## 현재 위치
 **operator 스코프락 발효 중**: Phase 1 목표는 오직 "JadeCap 하나를 수익성 있는 자동매매 시스템으로 완성"하는 것 — Backtest → Walk-Forward → Paper Trading → Small Live 4개 게이트로만 진행 판단. 멀티전략/퀀트 리서치 플랫폼 등은 명시적으로 Phase 2(ROADMAP.md에 문서화만, 구현 금지)로 이동됨.
 
-**Phase 1 게이트 현황**: (1) Backtest ✅ 완료(4자산×2026 + BTC×2025) + **controlled parameter sweep 완료, 신규 기본값 채택**(+66.7% PnL) (2) Walk-Forward ✅ 기존 기본값으로 4개 자산 전부 CLOSED, **신규 기본값으로 BTC 재확인 PASS**(ETH/SOL/XRP는 표준 규모 재확인 아직 안 함) (3) Paper Trading ✅ 파이프라인 완료·가동 중, 리스크 컨트롤 강화됨(circuit breaker auto-reset) (4) Small Live ❌ operator 승인 대기, 실제 잔고 연동도 이 게이트로 명시적으로 이연됨.
+**Phase 1 게이트 현황**: (1) Backtest ✅ 완료(4자산×2026 + BTC×2025) + **controlled parameter sweep 완료, 신규 기본값 채택**(+66.7%~+39.0%, 자산별) (2) Walk-Forward ✅ **CLOSED — 기존 기본값·신규 기본값 양쪽 모두 4개 자산 전부 PASS**(24/24 기간 수익, 연속손실 0) (3) Paper Trading ✅ 파이프라인 완료·가동 중, 리스크 컨트롤 강화됨(circuit breaker auto-reset) (4) Small Live ❌ operator 승인 대기, 실제 잔고 연동도 이 게이트로 명시적으로 이연됨.
 
-Strategy > Risk > Backtest > Paper Trading > Dashboard 전 계층의 배관 갭은 전부 해소됨. 감사 HIGH 항목 3개 전부 A/B 검증 완료 — 4개 자산(BTC/ETH/SOL/XRP, 전부 2026년) + BTCUSDT의 2개 연도(2025/2026)까지 검증. **break-even**: 자산 축(2승2패)과 시간 축(BTC 단독으로도 +9.2%↔-1.9% 부호 반전) 양쪽 다 신뢰 방향 없음 — `ENABLE_BREAKEVEN` 기본 False **영구 확정**. **Breaker Block**: 대체로 부정, 일관성 약함. **Partial TP**: 4개 자산 + BTC 2개 연도 전부 일관되게 부정 — 유일하게 "적극 비추천" 근거를 갖춘 항목. **Confluence-strength**: 스펙 모호성 해소, 기존(느슨한) 구현이 옳다고 확정. **Parameter sweep**: 4개 core-rule 상수(`_RR`/`_STOP_BUFFER`/`_LOOKBACK`/`_IMPULSE_MULT`) 전부 in-sample+out-of-sample+cross-asset+cross-year 검증 통과, 신규 기본값 채택. Strategy Engine의 core-rule 레벨 감사·튜닝 항목은 이제 사실상 모두 해소됨(남은 건 equal-highs/lows처럼 스펙 자체가 없는 신규 규칙 후보, 그리고 실험적 기능 전용 파라미터 스윕뿐). **다음 최고-ROI 후보 (Phase 1 게이트 완료 우선순위)**:
-- **ETH/SOL/XRP를 신규 기본값으로 표준 규모(3000캔들/6기간) walk-forward 재확인**: BTC만 표준 규모에서 재확인됨 — 게이트 #2를 신규 기본값 기준으로 완전히 다시 닫으려면 필요
-- **`--end-date`로 추가 교차-연도 검증(신규 기본값 기준)**: (a) 2024년으로 더 과거, (b) ETH/SOL/XRP도 2025년으로 검증
+Strategy > Risk > Backtest > Paper Trading > Dashboard 전 계층의 배관 갭은 전부 해소됨. 감사 HIGH 항목 3개 전부 A/B 검증 완료 — 4개 자산(BTC/ETH/SOL/XRP, 전부 2026년) + BTCUSDT의 2개 연도(2025/2026)까지 검증. **break-even**: 자산 축(2승2패)과 시간 축(BTC 단독으로도 +9.2%↔-1.9% 부호 반전) 양쪽 다 신뢰 방향 없음 — `ENABLE_BREAKEVEN` 기본 False **영구 확정**. **Breaker Block**: 대체로 부정, 일관성 약함. **Partial TP**: 4개 자산 + BTC 2개 연도 전부 일관되게 부정 — 유일하게 "적극 비추천" 근거를 갖춘 항목. **Confluence-strength**: 스펙 모호성 해소, 기존(느슨한) 구현이 옳다고 확정. **Parameter sweep**: 4개 core-rule 상수 전부 in-sample+out-of-sample+cross-asset+cross-year 검증 통과, 신규 기본값 채택, **4개 자산 전부 표준 규모로 재확인 완료**(합산 +33.3%). Strategy Engine의 core-rule 레벨 감사·튜닝 항목은 이제 사실상 모두 해소됨(남은 건 equal-highs/lows처럼 스펙 자체가 없는 신규 규칙 후보, 그리고 실험적 기능 전용 파라미터 스윕뿐). **다음 최고-ROI 후보 (Phase 1 게이트 완료 우선순위)**:
+- **`--end-date`로 추가 교차-연도 검증(신규 기본값 기준)**: (a) 2024년으로 더 과거, (b) ETH/SOL/XRP도 2025년으로 검증 — BTC 2025는 스윕 도중 이미 spot-check됨(+33.5%)
 - **`BREAKEVEN_TRIGGER_R`/`PARTIAL_TP_TRIGGER_R`/`PARTIAL_TP_PORTION` 스윕**: 이번 라운드에서 의도적으로 제외됨(실험적 기능 전용, MVP baseline 강화와 무관) — `_RR`이 2.0→2.5로 바뀌었으니 partial-TP의 부정적 결론이 새 RR 하에서도 유지되는지 재검토 가치 있음
 - **리스크 컨트롤 추가 감사 후보**: circuit breaker auto-reset은 완료됐지만, `RiskManager`/`DrawdownGuard`의 다른 엣지 케이스도 "production-ready" 관점에서 추가 점검 여지 있음(낮은 우선순위)
 - **break-even/Breaker Block에 대해 "최종 결론 찾기"를 그만두는 것 고려**: 자산·시간 두 축 모두에서 신뢰 방향이 없다는 게 이미 충분히 확정적인 결론

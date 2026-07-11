@@ -649,3 +649,19 @@ harness for those constants too, rather than reusing pre-built CLI
 flags. Accepted because `parameter_sweep.py` itself is the reusable
 artifact — the harness pattern, not a growing set of flags on
 `run_backtest.py`, is what's meant to be reused.
+
+**Follow-up (standard-scale re-confirmation across all 4 assets)**: the
+sweep's own cross-asset validation used smaller 1500-candle/8-period
+windows (chosen purely for sweep runtime, see the "period sizing" note
+in `docs/parameter_sweep_report.md`). Since Phase 1 gate #2's ORIGINAL
+closure (for the old defaults) used this project's standard 3000-candle/
+6-period scale on all 4 assets, adopting new defaults without
+re-confirming at that same standard scale would have left gate #2's
+"closed" status resting on a smaller, faster check than the bar it was
+originally held to. Re-ran `--candles 3000 --periods 6 --walk-forward`
+on ETHUSDT/SOLUSDT/XRPUSDT under the new defaults (BTCUSDT had already
+been done as the sweep's own final confirmatory run) — all three PASSED
+unanimously, with PnL improving on every asset (ETH +4.6%, SOL +32.6%,
+XRP +39.0%). This closes gate #2 to the SAME evidentiary standard it was
+originally closed to, not a lesser one just because the new defaults
+happened to be found via a faster-scale tool.

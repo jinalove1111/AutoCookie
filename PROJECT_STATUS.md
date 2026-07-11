@@ -9,23 +9,22 @@ the "why" behind specific non-obvious engineering choices, see
 `ENGINEERING_DECISIONS.md`. For forward-looking prioritization, see
 `ROADMAP.md`.
 
-Last updated: 2026-07-11 (night CTO session, latest round: completed a
-controlled parameter sweep of JadeCap's 4 core-rule constants -- all 4
-candidates cleared in-sample, out-of-sample, cross-asset (4/4), AND a
-cross-year check, and were ADOPTED as new defaults (`_RR` 2.0->2.5,
+Last updated: 2026-07-11 (night CTO session, latest round: re-confirmed
+walk-forward validation on ETHUSDT/SOLUSDT/XRPUSDT at the standard
+reporting scale under the new tuned parameter defaults -- **all 4 assets
+PASSED unanimously** (24/24 periods profitable, 0 losing streaks
+anywhere), with PnL improved on every single asset vs. the old defaults
+(BTC +66.7%, ETH +4.6%, SOL +32.6%, XRP +39.0%, combined +33.3%). Phase
+1 gate #2 (walk-forward validation) is now fully closed under the new
+tuned defaults, not just spot-checked on BTC. Earlier this session:
+completed the controlled parameter sweep itself (`_RR` 2.0->2.5,
 `_STOP_BUFFER` 0.001->0.0015, `_LOOKBACK` 10->15, `_IMPULSE_MULT`
-1.5->1.8): +66.7% PnL on the standard BTC 2026 methodology, walk-forward
-still PASSED cleanly. Full methodology and every number in
-`docs/parameter_sweep_report.md`. Earlier this session: resolved the
-confluence-strength spec ambiguity with A/B evidence (existing looser
-rule confirmed correct); hardened risk controls (circuit breaker
-auto-reset, closing a real "trip halts trading permanently" gap); closed
-Phase 1 gate #2 (walk-forward validation) on all 4 assets under the old
-defaults, since re-confirmed on BTCUSDT under the new ones. Scope locked
-by operator directive: Phase 1 = JadeCap only, tracked against 4
-explicit gates below. See `CHANGELOG.md` for the full chronological
-history of this session's break-even/Breaker Block/partial-TP/
-confluence-strength/parameter-sweep findings).
+1.5->1.8, full methodology in `docs/parameter_sweep_report.md`);
+resolved the confluence-strength spec ambiguity with A/B evidence;
+hardened risk controls (circuit breaker auto-reset). Scope locked by
+operator directive: Phase 1 = JadeCap only, tracked against 4 explicit
+gates below. See `CHANGELOG.md` for the full chronological history of
+this session's findings).
 
 ## Phase 1 gate status (operator scope lock)
 
@@ -36,7 +35,7 @@ section for ideas explicitly out of scope until these 4 gates clear.
 | Gate | Status |
 |---|---|
 | 1. Backtest | ✅ Complete — 4 assets x 2026, BTCUSDT also x 2025. Controlled parameter sweep complete, 4 tuned defaults adopted (+66.7% PnL vs. old defaults on BTC 2026) |
-| 2. Walk-forward validation | ✅ CLOSED under old defaults (24/24 periods profitable across 4 assets); re-confirmed PASSED on BTCUSDT under the new tuned defaults (ETH/SOL/XRP re-confirmation at standard scale still pending, see `ROADMAP.md`) |
+| 2. Walk-forward validation | ✅ CLOSED under BOTH the old and new (tuned) defaults — 24/24 periods profitable across all 4 assets each time, PnL improved on every asset under the new defaults (BTC +66.7%, ETH +4.6%, SOL +32.6%, XRP +39.0%) |
 | 3. Paper trading | ✅ Pipeline complete and running (`scripts/run_paper.py`), no real capital. Risk controls hardened (circuit breaker now auto-resets) |
 | 4. Small live validation | ❌ Not started — requires operator-issued API keys + staged approval + real balance integration (`PLACEHOLDER_ACCOUNT_BALANCE` explicitly deferred here, operator decision) |
 
@@ -210,6 +209,18 @@ script exercising long/short/idempotency/disabled-gate paths end to end.
   in period length (3000 candles ~88s vs. 1500 candles ~7s) — the
   initial sweep attempt at the usual 3000-candle scale ran 80+ minutes
   with zero visible output before being killed and redesigned.
+- **Phase 1 gate #2 (walk-forward validation) fully re-closed under the
+  new tuned defaults, all 4 assets**: the parameter sweep above only
+  re-confirmed BTCUSDT at this project's standard reporting scale.
+  Re-ran ETHUSDT/SOLUSDT/XRPUSDT the same way (`--candles 3000
+  --periods 6 --walk-forward`) and all three **PASSED unanimously**:
+  6/6 periods profitable each, 0 losing streaks, no degradation. PnL
+  improved on every single asset vs. the old (untuned) defaults: BTC
+  +66.7%, ETH +4.6%, SOL +32.6%, XRP +39.0%, combined +33.3%
+  ($11708.78 -> $15607.93 across all 4 assets). This is now the most
+  thoroughly validated state JadeCap's core strategy has been in this
+  project's history — every asset, both parameter generations, walk-
+  forward-clean throughout.
 - **Confluence-strength spec ambiguity resolved with real A/B evidence**:
   `docs/strategy_spec.md` section 6's prose previously read as requiring
   ALL of bias + sweep + CHOCH + FVG/OB in confluence; the actual code
@@ -251,12 +262,18 @@ script exercising long/short/idempotency/disabled-gate paths end to end.
   BTCUSDT window's period 1 at just 2 trades) are still modest in
   places; win-rate confidence intervals remain wide, especially for the
   smaller-trade-count periods.
-- No strategy parameters have ever been tuned against real data —
-  `_LOOKBACK`, `_IMPULSE_MULT`, `_STOP_BUFFER`, `_RR`,
-  `BREAKEVEN_TRIGGER_R`, `PARTIAL_TP_TRIGGER_R`, `PARTIAL_TP_PORTION`
-  are all disclosed-as-untuned reasonable defaults. If they ever ARE
-  tuned, it must be done using the `--periods` tool's held-out-period
-  discipline or the entire point of building it is defeated.
+- `_RR`/`_STOP_BUFFER`/`_LOOKBACK`/`_IMPULSE_MULT` are now TUNED (2026-07-11
+  controlled parameter sweep, `docs/parameter_sweep_report.md`) using the
+  `--periods` tool's held-out-period discipline — but the validation
+  window is still only ~6 months (Jan-July 2026) across 4 assets plus one
+  2025 BTC spot-check, and the one-at-a-time methodology never tested
+  interaction effects between the four parameters together (only two
+  single confirmatory runs of the combined profile). `BREAKEVEN_TRIGGER_R`/
+  `PARTIAL_TP_TRIGGER_R`/`PARTIAL_TP_PORTION` remain untuned, disclosed
+  defaults — deliberately excluded from this round since they only affect
+  the off-by-default experimental features (see `ROADMAP.md`). Any future
+  parameter work must keep using the same held-out-period discipline or
+  the entire point of the tooling is defeated.
 
 **Conclusion: one finding is now solid across every dimension tested, two
 are genuinely unresolved across every dimension tested — and
