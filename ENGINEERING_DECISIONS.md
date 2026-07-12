@@ -1257,3 +1257,43 @@ real-`datetime` fixtures (same requirement as `session_liquidity.py`,
 the only other detector needing real calendar time). 343/343 backend
 tests passing. Not yet wired into `jade_trade_plan`/`SignalEngine` --
 same status as every other standalone Jade module.
+
+## 31. CRT (Candle Range Theory) takes the range candle and the checked series as two SEPARATE inputs, enabling both same-timeframe and cross-timeframe usage from one function
+
+**Decision**: `app.strategy.crt.detect_crt(range_candle, candles)`
+checks whether the LAST candle in `candles` manipulates (wicks beyond
+one side of) then distributes (closes back on the originating side of)
+`range_candle`'s own `[low, high]` range -- the exact same "sweep then
+close back inside, a bare wick alone is never a signal" mechanic as
+`detect_liquidity_sweep`/`entry_point_engine`'s Liquidity Raid model,
+except the "liquidity" being swept is a single reference candle's own
+range, not a swing point or session/day/week high-low.
+`detect_crt_from_previous_candle(candles)` is a convenience wrapper for
+the simplest same-timeframe reading (`candles[-2]` as the range
+candle).
+
+**Why `range_candle` and `candles` are two separate parameters, not one
+series with an implicit "N-1 vs. N" reading baked in**: CRT is most
+commonly taught ACROSS timeframes -- a single HTF (e.g. daily/weekly)
+candle's range, manipulated and distributed by LTF price action within
+it -- not necessarily the immediately preceding candle of the SAME
+series. Taking them as independent inputs makes both readings possible
+from one function (same-timeframe: pass `candles[-2]`; cross-timeframe:
+pass a real HTF candle) without a second, parallel implementation for
+each case. `detect_crt_from_previous_candle` exists only because the
+same-timeframe case is common enough to deserve a one-line convenience
+wrapper, not because the general function is somehow incomplete without
+it.
+
+**Why `target_reference` is always the OPPOSITE side of the range from
+whichever side was swept**: standard CRT target -- once manipulation
+sweeps one side's liquidity, price is expected to travel toward the
+other side. Identical concept, identical field name, to
+`entry_point_engine`'s Liquidity Raid model's own `target_reference`
+("opposite side of the range" per that spec) -- kept consistent rather
+than inventing new terminology for the same idea.
+
+**Status**: 8 tests (`tests/test_strategy_crt.py`), including one
+explicitly proving cross-timeframe usage (a real HTF candle as the
+range, an independent LTF series as the check). 351/351 backend tests
+passing. Not yet wired into `jade_trade_plan`/`SignalEngine`.
