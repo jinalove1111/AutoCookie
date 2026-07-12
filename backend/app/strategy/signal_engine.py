@@ -10,7 +10,9 @@ from dataclasses import dataclass
 
 from .bias import detect_htf_bias
 from .entry_model import build_entry_model
+from .exit_point_engine import find_exit_targets
 from .fvg import detect_fair_value_gap
+from .jade_trade_plan import build_trade_plan
 from .liquidity import detect_liquidity_sweep
 from .market_structure import (
     detect_choch_mss,
@@ -24,7 +26,17 @@ from .utils import cf, is_zone_mitigated
 
 @dataclass
 class TradeSignal:
-    """Data contract for a generated trade signal, matching the `signals` DB table."""
+    """Data contract for a generated trade signal, matching the `signals` DB table.
+
+    `jade_plan` (default `None`, additive -- see `generate_signal`'s
+    `use_jade_engine` docstring and ENGINEERING_DECISIONS.md #34): the
+    full `jade_trade_plan.build_trade_plan` result when the signal came
+    from the Jade path, else `None`. Not a `signals` DB column -- carries
+    the rich Jade-only detail (confidence score, ranked exit targets,
+    HTF confluence, trendline/CRT/session-bias context, reason lists)
+    that the DB-mapped fields below cannot represent, for any caller
+    that wants it before it's persisted/discarded downstream.
+    """
 
     symbol: str
     direction: str
@@ -38,6 +50,7 @@ class TradeSignal:
     take_profit: float
     rr: float
     status: str
+    jade_plan: dict | None = None
 
 
 class SignalEngine:
@@ -53,8 +66,44 @@ class SignalEngine:
         require_ob_fvg_confluence: bool = False,
         use_structure_tp: bool = False,
         require_premium_discount_filter: bool = False,
+        use_jade_engine: bool = False,
     ) -> "TradeSignal | None":
         """Analyze market structure for `symbol` and produce a TradeSignal, or None.
+
+        `use_jade_engine` (default `False`, opt-in -- see
+        ENGINEERING_DECISIONS.md #34): when `True`, bypasses the entire
+        legacy pipeline below (bias/sweep/CHOCH/FVG/OB/breaker via
+        `entry_model.build_entry_model`) and instead calls
+        `jade_trade_plan.build_trade_plan(ltf_candles, htf_candles)` --
+        the complete Jade methodology (bias, all 5 entry models, exit
+        targets, HTF confluence, trendline, CRT, session bias), reused
+        unmodified. Every other parameter on this method is IGNORED when
+        `use_jade_engine=True` (they only configure the legacy path).
+
+        Field mapping onto `TradeSignal` (a real, if imperfect, fit --
+        the Jade plan is far richer than this dataclass's fixed,
+        DB-column-matched shape, see `TradeSignal.jade_plan`'s own
+        docstring for how the full detail is preserved anyway):
+        `entry_price` is the entry zone's edge closest to how a real
+        order would fill (`top` for a long, `bottom` for a short -- the
+        SAME convention `entry_model.build_entry_model` already uses,
+        not the "zone midpoint" convention `exit_point_engine`/
+        `htf_ltf_confluence` use internally for a different problem --
+        see ENGINEERING_DECISIONS.md #34). `take_profit` is the NEAREST
+        exit target (`exit_targets[0]`, already ranked nearest-to-
+        farthest by `find_exit_targets`); if `exit_targets` is empty,
+        this returns `None` rather than fabricate a target the Jade
+        system itself didn't find. `rr` is the REAL reward:risk implied
+        by that specific entry/stop/target (not a fixed constant -- same
+        "recompute rr against the Risk Engine's real MIN_RR gate"
+        discipline `use_structure_tp` already established). `sweep_type`/
+        `choch_detected` are legacy-pipeline-specific concepts with no
+        clean Jade equivalent -- always `None`/`False` on this path,
+        never meaningfully wrong (just not applicable). `fvg_zone`
+        carries the Jade entry zone (`{"top", "bottom"}`) -- the same
+        ROLE this field already plays (the zone the engine actually
+        used), even though its shape differs slightly from the legacy
+        zone dicts (no `type`/`index`).
 
         `use_breaker_block` (default `False`, opt-in -- see
         docs/strategy_coverage_audit.md and docs/ROADMAP.md item #1):
@@ -142,6 +191,9 @@ class SignalEngine:
         if not ltf_candles or not htf_candles:
             return None
 
+        if use_jade_engine:
+            return self._generate_signal_via_jade_engine(symbol, ltf_candles, htf_candles)
+
         bias = detect_htf_bias(htf_candles)
         sweep = detect_liquidity_sweep(ltf_candles)
         # CHoCH must reflect structure that formed at or after the actual
@@ -228,4 +280,66 @@ class SignalEngine:
             take_profit=model["take_profit"],
             rr=model["rr"],
             status="pending",
+        )
+
+    def _generate_signal_via_jade_engine(
+        self, symbol: str, ltf_candles: list, htf_candles: list
+    ) -> "TradeSignal | None":
+        """The `use_jade_engine=True` path -- see `generate_signal`'s own
+        docstring for the full field-mapping rationale
+        (ENGINEERING_DECISIONS.md #34). Kept as a separate method (not
+        inlined into `generate_signal`) so the legacy pipeline above it
+        stays completely untouched and easy to read in isolation.
+
+        Deliberately does NOT reuse `plan["exit_targets"]` as-is: those
+        were computed by `build_trade_plan` against the entry ZONE'S
+        MIDPOINT (decision #25/#28's convention, chosen for the
+        different "is there room beyond this zone at all" question).
+        This method's `entry_price` is the zone's TOP (long) / BOTTOM
+        (short) edge instead -- matching `entry_model.build_entry_model`'s
+        own convention (the more conservative, worse-case realistic fill
+        assumption) -- which is CLOSER to the far edge of the zone than
+        the midpoint is. A target that clears the midpoint does not
+        necessarily also clear this closer, more conservative entry
+        price, so exit targets are RECOMPUTED here
+        (`find_exit_targets(..., entry_price=<the real one>)`) against
+        the actual `entry_price` this signal uses -- reusing the
+        midpoint-based list would risk a `take_profit` that sits on the
+        WRONG side of `entry_price` (e.g. below it for a long), which
+        very nearly shipped: caught during this integration's own
+        testing (ENGINEERING_DECISIONS.md #34).
+        """
+        plan = build_trade_plan(ltf_candles, htf_candles)
+        if plan is None:
+            return None
+
+        direction = plan["direction"]
+        entry_zone = plan["entry_zone"]
+        entry_price = entry_zone["top"] if direction == "long" else entry_zone["bottom"]
+        stop_loss = plan["stop_loss"]
+
+        exit_targets = find_exit_targets(ltf_candles, direction, entry_price)["targets"]
+        if not exit_targets:
+            return None
+        take_profit = exit_targets[0]["level"]
+
+        risk = abs(entry_price - stop_loss)
+        if risk <= 0:
+            return None
+        rr = abs(take_profit - entry_price) / risk
+
+        return TradeSignal(
+            symbol=symbol,
+            direction=direction,
+            timestamp=cf(ltf_candles[-1], "timestamp"),
+            htf_bias=plan["htf_bias"],
+            sweep_type=None,
+            choch_detected=False,
+            fvg_zone=entry_zone,
+            entry_price=entry_price,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            rr=rr,
+            status="pending",
+            jade_plan=plan,
         )

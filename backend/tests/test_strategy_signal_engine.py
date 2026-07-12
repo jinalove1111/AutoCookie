@@ -448,3 +448,111 @@ def test_signal_engine_premium_discount_filter_rejects_real_long_from_premium():
         "BTCUSDT", ltf_candles, htf_candles, require_premium_discount_filter=True
     )
     assert filtered_signal is None
+
+
+# --- use_jade_engine (opt-in full Jade methodology path, see
+# ENGINEERING_DECISIONS.md #34 for the full field-mapping rationale) -----
+
+
+def _jade_ltf_order_block_fvg_candles() -> list[dict]:
+    """Real OB+FVG-overlap fixture (verified in
+    test_strategy_entry_point_engine.py/test_strategy_jade_trade_plan.py):
+    confidence-5 order_block entry, zone [99, 101].
+    """
+    candles = [candle(100, 100.5, 99.5, 100.2, f"t{i}") for i in range(15)]
+    candles.append(candle(101, 101, 99, 99, "t15"))
+    candles.append(candle(100, 111, 99, 110, "t16"))
+    candles.append(candle(97, 98, 96, 97.5, "tA"))
+    candles.append(candle(97.5, 105, 97, 104, "tB"))
+    candles.append(candle(104, 106, 100, 105, "tC"))
+    candles.append(candle(100, 101, 99.5, 100, "tD"))
+    return candles
+
+
+def test_generate_signal_use_jade_engine_default_false_unaffected():
+    """Default `use_jade_engine=False` must go through the exact
+    legacy pipeline, unaffected by this parameter's mere existence --
+    `jade_plan` on the returned signal must be `None`.
+    """
+    ltf_candles = _bullish_confluence_candles()
+    htf_candles = _bullish_confluence_candles()
+
+    signal = SignalEngine().generate_signal("BTCUSDT", ltf_candles, htf_candles)
+
+    assert signal is not None
+    assert signal.jade_plan is None
+
+
+def test_generate_signal_use_jade_engine_produces_a_real_signal():
+    ltf_candles = _jade_ltf_order_block_fvg_candles()
+    htf_candles = _htf_bullish_candles()
+
+    signal = SignalEngine().generate_signal(
+        "BTCUSDT", ltf_candles, htf_candles, use_jade_engine=True
+    )
+
+    assert signal is not None
+    assert signal.symbol == "BTCUSDT"
+    assert signal.direction == "long"
+    assert signal.htf_bias == "bullish"
+    assert signal.sweep_type is None
+    assert signal.choch_detected is False
+    assert signal.fvg_zone == {"top": 101, "bottom": 99}
+    assert signal.entry_price == 101
+    assert signal.status == "pending"
+    # Real ordering: this exact bug (take_profit landing on the wrong
+    # side of entry_price) was caught and fixed during this integration.
+    assert signal.stop_loss < signal.entry_price < signal.take_profit
+    assert signal.rr == abs(signal.take_profit - signal.entry_price) / abs(
+        signal.entry_price - signal.stop_loss
+    )
+    assert signal.jade_plan is not None
+    assert signal.jade_plan["entry_model"] == "order_block"
+    assert signal.jade_plan["confidence_score"] == 5
+
+
+def test_generate_signal_use_jade_engine_none_when_no_entry_found():
+    # Gently rising, heavily overlapping ranges: no entry model finds
+    # anything -- same fixture used throughout entry_point_engine's own
+    # "nothing matches" tests.
+    ltf_candles = [
+        candle(100 + i * 0.1, 100 + i * 0.1 + 1, 100 + i * 0.1 - 1, 100 + i * 0.1 + 0.5, f"t{i}")
+        for i in range(20)
+    ]
+    signal = SignalEngine().generate_signal(
+        "BTCUSDT", ltf_candles, _htf_bullish_candles(), use_jade_engine=True
+    )
+    assert signal is None
+
+
+def test_generate_signal_use_jade_engine_none_on_neutral_htf_bias():
+    htf_candles = [candle(100, 100.5, 99.5, 100.2, f"h{i}") for i in range(20)]
+    signal = SignalEngine().generate_signal(
+        "BTCUSDT", _jade_ltf_order_block_fvg_candles(), htf_candles, use_jade_engine=True
+    )
+    assert signal is None
+
+
+def test_generate_signal_use_jade_engine_ignores_legacy_only_parameters():
+    """`use_jade_engine=True` bypasses the entire legacy pipeline, so
+    legacy-only flags like `require_full_confluence` must have zero
+    effect on the Jade path's result.
+    """
+    ltf_candles = _jade_ltf_order_block_fvg_candles()
+    htf_candles = _htf_bullish_candles()
+
+    plain = SignalEngine().generate_signal(
+        "BTCUSDT", ltf_candles, htf_candles, use_jade_engine=True
+    )
+    with_legacy_flags = SignalEngine().generate_signal(
+        "BTCUSDT",
+        ltf_candles,
+        htf_candles,
+        use_jade_engine=True,
+        require_full_confluence=True,
+        require_ob_fvg_confluence=True,
+        use_breaker_block=True,
+    )
+
+    assert plain.entry_price == with_legacy_flags.entry_price
+    assert plain.take_profit == with_legacy_flags.take_profit

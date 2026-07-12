@@ -1395,3 +1395,81 @@ signal-generation composer -- bias, all 5 entry models, exit targets,
 HTF confluence, trendline, CRT, and session bias, all reused from their
 own independently-tested modules with zero duplicated detection logic.
 Still NOT wired into `SignalEngine`/paper trading.
+
+## 34. SignalEngine.generate_signal gets a use_jade_engine opt-in flag; TradeSignal gets an additive jade_plan field -- and a real ordering bug was caught during this integration
+
+**Decision**: `SignalEngine.generate_signal` gains `use_jade_engine:
+bool = False`. When `True`, it bypasses the ENTIRE legacy pipeline
+(bias/sweep/CHOCH/FVG/OB/breaker via `entry_model.build_entry_model`)
+and calls `jade_trade_plan.build_trade_plan` instead, mapping the
+result onto `TradeSignal`'s existing DB-mapped fields. `TradeSignal`
+gains one new field, `jade_plan: dict | None = None` (additive, at the
+end, with a default) -- the full Jade plan, for any caller that wants
+the rich detail (`confidence_score`, ranked `exit_targets`,
+`reason_list`, `htf_confluence`, `trendline_signal`, `crt_signal`,
+`session_bias`) the fixed `TradeSignal` shape cannot represent. This
+implements the "Recommended" option from the operator's own 3-option
+framing (2026-07-12) over the two alternatives (map onto existing
+fields only and silently drop the rest, or defer SignalEngine wiring
+entirely).
+
+**Why additive, not persisted**: `app.portfolio.signals.py` (confirmed
+by reading it directly before this change) persists a `TradeSignal` via
+EXPLICIT named-field access (`signal.symbol`, `signal.direction`, ...),
+never `dataclasses.asdict()` or similar blind serialization -- so a new
+field with a default is invisible to every existing consumer
+(`routes_dashboard.py`, `paper_broker.py`, `safety_checks.py`,
+`risk_manager.py`, `portfolio/signals.py`, all checked directly) unless
+that consumer is deliberately updated to read it. Zero risk of trying
+to insert an extra, non-existent column.
+
+**Field mapping decisions**:
+- `entry_price`: the entry zone's `top` (long) / `bottom` (short) --
+  matching `entry_model.build_entry_model`'s own existing convention
+  (the more conservative, worse-realistic-fill assumption), NOT the
+  zone-midpoint convention `find_exit_targets`/`evaluate_htf_ltf_
+  confluence` use internally (decision #25) for a different problem.
+- `take_profit`: the NEAREST of the exit targets, RECOMPUTED against
+  this specific `entry_price` (see the real bug caught below), not
+  reused from `plan["exit_targets"]` as-is.
+- `rr`: the REAL reward:risk implied by this entry/stop/target, not a
+  fixed constant -- same discipline `use_structure_tp` already
+  established for the legacy path (the Risk Engine's `MIN_RR` gate reads
+  this field directly).
+- `sweep_type`/`choch_detected`: always `None`/`False` on the Jade path
+  -- legacy-pipeline-specific concepts with no clean Jade equivalent,
+  not meaningfully wrong, just not applicable.
+- `fvg_zone`: carries the Jade entry zone (`{"top", "bottom"}`) -- same
+  ROLE this field already plays (the zone actually used), different
+  shape (no `type`/`index`).
+
+**A real bug was found and fixed during this integration, before it
+ever shipped**: the first implementation reused `plan["exit_targets"]`
+directly, which `build_trade_plan` computes against the zone's
+MIDPOINT. Since `entry_price` here is the zone's TOP (further from the
+zone's center than the midpoint, for a long), a target that cleared the
+midpoint did not necessarily also clear this closer, more conservative
+`entry_price` -- confirmed with a real fixture where the resulting
+`take_profit` (100.35) landed BELOW `entry_price` (101), an inverted,
+unsafe signal that would have passed the Risk Engine's `MIN_RR` check
+anyway (the ratio is still a positive number even when the price
+ORDERING is backwards -- `risk_manager.evaluate()` checks the ratio,
+not level ordering). Fixed by recomputing `find_exit_targets(...,
+entry_price=<the real one>)` fresh inside `_generate_signal_via_jade_
+engine`, instead of trusting the plan's own midpoint-based list. A new
+test (`test_generate_signal_use_jade_engine_produces_a_real_signal`)
+asserts `stop_loss < entry_price < take_profit` explicitly so this
+exact regression can never silently reappear.
+
+**Status**: 5 new tests
+(`tests/test_strategy_signal_engine.py`), plus confirmation that all
+14 pre-existing `SignalEngine` tests pass byte-for-byte unchanged
+(`use_jade_engine` defaults to `False`, touching nothing on the legacy
+path). 363/363 backend tests passing. This is the first Jade module
+actually wired into `SignalEngine` -- still NOT wired into
+`BacktestEngine`/`scripts/run_paper.py` (neither passes
+`use_jade_engine` through), so no backtest or paper-trading run
+actually exercises this path yet without a further, separate wiring
+step -- same "opt-in, unproven until exercised/evidenced" status every
+new SignalEngine behavior in this project has shipped with
+(`use_breaker_block`, `require_full_confluence`, etc., decision #10).
