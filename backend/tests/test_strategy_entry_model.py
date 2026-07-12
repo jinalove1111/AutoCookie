@@ -339,3 +339,172 @@ def test_build_entry_model_require_ob_fvg_confluence_direction_mismatched_ob_sti
         require_ob_fvg_confluence=True,
     )
     assert model is None
+
+
+# --- use_structure_tp (opt-in structure-based take-profit, see
+# docs/ROADMAP.md "Core Rule MVP completion" item #4) ---------------------
+
+
+def test_build_entry_model_use_structure_tp_ignored_by_default():
+    """Passing previous_swing_high/premium_discount without
+    use_structure_tp=True must have zero effect -- the fixed-RR target
+    (test_build_entry_model_long_on_bullish_confluence's exact result) is
+    unchanged.
+    """
+    previous_swing_high = {"price": 200, "index": 20}
+    premium_discount = {"top": 300, "bottom": 50, "equilibrium": 175, "zone": "discount",
+                         "range_high_index": 20, "range_low_index": 0}
+
+    model = build_entry_model(
+        "bullish",
+        _SWEEP,
+        None,
+        _BULLISH_FVG,
+        None,
+        previous_swing_high=previous_swing_high,
+        premium_discount=premium_discount,
+    )
+
+    baseline = build_entry_model("bullish", _SWEEP, None, _BULLISH_FVG, None)
+    assert model["take_profit"] == baseline["take_profit"]
+    assert model["rr"] == baseline["rr"] == 2.5
+
+
+def test_build_entry_model_use_structure_tp_targets_previous_swing_high():
+    """With use_structure_tp=True and only a valid previous swing high
+    (no premium_discount), take_profit targets that high directly --
+    "long targets previous high first" -- and rr is recomputed as the
+    real reward:risk, not the fixed _RR constant.
+    """
+    previous_swing_high = {"price": 130, "index": 20}
+
+    model = build_entry_model(
+        "bullish",
+        _SWEEP,
+        None,
+        _BULLISH_FVG,
+        None,
+        previous_swing_high=previous_swing_high,
+        use_structure_tp=True,
+    )
+
+    assert model is not None
+    assert model["take_profit"] == 130
+    expected_rr = (130 - model["entry_price"]) / (model["entry_price"] - model["stop_loss"])
+    assert model["rr"] == expected_rr
+    assert model["rr"] != 2.5
+
+
+def test_build_entry_model_use_structure_tp_extends_to_equilibrium_when_further():
+    """When the premium/discount equilibrium reaches FURTHER than the
+    previous swing high, it is used instead -- "if structure allows,
+    target the 0.5 equilibrium instead" (read here as: whichever
+    candidate is more favorable wins).
+    """
+    previous_swing_high = {"price": 120, "index": 20}
+    premium_discount = {"top": 300, "bottom": 50, "equilibrium": 140, "zone": "discount",
+                         "range_high_index": 20, "range_low_index": 0}
+
+    model = build_entry_model(
+        "bullish",
+        _SWEEP,
+        None,
+        _BULLISH_FVG,
+        None,
+        previous_swing_high=previous_swing_high,
+        premium_discount=premium_discount,
+        use_structure_tp=True,
+    )
+
+    assert model["take_profit"] == 140
+
+
+def test_build_entry_model_use_structure_tp_prefers_farther_previous_high_over_nearer_equilibrium():
+    """Sanity mirror of the test above: when the previous swing high
+    reaches FURTHER than equilibrium, the previous high wins instead --
+    proving this is a genuine "most favorable of the two", not just
+    "always prefer equilibrium".
+    """
+    previous_swing_high = {"price": 150, "index": 20}
+    premium_discount = {"top": 300, "bottom": 50, "equilibrium": 130, "zone": "discount",
+                         "range_high_index": 20, "range_low_index": 0}
+
+    model = build_entry_model(
+        "bullish",
+        _SWEEP,
+        None,
+        _BULLISH_FVG,
+        None,
+        previous_swing_high=previous_swing_high,
+        premium_discount=premium_discount,
+        use_structure_tp=True,
+    )
+
+    assert model["take_profit"] == 150
+
+
+def test_build_entry_model_use_structure_tp_falls_back_to_fixed_rr_when_no_valid_target():
+    """Both previous_swing_high and premium_discount missing (the
+    detector found neither) must fall back to the exact fixed-RR target
+    -- a missing structure input degrades gracefully, it doesn't reject
+    an otherwise-valid entry.
+    """
+    model = build_entry_model(
+        "bullish", _SWEEP, None, _BULLISH_FVG, None, use_structure_tp=True
+    )
+    baseline = build_entry_model("bullish", _SWEEP, None, _BULLISH_FVG, None)
+
+    assert model["take_profit"] == baseline["take_profit"]
+    assert model["rr"] == baseline["rr"] == 2.5
+
+
+def test_build_entry_model_use_structure_tp_falls_back_when_previous_high_already_behind_price():
+    """A previous swing high that's already BELOW the entry price (stale,
+    already-passed structure -- not a usable forward target) must be
+    treated the same as a missing one: fall back to the fixed-RR target.
+    """
+    stale_previous_high = {"price": 105, "index": 20}  # below entry_price (110)
+
+    model = build_entry_model(
+        "bullish",
+        _SWEEP,
+        None,
+        _BULLISH_FVG,
+        None,
+        previous_swing_high=stale_previous_high,
+        use_structure_tp=True,
+    )
+    baseline = build_entry_model("bullish", _SWEEP, None, _BULLISH_FVG, None)
+
+    assert model["take_profit"] == baseline["take_profit"]
+    assert model["rr"] == 2.5
+
+
+def test_build_entry_model_use_structure_tp_short_targets_previous_swing_low():
+    """Mirror of the long case: a short targets the previous swing low
+    (below entry), extended further down to equilibrium if that reaches
+    further.
+    """
+    bearish_fvg = [{"type": "bearish", "top": 100, "bottom": 98, "index": 3}]
+    choch = {"type": "bearish_choch", "broken_level": 99, "broken_index": 2, "confirm_index": 4}
+    previous_swing_low = {"price": 70, "index": 20}
+    premium_discount = {"top": 150, "bottom": 60, "equilibrium": 80, "zone": "premium",
+                         "range_high_index": 20, "range_low_index": 0}
+
+    model = build_entry_model(
+        "bearish",
+        None,
+        choch,
+        bearish_fvg,
+        None,
+        previous_swing_low=previous_swing_low,
+        premium_discount=premium_discount,
+        use_structure_tp=True,
+    )
+
+    assert model is not None
+    assert model["direction"] == "short"
+    # previous_swing_low (70) reaches further down than equilibrium (80).
+    assert model["take_profit"] == 70
+    expected_rr = (model["entry_price"] - 70) / (model["stop_loss"] - model["entry_price"])
+    assert model["rr"] == expected_rr

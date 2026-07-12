@@ -48,6 +48,10 @@ def build_entry_model(
     breaker_block: dict | None = None,
     require_full_confluence: bool = False,
     require_ob_fvg_confluence: bool = False,
+    previous_swing_high: dict | None = None,
+    previous_swing_low: dict | None = None,
+    premium_discount: dict | None = None,
+    use_structure_tp: bool = False,
 ) -> dict | None:
     """Combine bias/sweep/CHOCH/FVG/order-block(/breaker-block) signals into
     an entry candidate, or None.
@@ -116,6 +120,52 @@ def build_entry_model(
     direction-mismatched sweep/CHoCH would mean entering against the
     engine's own structural read.
 
+    `use_structure_tp` (opt-in, default `False` -- see docs/ROADMAP.md
+    "Core Rule MVP completion" item #4, which depends on items #1
+    (`premium_discount.calculate_premium_discount`) and #2
+    (`market_structure.find_previous_swing_high`/`find_previous_swing_low`)):
+    when `False`, `take_profit` is always the fixed-`_RR` target (the
+    prior, only behavior). When `True`, `take_profit` instead targets
+    real structure -- resolved as follows (`previous_swing_high`/
+    `previous_swing_low`/`premium_discount` are the raw dicts from those
+    two detectors, caller-supplied so this function stays a pure
+    composition step like the rest of it):
+
+    For a `long`, the candidate targets are the previous swing high's
+    price (`previous_swing_high["price"]`, "long targets previous high
+    first" per the roadmap item) and the premium/discount equilibrium
+    (`premium_discount["equilibrium"]`, "if structure allows, target the
+    0.5 equilibrium instead" -- read here as "instead" meaning whichever
+    candidate is FURTHER from entry in the trade's favor, since a further
+    valid target is strictly the more favorable read of "structure
+    allows" reaching past the nearer one). Only candidates strictly above
+    `entry_price` are valid (a previous high/equilibrium already behind
+    price is not a usable forward target). `short` is the exact mirror:
+    previous swing low first, equilibrium if it extends further below
+    entry, only candidates strictly below `entry_price` are valid.
+
+    If neither candidate is valid (both missing, or both already behind
+    price), this falls back to the exact prior fixed-`_RR` `take_profit`
+    -- a missing/invalid structure input degrades to old behavior rather
+    than rejecting an otherwise-valid entry. Whenever a structure target
+    IS used, the returned `rr` is recomputed as the trade's REAL
+    reward:risk (`reward / risk`, not the fixed `_RR` constant) -- unlike
+    the default mode, `take_profit` here is no longer *defined* as
+    `entry +/- risk * _RR`, so reporting the fixed constant as `rr` would
+    misrepresent the trade to the Risk Engine's `MIN_RR` gate
+    (`risk_manager.py`), which reads this exact field.
+
+    `previous_swing_high`/`previous_swing_low`/`premium_discount` are
+    read from LTF structure (matching every other detector `SignalEngine`
+    feeds this function -- see docs/strategy_spec.md section 1's
+    HTF/LTF-separation rule): the roadmap's "if HTF structure allows"
+    phrasing is used loosely there for "if the broader swing-range
+    context allows", not a literal second candle series -- `find_previous_
+    swing_high`/`find_previous_swing_low`/`calculate_premium_discount`
+    all already operate on a single candle list, same as `find_swing_highs`/
+    `find_swing_lows` underneath every other LTF structural detector in
+    this pipeline.
+
     On success returns `{direction, entry_price, stop_loss, take_profit, rr,
     zone}` — `zone` (the raw FVG/OB/breaker dict used) is included so callers (e.g.
     SignalEngine) can attach it to a signal without recomputing selection.
@@ -167,21 +217,60 @@ def build_entry_model(
         entry_price = top
         stop_loss = bottom * (1 - _STOP_BUFFER)
         risk = entry_price - stop_loss
-        take_profit = entry_price + risk * _RR
     else:
         entry_price = bottom
         stop_loss = top * (1 + _STOP_BUFFER)
         risk = stop_loss - entry_price
-        take_profit = entry_price - risk * _RR
 
     if risk <= 0:
         return None
+
+    take_profit = entry_price + risk * _RR if direction == "long" else entry_price - risk * _RR
+    rr = _RR
+
+    if use_structure_tp:
+        structure_target = _structure_take_profit_target(
+            direction, entry_price, previous_swing_high, previous_swing_low, premium_discount
+        )
+        if structure_target is not None:
+            reward = abs(structure_target - entry_price)
+            take_profit = structure_target
+            rr = reward / risk
 
     return {
         "direction": direction,
         "entry_price": entry_price,
         "stop_loss": stop_loss,
         "take_profit": take_profit,
-        "rr": _RR,
+        "rr": rr,
         "zone": zone,
     }
+
+
+def _structure_take_profit_target(
+    direction: str,
+    entry_price: float,
+    previous_swing_high: dict | None,
+    previous_swing_low: dict | None,
+    premium_discount: dict | None,
+) -> float | None:
+    """Pick the further-from-entry (more favorable) of the previous swing
+    high/low and premium/discount equilibrium, whichever are valid forward
+    targets -- see `use_structure_tp`'s docstring above. Returns `None` if
+    neither candidate is valid, so the caller can fall back to the
+    fixed-`_RR` target.
+    """
+    candidates: list[float] = []
+
+    if direction == "long":
+        if previous_swing_high is not None and previous_swing_high["price"] > entry_price:
+            candidates.append(previous_swing_high["price"])
+        if premium_discount is not None and premium_discount["equilibrium"] > entry_price:
+            candidates.append(premium_discount["equilibrium"])
+        return max(candidates) if candidates else None
+
+    if previous_swing_low is not None and previous_swing_low["price"] < entry_price:
+        candidates.append(previous_swing_low["price"])
+    if premium_discount is not None and premium_discount["equilibrium"] < entry_price:
+        candidates.append(premium_discount["equilibrium"])
+    return min(candidates) if candidates else None

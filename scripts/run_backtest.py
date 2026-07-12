@@ -153,6 +153,7 @@ def run_backtest(
     use_partial_tp: bool = False,
     require_full_confluence: bool = False,
     require_ob_fvg_confluence: bool = False,
+    use_structure_tp: bool = False,
 ) -> Any:
     """Replay `ltf_candles`/`htf_candles` once through the real
     Strategy/Risk/Backtest engines."""
@@ -169,6 +170,7 @@ def run_backtest(
         use_partial_tp=use_partial_tp,
         require_full_confluence=require_full_confluence,
         require_ob_fvg_confluence=require_ob_fvg_confluence,
+        use_structure_tp=use_structure_tp,
     )
 
 
@@ -409,6 +411,24 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--structure-tp",
+        action="store_true",
+        default=False,
+        help=(
+            "Target real structure for take-profit instead of the fixed-RR "
+            "target: long targets the previous swing high first, extending "
+            "to the premium/discount 0.5 equilibrium if that reaches "
+            "further (short mirrors this to the downside); falls back to "
+            "the fixed-RR target when neither structure candidate is a "
+            "valid forward target (see docs/ROADMAP.md 'Core Rule MVP "
+            "completion' item #4). See "
+            "app.strategy.entry_model.build_entry_model's use_structure_tp "
+            "docstring for the full rationale. A/B-testable, not a proven "
+            "improvement; run the same --symbol/--timeframe/--candles/"
+            "--periods with and without this flag and compare."
+        ),
+    )
+    parser.add_argument(
         "--walk-forward",
         action="store_true",
         default=False,
@@ -550,6 +570,7 @@ def main() -> int:
                 use_partial_tp=args.partial_tp,
                 require_full_confluence=args.strict_confluence,
                 require_ob_fvg_confluence=args.ob_fvg_confluence,
+                use_structure_tp=args.structure_tp,
             )
         except Exception as exc:  # unexpected engine failure is a genuine failure
             print(f"ERROR: backtest engine raised an exception on period {period_num}: {exc}")

@@ -174,6 +174,7 @@ class BacktestEngine:
         use_partial_tp: bool = False,
         require_full_confluence: bool = False,
         require_ob_fvg_confluence: bool = False,
+        use_structure_tp: bool = False,
     ) -> "BacktestResult":
         """Replays historical LTF candles (with a time-aligned, no-lookahead
         HTF slice at each step) through the Strategy Engine and Risk Engine
@@ -226,6 +227,14 @@ class BacktestEngine:
         `False` preserves the exact prior (looser, "either zone")
         behavior for every existing caller; A/B tested the same way as
         the other flags above.
+
+        `use_structure_tp` (default `False`, opt-in): threaded straight
+        through to `signal_engine.generate_signal(..., use_structure_tp=...)`
+        -- see `app.strategy.entry_model.build_entry_model`'s docstring and
+        docs/ROADMAP.md "Core Rule MVP completion" item #4. Default
+        `False` preserves the exact prior fixed-RR take-profit behavior
+        for every existing caller; A/B tested the same way as the other
+        flags above.
 
         Walk-forward, expanding window, one trade open at a time (no
         overlap): starts at index MIN_CANDLES - 1 so LTF signal generation
@@ -286,6 +295,7 @@ class BacktestEngine:
                 use_breaker_block=use_breaker_block,
                 require_full_confluence=require_full_confluence,
                 require_ob_fvg_confluence=require_ob_fvg_confluence,
+                use_structure_tp=use_structure_tp,
             )
             if signal is None:
                 i += 1

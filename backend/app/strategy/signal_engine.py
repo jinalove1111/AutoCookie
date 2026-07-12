@@ -12,8 +12,13 @@ from .bias import detect_htf_bias
 from .entry_model import build_entry_model
 from .fvg import detect_fair_value_gap
 from .liquidity import detect_liquidity_sweep
-from .market_structure import detect_choch_mss
+from .market_structure import (
+    detect_choch_mss,
+    find_previous_swing_high,
+    find_previous_swing_low,
+)
 from .order_block import detect_breaker_block, detect_order_block
+from .premium_discount import calculate_premium_discount
 from .utils import cf, is_zone_mitigated
 
 
@@ -46,6 +51,7 @@ class SignalEngine:
         use_breaker_block: bool = False,
         require_full_confluence: bool = False,
         require_ob_fvg_confluence: bool = False,
+        use_structure_tp: bool = False,
     ) -> "TradeSignal | None":
         """Analyze market structure for `symbol` and produce a TradeSignal, or None.
 
@@ -74,6 +80,17 @@ class SignalEngine:
         order block/breaker block AND a matching FVG (not just one)
         before a signal is produced. Passed straight through to
         `build_entry_model`.
+
+        `use_structure_tp` (default `False`, opt-in -- see
+        `entry_model.build_entry_model`'s docstring, and docs/ROADMAP.md
+        "Core Rule MVP completion" item #4): when `True`,
+        `find_previous_swing_high`/`find_previous_swing_low`/
+        `calculate_premium_discount` are each computed once against
+        `ltf_candles` (same series every other structural detector here
+        already uses) and passed through to `build_entry_model`, which
+        uses them to target real structure for `take_profit` instead of
+        the fixed-`_RR` target. Default `False` preserves the exact prior
+        behavior for every existing caller.
 
         `ltf_candles` and `htf_candles` must be genuinely distinct candle
         series (the project's `DEFAULT_TIMEFRAME` and `HTF_TIMEFRAME`
@@ -160,6 +177,14 @@ class SignalEngine:
             ):
                 breaker_block = None
 
+        previous_swing_high = None
+        previous_swing_low = None
+        premium_discount = None
+        if use_structure_tp:
+            previous_swing_high = find_previous_swing_high(ltf_candles)
+            previous_swing_low = find_previous_swing_low(ltf_candles)
+            premium_discount = calculate_premium_discount(ltf_candles)
+
         model = build_entry_model(
             bias,
             sweep,
@@ -169,6 +194,10 @@ class SignalEngine:
             breaker_block,
             require_full_confluence=require_full_confluence,
             require_ob_fvg_confluence=require_ob_fvg_confluence,
+            previous_swing_high=previous_swing_high,
+            previous_swing_low=previous_swing_low,
+            premium_discount=premium_discount,
+            use_structure_tp=use_structure_tp,
         )
         if model is None:
             return None

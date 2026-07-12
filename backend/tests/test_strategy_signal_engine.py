@@ -7,6 +7,8 @@ sub-detector -- nothing here is mocked.
 from __future__ import annotations
 
 from app.strategy.bias import detect_htf_bias
+from app.strategy.market_structure import find_previous_swing_high
+from app.strategy.premium_discount import calculate_premium_discount
 from app.strategy.signal_engine import SignalEngine, TradeSignal
 
 
@@ -339,6 +341,42 @@ def test_signal_engine_require_ob_fvg_confluence_accepts_real_ob_and_fvg_both_pr
     assert signal.htf_bias == "bullish"
     assert signal.sweep_type == "sell_side"
     assert signal.stop_loss < signal.entry_price < signal.take_profit
+
+
+# --- use_structure_tp (opt-in structure-based take-profit, see
+# docs/ROADMAP.md "Core Rule MVP completion" item #4; see
+# entry_model.build_entry_model's use_structure_tp docstring for the full
+# rationale) -------------------------------------------------------------
+
+
+def test_signal_engine_use_structure_tp_falls_back_to_fixed_rr_on_real_stale_structure():
+    """`_bullish_confluence_candles()` is a REAL setup (through the actual
+    detector pipeline, nothing mocked) whose own most-recent confirmed
+    previous swing high (30) and premium/discount equilibrium (19.0) are
+    BOTH already behind the eventual entry price (35, confirmed directly
+    below) -- real, structurally stale detector output, not a missing
+    one. use_structure_tp=True must fall back to the exact same fixed-RR
+    signal as the default call, proving the parameter threads through the
+    real detector pipeline (find_previous_swing_high/find_previous_swing_low/
+    calculate_premium_discount) and degrades gracefully rather than
+    corrupting a valid entry with a stale target.
+    """
+    ltf_candles = _bullish_confluence_candles()
+    htf_candles = _bullish_confluence_candles()
+
+    baseline_signal = SignalEngine().generate_signal("BTCUSDT", ltf_candles, htf_candles)
+    assert baseline_signal is not None
+    # Premise: real detector output on this fixture is already behind entry.
+    assert find_previous_swing_high(ltf_candles)["price"] < baseline_signal.entry_price
+    assert calculate_premium_discount(ltf_candles)["equilibrium"] < baseline_signal.entry_price
+
+    structure_signal = SignalEngine().generate_signal(
+        "BTCUSDT", ltf_candles, htf_candles, use_structure_tp=True
+    )
+
+    assert structure_signal is not None
+    assert structure_signal.take_profit == baseline_signal.take_profit
+    assert structure_signal.rr == baseline_signal.rr == 2.5
 
 
 def _htf_bearish_candles() -> list[dict]:
