@@ -618,8 +618,13 @@ def run_once(
         return summary
 
     # --- 2. Generate a signal ---
+    # use_jade_engine: opt-in via settings.USE_JADE_ENGINE (default False --
+    # see app/config.py's docstring on that setting for why this was wired
+    # in before A/B evidence exists, unlike ENABLE_BREAKEVEN above).
     try:
-        signal = SignalEngine().generate_signal(settings.SYMBOL, candles, htf_candles)
+        signal = SignalEngine().generate_signal(
+            settings.SYMBOL, candles, htf_candles, use_jade_engine=settings.USE_JADE_ENGINE
+        )
     except Exception as exc:
         print(f"ERROR: signal generation failed: {exc}")
         summary["error"] = str(exc)

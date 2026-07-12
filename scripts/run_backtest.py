@@ -155,6 +155,7 @@ def run_backtest(
     require_ob_fvg_confluence: bool = False,
     use_structure_tp: bool = False,
     require_premium_discount_filter: bool = False,
+    use_jade_engine: bool = False,
 ) -> Any:
     """Replay `ltf_candles`/`htf_candles` once through the real
     Strategy/Risk/Backtest engines."""
@@ -173,6 +174,7 @@ def run_backtest(
         require_ob_fvg_confluence=require_ob_fvg_confluence,
         use_structure_tp=use_structure_tp,
         require_premium_discount_filter=require_premium_discount_filter,
+        use_jade_engine=use_jade_engine,
     )
 
 
@@ -447,6 +449,25 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--jade-engine",
+        action="store_true",
+        default=False,
+        help=(
+            "Bypass the legacy entry_model.build_entry_model pipeline "
+            "entirely and use the complete Jade methodology instead "
+            "(app.strategy.jade_trade_plan.build_trade_plan -- bias, all "
+            "5 entry models, exit targets, HTF confluence, trendline, "
+            "CRT, session bias). Every OTHER strategy flag above is "
+            "ignored when this is set, since those only configure the "
+            "legacy path this bypasses. See "
+            "app.strategy.signal_engine.SignalEngine.generate_signal's "
+            "use_jade_engine docstring and ENGINEERING_DECISIONS.md "
+            "#34/#35 for the full rationale. A/B-testable, not a proven "
+            "improvement; run the same --symbol/--timeframe/--candles/"
+            "--periods with and without this flag and compare."
+        ),
+    )
+    parser.add_argument(
         "--walk-forward",
         action="store_true",
         default=False,
@@ -590,6 +611,7 @@ def main() -> int:
                 require_ob_fvg_confluence=args.ob_fvg_confluence,
                 use_structure_tp=args.structure_tp,
                 require_premium_discount_filter=args.premium_discount_filter,
+                use_jade_engine=args.jade_engine,
             )
         except Exception as exc:  # unexpected engine failure is a genuine failure
             print(f"ERROR: backtest engine raised an exception on period {period_num}: {exc}")

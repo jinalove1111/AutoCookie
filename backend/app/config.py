@@ -100,6 +100,15 @@ class Settings(BaseSettings):
     ENABLE_BREAKEVEN: bool = False
     BREAKEVEN_TRIGGER_R: float = 1.0
 
+    # Jade engine (opt-in, default off): unlike ENABLE_BREAKEVEN above,
+    # this was wired into scripts/run_paper.py per explicit operator
+    # instruction (2026-07-12) BEFORE any A/B backtest evidence exists --
+    # a deliberate reversal of this project's usual "evidence first, then
+    # offer in paper trading" sequence (see ENGINEERING_DECISIONS.md #35).
+    # Default False preserves the exact prior behavior for every existing
+    # run; do not flip this to True without real backtest evidence first.
+    USE_JADE_ENGINE: bool = False
+
     @field_validator("TRADING_MODE")
     @classmethod
     def validate_trading_mode(cls, value: str) -> str:

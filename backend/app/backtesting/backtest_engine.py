@@ -176,6 +176,7 @@ class BacktestEngine:
         require_ob_fvg_confluence: bool = False,
         use_structure_tp: bool = False,
         require_premium_discount_filter: bool = False,
+        use_jade_engine: bool = False,
     ) -> "BacktestResult":
         """Replays historical LTF candles (with a time-aligned, no-lookahead
         HTF slice at each step) through the Strategy Engine and Risk Engine
@@ -244,6 +245,22 @@ class BacktestEngine:
         `False` preserves the exact prior behavior for every existing
         caller; A/B tested the same way as the other flags above.
 
+        `use_jade_engine` (default `False`, opt-in -- see
+        `app.strategy.signal_engine.SignalEngine.generate_signal`'s own
+        docstring and ENGINEERING_DECISIONS.md #34): threaded straight
+        through to `signal_engine.generate_signal(..., use_jade_engine=...)`.
+        When `True`, `signal_engine` bypasses its entire legacy pipeline
+        and uses the complete Jade methodology
+        (`app.strategy.jade_trade_plan.build_trade_plan`) instead --
+        every OTHER flag above (`use_breaker_block`,
+        `require_full_confluence`, etc.) is ignored when this is `True`,
+        since those only configure the legacy path this bypasses.
+        Default `False` preserves the exact prior behavior for every
+        existing caller; this is the first real A/B test of the Jade
+        engine against this project's existing, extensively-validated
+        strategy (ENGINEERING_DECISIONS.md #35 -- see that entry for
+        results once run).
+
         Walk-forward, expanding window, one trade open at a time (no
         overlap): starts at index MIN_CANDLES - 1 so LTF signal generation
         always has history. At each LTF step `i`, the HTF slice passed to
@@ -305,6 +322,7 @@ class BacktestEngine:
                 require_ob_fvg_confluence=require_ob_fvg_confluence,
                 use_structure_tp=use_structure_tp,
                 require_premium_discount_filter=require_premium_discount_filter,
+                use_jade_engine=use_jade_engine,
             )
             if signal is None:
                 i += 1

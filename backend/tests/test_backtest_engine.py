@@ -658,6 +658,7 @@ class _FakeSignalEngineFixedSignal:
         require_ob_fvg_confluence=False,
         use_structure_tp=False,
         require_premium_discount_filter=False,
+        use_jade_engine=False,
     ):
         self.call_count += 1
         return self._signal
