@@ -175,6 +175,7 @@ class BacktestEngine:
         require_full_confluence: bool = False,
         require_ob_fvg_confluence: bool = False,
         use_structure_tp: bool = False,
+        require_premium_discount_filter: bool = False,
     ) -> "BacktestResult":
         """Replays historical LTF candles (with a time-aligned, no-lookahead
         HTF slice at each step) through the Strategy Engine and Risk Engine
@@ -236,6 +237,13 @@ class BacktestEngine:
         for every existing caller; A/B tested the same way as the other
         flags above.
 
+        `require_premium_discount_filter` (default `False`, opt-in):
+        threaded straight through to `signal_engine.generate_signal(...,
+        require_premium_discount_filter=...)` -- see
+        `app.strategy.entry_model.build_entry_model`'s docstring. Default
+        `False` preserves the exact prior behavior for every existing
+        caller; A/B tested the same way as the other flags above.
+
         Walk-forward, expanding window, one trade open at a time (no
         overlap): starts at index MIN_CANDLES - 1 so LTF signal generation
         always has history. At each LTF step `i`, the HTF slice passed to
@@ -296,6 +304,7 @@ class BacktestEngine:
                 require_full_confluence=require_full_confluence,
                 require_ob_fvg_confluence=require_ob_fvg_confluence,
                 use_structure_tp=use_structure_tp,
+                require_premium_discount_filter=require_premium_discount_filter,
             )
             if signal is None:
                 i += 1

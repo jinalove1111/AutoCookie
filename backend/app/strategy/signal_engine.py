@@ -52,6 +52,7 @@ class SignalEngine:
         require_full_confluence: bool = False,
         require_ob_fvg_confluence: bool = False,
         use_structure_tp: bool = False,
+        require_premium_discount_filter: bool = False,
     ) -> "TradeSignal | None":
         """Analyze market structure for `symbol` and produce a TradeSignal, or None.
 
@@ -90,6 +91,16 @@ class SignalEngine:
         already uses) and passed through to `build_entry_model`, which
         uses them to target real structure for `take_profit` instead of
         the fixed-`_RR` target. Default `False` preserves the exact prior
+        behavior for every existing caller.
+
+        `require_premium_discount_filter` (default `False`, opt-in -- see
+        `entry_model.build_entry_model`'s docstring): when `True`,
+        `calculate_premium_discount` is computed against `ltf_candles`
+        (same computation `use_structure_tp` already triggers -- computed
+        at most once per call even if BOTH parameters are `True`) and
+        passed through to `build_entry_model`, which rejects a `long`
+        entered from the premium half of the range or a `short` entered
+        from the discount half. Default `False` preserves the exact prior
         behavior for every existing caller.
 
         `ltf_candles` and `htf_candles` must be genuinely distinct candle
@@ -183,6 +194,7 @@ class SignalEngine:
         if use_structure_tp:
             previous_swing_high = find_previous_swing_high(ltf_candles)
             previous_swing_low = find_previous_swing_low(ltf_candles)
+        if use_structure_tp or require_premium_discount_filter:
             premium_discount = calculate_premium_discount(ltf_candles)
 
         model = build_entry_model(
@@ -198,6 +210,7 @@ class SignalEngine:
             previous_swing_low=previous_swing_low,
             premium_discount=premium_discount,
             use_structure_tp=use_structure_tp,
+            require_premium_discount_filter=require_premium_discount_filter,
         )
         if model is None:
             return None

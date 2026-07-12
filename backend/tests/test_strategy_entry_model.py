@@ -508,3 +508,171 @@ def test_build_entry_model_use_structure_tp_short_targets_previous_swing_low():
     assert model["take_profit"] == 70
     expected_rr = (model["entry_price"] - 70) / (model["stop_loss"] - model["entry_price"])
     assert model["rr"] == expected_rr
+
+
+# --- require_premium_discount_filter (opt-in entry-quality filter, see
+# docs/strategy_spec.md section 8) -----------------------------------------
+
+
+def test_build_entry_model_premium_discount_filter_ignored_by_default():
+    """Passing a premium_discount dict without require_premium_discount_
+    filter=True must have zero effect -- a long from the premium half is
+    still accepted, matching the unfiltered baseline exactly.
+    """
+    premium_discount = {"top": 200, "bottom": 50, "equilibrium": 125, "zone": "premium",
+                         "range_high_index": 20, "range_low_index": 0}
+
+    model = build_entry_model(
+        "bullish", _SWEEP, None, _BULLISH_FVG, None, premium_discount=premium_discount
+    )
+    baseline = build_entry_model("bullish", _SWEEP, None, _BULLISH_FVG, None)
+
+    assert model is not None
+    assert model["take_profit"] == baseline["take_profit"]
+
+
+def test_build_entry_model_premium_discount_filter_rejects_long_from_premium():
+    """A long entered while price sits in the PREMIUM half of the range
+    must be rejected -- buying the expensive half of the range."""
+    premium_discount = {"top": 200, "bottom": 50, "equilibrium": 125, "zone": "premium",
+                         "range_high_index": 20, "range_low_index": 0}
+
+    model = build_entry_model(
+        "bullish",
+        _SWEEP,
+        None,
+        _BULLISH_FVG,
+        None,
+        premium_discount=premium_discount,
+        require_premium_discount_filter=True,
+    )
+    assert model is None
+
+
+def test_build_entry_model_premium_discount_filter_accepts_long_from_discount():
+    """A long entered while price sits in the DISCOUNT half of the range
+    is exactly the setup this filter is designed to allow -- must still
+    produce a valid entry."""
+    premium_discount = {"top": 200, "bottom": 50, "equilibrium": 125, "zone": "discount",
+                         "range_high_index": 20, "range_low_index": 0}
+
+    model = build_entry_model(
+        "bullish",
+        _SWEEP,
+        None,
+        _BULLISH_FVG,
+        None,
+        premium_discount=premium_discount,
+        require_premium_discount_filter=True,
+    )
+    assert model is not None
+    assert model["direction"] == "long"
+
+
+def test_build_entry_model_premium_discount_filter_rejects_short_from_discount():
+    """Mirror case: a short entered from the DISCOUNT half (selling the
+    cheap half) must be rejected."""
+    bearish_fvg = [{"type": "bearish", "top": 100, "bottom": 98, "index": 3}]
+    choch = {"type": "bearish_choch", "broken_level": 99, "broken_index": 2, "confirm_index": 4}
+    premium_discount = {"top": 150, "bottom": 60, "equilibrium": 105, "zone": "discount",
+                         "range_high_index": 20, "range_low_index": 0}
+
+    model = build_entry_model(
+        "bearish",
+        None,
+        choch,
+        bearish_fvg,
+        None,
+        premium_discount=premium_discount,
+        require_premium_discount_filter=True,
+    )
+    assert model is None
+
+
+def test_build_entry_model_premium_discount_filter_accepts_short_from_premium():
+    bearish_fvg = [{"type": "bearish", "top": 100, "bottom": 98, "index": 3}]
+    choch = {"type": "bearish_choch", "broken_level": 99, "broken_index": 2, "confirm_index": 4}
+    premium_discount = {"top": 150, "bottom": 60, "equilibrium": 105, "zone": "premium",
+                         "range_high_index": 20, "range_low_index": 0}
+
+    model = build_entry_model(
+        "bearish",
+        None,
+        choch,
+        bearish_fvg,
+        None,
+        premium_discount=premium_discount,
+        require_premium_discount_filter=True,
+    )
+    assert model is not None
+    assert model["direction"] == "short"
+
+
+def test_build_entry_model_premium_discount_filter_accepts_either_direction_from_equilibrium():
+    """Exactly at equilibrium is neither cheap nor expensive -- must be
+    valid for BOTH a long and a short, unlike premium/discount which are
+    each valid for only one direction.
+    """
+    premium_discount = {"top": 200, "bottom": 50, "equilibrium": 125, "zone": "equilibrium",
+                         "range_high_index": 20, "range_low_index": 0}
+
+    long_model = build_entry_model(
+        "bullish",
+        _SWEEP,
+        None,
+        _BULLISH_FVG,
+        None,
+        premium_discount=premium_discount,
+        require_premium_discount_filter=True,
+    )
+    assert long_model is not None
+
+    bearish_fvg = [{"type": "bearish", "top": 100, "bottom": 98, "index": 3}]
+    choch = {"type": "bearish_choch", "broken_level": 99, "broken_index": 2, "confirm_index": 4}
+    short_model = build_entry_model(
+        "bearish",
+        None,
+        choch,
+        bearish_fvg,
+        None,
+        premium_discount=premium_discount,
+        require_premium_discount_filter=True,
+    )
+    assert short_model is not None
+
+
+def test_build_entry_model_premium_discount_filter_missing_data_does_not_reject():
+    """No premium_discount available (detector found no coherent current
+    range) must NOT reject an otherwise-valid entry -- same
+    missing-input-degrades-gracefully discipline as use_structure_tp.
+    """
+    model = build_entry_model(
+        "bullish", _SWEEP, None, _BULLISH_FVG, None, require_premium_discount_filter=True
+    )
+    assert model is not None
+
+
+def test_build_entry_model_premium_discount_filter_independent_of_structure_tp():
+    """Both filters can be enabled together: the premium/discount filter
+    gates whether an entry is produced at all, use_structure_tp governs
+    where its take-profit lands -- combining them must still produce a
+    valid entry with a structure-based TP.
+    """
+    previous_swing_high = {"price": 130, "index": 20}
+    premium_discount = {"top": 200, "bottom": 50, "equilibrium": 125, "zone": "discount",
+                         "range_high_index": 20, "range_low_index": 0}
+
+    model = build_entry_model(
+        "bullish",
+        _SWEEP,
+        None,
+        _BULLISH_FVG,
+        None,
+        previous_swing_high=previous_swing_high,
+        premium_discount=premium_discount,
+        use_structure_tp=True,
+        require_premium_discount_filter=True,
+    )
+
+    assert model is not None
+    assert model["take_profit"] == 130

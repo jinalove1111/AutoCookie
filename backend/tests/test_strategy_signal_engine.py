@@ -386,3 +386,65 @@ def _htf_bearish_candles() -> list[dict]:
     highs = [10, 11, 30, 11, 9, 11, 25, 11, 9, 11, 20, 11, 9]
     lows = [8, 9, 15, 9, 6, 9, 18, 9, 3, 9, 22, 11, 12]
     return [candle((h + l) / 2, h, l, (h + l) / 2, f"h{i}") for i, (h, l) in enumerate(zip(highs, lows))]
+
+
+# --- require_premium_discount_filter (opt-in entry-quality filter, see
+# docs/strategy_spec.md section 8; see entry_model.build_entry_model's
+# require_premium_discount_filter docstring for the full rationale) -------
+
+
+def test_signal_engine_premium_discount_filter_unaffected_when_already_in_discount():
+    """`_bullish_confluence_candles()` is a real long setup whose final
+    (sweep) candle closes at 9.5, well below the real swing range's
+    equilibrium (19.0, confirmed directly below) -- i.e. price is
+    genuinely in the DISCOUNT half, exactly where a long is supposed to
+    come from. Enabling the filter on this real setup must change
+    nothing.
+    """
+    ltf_candles = _bullish_confluence_candles()
+    htf_candles = _bullish_confluence_candles()
+
+    baseline_signal = SignalEngine().generate_signal("BTCUSDT", ltf_candles, htf_candles)
+    assert baseline_signal is not None
+    assert calculate_premium_discount(ltf_candles)["zone"] == "discount"
+
+    filtered_signal = SignalEngine().generate_signal(
+        "BTCUSDT", ltf_candles, htf_candles, require_premium_discount_filter=True
+    )
+
+    assert filtered_signal is not None
+    assert filtered_signal.take_profit == baseline_signal.take_profit
+
+
+def test_signal_engine_premium_discount_filter_rejects_real_long_from_premium():
+    """SAME fixture shape, only the final (sweep) candle's close is
+    raised to 25 (still wicks below the swing low at 6, still closes
+    back above it -- a real sell-side sweep, unaffected) -- which pushes
+    the real swing range's classification to PREMIUM (confirmed
+    directly below: equilibrium is still 19.0, 25 > 19.0). The default
+    call still produces a real long signal (buying the expensive half);
+    require_premium_discount_filter=True must reject it.
+    """
+    highs = [10, 11, 20, 11, 9, 11, 25, 11, 9, 11, 30, 11, 9]
+    lows = [8, 9, 15, 9, 5, 9, 18, 9, 8, 9, 22, 11, 12]
+    ltf_candles = [
+        candle((h + l) / 2, h, l, (h + l) / 2, f"t{i}") for i, (h, l) in enumerate(zip(highs, lows))
+    ]
+    ltf_candles.append(candle(31, 32, 29, 31, "t13"))
+    ltf_candles.append(candle(31, 40, 30, 39, "t14"))
+    ltf_candles.append(candle(39, 42, 35, 41, "t15"))
+    ltf_candles.append(candle(9, 26, 6, 25, "t16"))  # sweep candle, closes at 25 (premium)
+    htf_candles = ltf_candles
+
+    premium_discount = calculate_premium_discount(ltf_candles)
+    assert premium_discount["zone"] == "premium"
+    assert premium_discount["equilibrium"] == 19.0
+
+    baseline_signal = SignalEngine().generate_signal("BTCUSDT", ltf_candles, htf_candles)
+    assert baseline_signal is not None
+    assert baseline_signal.direction == "long"
+
+    filtered_signal = SignalEngine().generate_signal(
+        "BTCUSDT", ltf_candles, htf_candles, require_premium_discount_filter=True
+    )
+    assert filtered_signal is None

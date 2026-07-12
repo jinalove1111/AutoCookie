@@ -154,6 +154,7 @@ def run_backtest(
     require_full_confluence: bool = False,
     require_ob_fvg_confluence: bool = False,
     use_structure_tp: bool = False,
+    require_premium_discount_filter: bool = False,
 ) -> Any:
     """Replay `ltf_candles`/`htf_candles` once through the real
     Strategy/Risk/Backtest engines."""
@@ -171,6 +172,7 @@ def run_backtest(
         require_full_confluence=require_full_confluence,
         require_ob_fvg_confluence=require_ob_fvg_confluence,
         use_structure_tp=use_structure_tp,
+        require_premium_discount_filter=require_premium_discount_filter,
     )
 
 
@@ -429,6 +431,22 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--premium-discount-filter",
+        action="store_true",
+        default=False,
+        help=(
+            "Reject a long entered from the premium half of the current "
+            "swing range, or a short entered from the discount half "
+            "(standard ICT/SMC entry-quality rule -- see "
+            "docs/strategy_spec.md section 8). See "
+            "app.strategy.entry_model.build_entry_model's "
+            "require_premium_discount_filter docstring for the full "
+            "rationale. A/B-testable, not a proven improvement; run the "
+            "same --symbol/--timeframe/--candles/--periods with and "
+            "without this flag and compare."
+        ),
+    )
+    parser.add_argument(
         "--walk-forward",
         action="store_true",
         default=False,
@@ -571,6 +589,7 @@ def main() -> int:
                 require_full_confluence=args.strict_confluence,
                 require_ob_fvg_confluence=args.ob_fvg_confluence,
                 use_structure_tp=args.structure_tp,
+                require_premium_discount_filter=args.premium_discount_filter,
             )
         except Exception as exc:  # unexpected engine failure is a genuine failure
             print(f"ERROR: backtest engine raised an exception on period {period_num}: {exc}")

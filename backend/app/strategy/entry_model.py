@@ -52,6 +52,7 @@ def build_entry_model(
     previous_swing_low: dict | None = None,
     premium_discount: dict | None = None,
     use_structure_tp: bool = False,
+    require_premium_discount_filter: bool = False,
 ) -> dict | None:
     """Combine bias/sweep/CHOCH/FVG/order-block(/breaker-block) signals into
     an entry candidate, or None.
@@ -166,6 +167,27 @@ def build_entry_model(
     `find_swing_lows` underneath every other LTF structural detector in
     this pipeline.
 
+    `require_premium_discount_filter` (opt-in, default `False` -- see
+    docs/strategy_spec.md section 8's entry-quality-filter gap): standard
+    ICT/SMC rule -- a `long` entered from the PREMIUM half of the current
+    swing range (buying the expensive half) or a `short` entered from the
+    DISCOUNT half (selling the cheap half) is entering against the range's
+    own supply/demand read, per section 8's documented rationale. When
+    `True` and `premium_discount["zone"]` disagrees with the trade
+    direction (`long` + `"premium"`, or `short` + `"discount"`), no entry
+    is produced. `"equilibrium"` (exactly at the midpoint) is treated as
+    valid for EITHER direction -- it is deliberately neither cheap nor
+    expensive, so there is no directional reason to reject it. A missing
+    `premium_discount` (detector found no coherent current range) degrades
+    to NOT rejecting -- same "missing structure input never rejects an
+    otherwise-valid entry" discipline as `use_structure_tp` above, since
+    this parameter is a quality filter on top of an already-valid setup,
+    not a required-presence check like `require_full_confluence`/
+    `require_ob_fvg_confluence`. This check runs independently of
+    `use_structure_tp` -- either, both, or neither may be enabled, since
+    one governs whether an entry is produced at all and the other governs
+    where its take-profit is placed.
+
     On success returns `{direction, entry_price, stop_loss, take_profit, rr,
     zone}` — `zone` (the raw FVG/OB/breaker dict used) is included so callers (e.g.
     SignalEngine) can attach it to a signal without recomputing selection.
@@ -175,6 +197,11 @@ def build_entry_model(
 
     direction = "long" if bias == "bullish" else "short"
     wanted_type = "bullish" if direction == "long" else "bearish"
+
+    if require_premium_discount_filter and premium_discount is not None:
+        wrong_side = "premium" if direction == "long" else "discount"
+        if premium_discount["zone"] == wrong_side:
+            return None
 
     wanted_sweep_type = "sell_side" if direction == "long" else "buy_side"
     wanted_choch_type = "bullish_choch" if direction == "long" else "bearish_choch"
