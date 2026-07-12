@@ -249,3 +249,93 @@ def test_build_entry_model_require_full_confluence_still_respects_direction_matc
         require_full_confluence=True,
     )
     assert model is None
+
+
+# --- require_ob_fvg_confluence (opt-in OB+FVG confluence mode -- changes
+# zone selection from "either zone" to "both agree", see
+# docs/ROADMAP.md "Core Rule MVP completion" item #3) ---------------------
+
+
+def test_build_entry_model_require_ob_fvg_confluence_rejects_fvg_alone():
+    """Default (loose) behavior accepts an FVG alone (no order block) --
+    see test_build_entry_model_long_on_bullish_confluence. With
+    require_ob_fvg_confluence=True, the SAME inputs must be rejected since
+    there is no matching order block/breaker block.
+    """
+    model = build_entry_model(
+        "bullish", _SWEEP, None, _BULLISH_FVG, None, require_ob_fvg_confluence=True
+    )
+    assert model is None
+
+
+def test_build_entry_model_require_ob_fvg_confluence_rejects_order_block_alone():
+    """Mirrors the fvg-alone case: an order block alone (no matching FVG)
+    is accepted by default (see
+    test_build_entry_model_prefers_order_block_over_older_fvg's premise)
+    but must be rejected under require_ob_fvg_confluence=True.
+    """
+    order_block = {"type": "bullish", "top": 120, "bottom": 118, "index": 10}
+
+    model = build_entry_model(
+        "bullish", _SWEEP, None, [], order_block, require_ob_fvg_confluence=True
+    )
+    assert model is None
+
+
+def test_build_entry_model_require_ob_fvg_confluence_accepts_both_present():
+    """With BOTH a matching order block AND a matching FVG present,
+    require_ob_fvg_confluence=True must still produce a valid entry --
+    the stricter mode narrows what's accepted, it doesn't break the case
+    it's designed to require. Zone selection still follows "most recent
+    index wins": the order block (index 10) is more recent than the FVG
+    (index 3), so it's chosen as the entry zone.
+    """
+    order_block = {"type": "bullish", "top": 120, "bottom": 118, "index": 10}
+
+    model = build_entry_model(
+        "bullish", _SWEEP, None, _BULLISH_FVG, order_block, require_ob_fvg_confluence=True
+    )
+
+    assert model is not None
+    assert model["direction"] == "long"
+    assert model["zone"] == order_block
+
+
+def test_build_entry_model_require_ob_fvg_confluence_breaker_block_satisfies_ob_side():
+    """A breaker block (no order block) paired with a matching FVG must
+    also satisfy require_ob_fvg_confluence=True -- the breaker block is a
+    genuine alternative "OB side" candidate, same as in default mode."""
+    breaker_block = {"type": "bullish", "top": 105, "bottom": 103, "index": 7, "retest_index": 12}
+
+    model = build_entry_model(
+        "bullish",
+        _SWEEP,
+        None,
+        _BULLISH_FVG,
+        None,
+        breaker_block,
+        require_ob_fvg_confluence=True,
+    )
+
+    assert model is not None
+    # breaker_block (index 7) is more recent than the FVG (index 3).
+    assert model["zone"] == breaker_block
+
+
+def test_build_entry_model_require_ob_fvg_confluence_direction_mismatched_ob_still_rejected():
+    """A bearish order block must not satisfy confluence for a
+    bullish-bias long entry, even though a correctly-matched bullish FVG
+    is present -- direction-matching still applies under
+    require_ob_fvg_confluence=True.
+    """
+    bearish_order_block = {"type": "bearish", "top": 120, "bottom": 118, "index": 10}
+
+    model = build_entry_model(
+        "bullish",
+        _SWEEP,
+        None,
+        _BULLISH_FVG,
+        bearish_order_block,
+        require_ob_fvg_confluence=True,
+    )
+    assert model is None

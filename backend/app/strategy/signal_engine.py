@@ -45,6 +45,7 @@ class SignalEngine:
         htf_candles: list,
         use_breaker_block: bool = False,
         require_full_confluence: bool = False,
+        require_ob_fvg_confluence: bool = False,
     ) -> "TradeSignal | None":
         """Analyze market structure for `symbol` and produce a TradeSignal, or None.
 
@@ -66,6 +67,13 @@ class SignalEngine:
         docs/strategy_spec.md section 6 by requiring BOTH a matching
         sweep AND a matching CHOCH (not just one) before a signal is
         produced. Passed straight through to `build_entry_model`.
+
+        `require_ob_fvg_confluence` (default `False`, opt-in -- see
+        `entry_model.build_entry_model`'s docstring, and docs/ROADMAP.md
+        "Core Rule MVP completion" item #3): requires BOTH a matching
+        order block/breaker block AND a matching FVG (not just one)
+        before a signal is produced. Passed straight through to
+        `build_entry_model`.
 
         `ltf_candles` and `htf_candles` must be genuinely distinct candle
         series (the project's `DEFAULT_TIMEFRAME` and `HTF_TIMEFRAME`
@@ -160,6 +168,7 @@ class SignalEngine:
             order_block,
             breaker_block,
             require_full_confluence=require_full_confluence,
+            require_ob_fvg_confluence=require_ob_fvg_confluence,
         )
         if model is None:
             return None

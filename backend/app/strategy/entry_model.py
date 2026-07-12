@@ -47,6 +47,7 @@ def build_entry_model(
     order_block: dict | None,
     breaker_block: dict | None = None,
     require_full_confluence: bool = False,
+    require_ob_fvg_confluence: bool = False,
 ) -> dict | None:
     """Combine bias/sweep/CHOCH/FVG/order-block(/breaker-block) signals into
     an entry candidate, or None.
@@ -66,13 +67,27 @@ def build_entry_model(
     (`sweep OR choch`), a strictly looser bar. When `True`, this
     parameter requires BOTH `matching_sweep` AND `matching_choch` to be
     present (the stricter, spec-literal reading) instead of either one.
-    The FVG/OB/breaker zone selection itself is UNCHANGED either way --
-    the spec's "FVG/OB" phrasing (a slash, not "and") already reads as
-    alternatives, not a simultaneous requirement, so only the sweep/CHOCH
-    half of the ambiguity is addressed here. Default `False` preserves
-    the exact prior behavior for every existing caller while this is A/B
-    tested, same discipline as `SignalEngine`'s `use_breaker_block` and
-    `BacktestEngine`'s `use_breakeven`/`use_partial_tp`.
+    The FVG/OB/breaker zone selection itself is UNCHANGED by
+    `require_full_confluence` -- see `require_ob_fvg_confluence` below for
+    the parameter that addresses THAT half of the ambiguity instead.
+    Default `False` preserves the exact prior behavior for every existing
+    caller while this is A/B tested, same discipline as `SignalEngine`'s
+    `use_breaker_block` and `BacktestEngine`'s `use_breakeven`/`use_partial_tp`.
+
+    `require_ob_fvg_confluence` (opt-in, default `False` -- see
+    docs/ROADMAP.md "Core Rule MVP completion" item #3): the spec's
+    "FVG/OB" phrasing (a slash, not "and") has always been implemented as
+    alternatives -- either a matching order block/breaker OR a matching
+    FVG is enough, whichever has the more recent index wins zone
+    selection. When `True`, this changes that to "both agree": a matching
+    order block (or breaker block) AND a matching FVG must BOTH be
+    present, or no entry is produced (same treatment as
+    `require_full_confluence` narrowing sweep/CHOCH from "either" to
+    "both" -- this is the FVG/OB counterpart). The zone actually used for
+    entry is still whichever of the two (OB/breaker vs. FVG) has the more
+    recent index, same "most recent index wins" rule as the default mode
+    -- this parameter only gates whether both must be PRESENT, it doesn't
+    change which one is picked once they are.
 
     `breaker_block` (optional, default `None` -- existing callers that
     don't pass it get byte-for-byte the prior behavior) is a second,
@@ -124,19 +139,23 @@ def build_entry_model(
         if matching_sweep is None and matching_choch is None:
             return None
 
-    zone: dict | None = None
+    ob_zone: dict | None = None
     if order_block is not None and order_block["type"] == wanted_type:
-        zone = order_block
+        ob_zone = order_block
 
     if breaker_block is not None and breaker_block["type"] == wanted_type:
-        if zone is None or breaker_block["index"] > zone["index"]:
-            zone = breaker_block
+        if ob_zone is None or breaker_block["index"] > ob_zone["index"]:
+            ob_zone = breaker_block
 
     matching_fvgs = [z for z in fvg if z["type"] == wanted_type]
-    if matching_fvgs:
-        latest_fvg = max(matching_fvgs, key=lambda z: z["index"])
-        if zone is None or latest_fvg["index"] > zone["index"]:
-            zone = latest_fvg
+    fvg_zone = max(matching_fvgs, key=lambda z: z["index"]) if matching_fvgs else None
+
+    if require_ob_fvg_confluence and (ob_zone is None or fvg_zone is None):
+        return None
+
+    zone = ob_zone
+    if fvg_zone is not None and (zone is None or fvg_zone["index"] > zone["index"]):
+        zone = fvg_zone
 
     if zone is None:
         return None

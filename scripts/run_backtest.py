@@ -152,6 +152,7 @@ def run_backtest(
     use_breaker_block: bool = False,
     use_partial_tp: bool = False,
     require_full_confluence: bool = False,
+    require_ob_fvg_confluence: bool = False,
 ) -> Any:
     """Replay `ltf_candles`/`htf_candles` once through the real
     Strategy/Risk/Backtest engines."""
@@ -167,6 +168,7 @@ def run_backtest(
         use_breaker_block=use_breaker_block,
         use_partial_tp=use_partial_tp,
         require_full_confluence=require_full_confluence,
+        require_ob_fvg_confluence=require_ob_fvg_confluence,
     )
 
 
@@ -391,6 +393,22 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--ob-fvg-confluence",
+        action="store_true",
+        default=False,
+        help=(
+            "Require BOTH a matching order block/breaker block AND a "
+            "matching FVG (not just one) before a signal is produced -- "
+            "changes zone selection from 'either zone' to 'both agree' "
+            "(see docs/ROADMAP.md 'Core Rule MVP completion' item #3). "
+            "See app.strategy.entry_model.build_entry_model's "
+            "require_ob_fvg_confluence docstring for the full rationale. "
+            "A/B-testable, not a proven improvement; run the same "
+            "--symbol/--timeframe/--candles/--periods with and without this "
+            "flag and compare."
+        ),
+    )
+    parser.add_argument(
         "--walk-forward",
         action="store_true",
         default=False,
@@ -531,6 +549,7 @@ def main() -> int:
                 use_breaker_block=args.breaker_block,
                 use_partial_tp=args.partial_tp,
                 require_full_confluence=args.strict_confluence,
+                require_ob_fvg_confluence=args.ob_fvg_confluence,
             )
         except Exception as exc:  # unexpected engine failure is a genuine failure
             print(f"ERROR: backtest engine raised an exception on period {period_num}: {exc}")

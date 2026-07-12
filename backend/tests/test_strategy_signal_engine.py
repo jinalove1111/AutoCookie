@@ -263,6 +263,84 @@ def test_signal_engine_require_full_confluence_rejects_sweep_only_real_setup():
     assert strict_signal is None
 
 
+# --- require_ob_fvg_confluence (opt-in OB+FVG confluence mode -- changes
+# zone selection from "either zone" to "both agree", see docs/ROADMAP.md
+# "Core Rule MVP completion" item #3; see entry_model.build_entry_model's
+# require_ob_fvg_confluence docstring for the full rationale) -------------
+
+
+def test_signal_engine_require_ob_fvg_confluence_rejects_fvg_only_real_setup():
+    """`_bullish_confluence_candles()` produces a real signal off its FVG
+    alone -- `detect_order_block` finds no order block anywhere in this
+    fixture (confirmed: no candle's range ever exceeds the impulse
+    threshold against its own rolling lookback average). Under the
+    default (loose) rule this signal fires normally (see
+    test_signal_engine_generates_long_signal_on_real_confluence). Under
+    require_ob_fvg_confluence=True, the SAME real setup must produce NO
+    signal, since there is no matching order block -- proving the
+    parameter actually threads through the real detector pipeline, not
+    just the isolated unit tests in test_strategy_entry_model.py.
+    """
+    ltf_candles = _bullish_confluence_candles()
+    htf_candles = _bullish_confluence_candles()
+
+    baseline_signal = SignalEngine().generate_signal("BTCUSDT", ltf_candles, htf_candles)
+    assert baseline_signal is not None
+
+    strict_signal = SignalEngine().generate_signal(
+        "BTCUSDT", ltf_candles, htf_candles, require_ob_fvg_confluence=True
+    )
+    assert strict_signal is None
+
+
+def _bullish_ob_and_fvg_confluence_candles() -> list[dict]:
+    """LTF series with a REAL, unmitigated bullish order block AND a
+    REAL, unmitigated bullish FVG both present at once (unlike
+    `_bullish_confluence_candles()`, which only ever produces an FVG) --
+    15 quiet candles (matching order_block._LOOKBACK=15), a base/impulse
+    pair confirming a bullish order block, a small local pullback/rally
+    that both re-triggers a second (still bullish, still matching)
+    order block and forms a genuine local swing low, a later 3-candle
+    leg that opens a bullish FVG well above that order block (so neither
+    zone mitigates the other), and a final candle that wicks below the
+    local swing low and closes back above it (a real sell-side sweep).
+    """
+    candles = [candle(100, 100.5, 99.5, 100.2, f"t{i}") for i in range(15)]
+    candles.append(candle(101, 101, 99, 99, "t15"))  # bearish base -> bullish OB [99, 101]
+    candles.append(candle(100, 111, 99, 110, "t16"))  # bullish impulse confirms it
+    candles.append(candle(110, 111, 109.5, 110.5, "t17"))
+    candles.append(candle(110.5, 112, 110, 111.5, "t18"))
+    candles.append(candle(111.5, 112, 108.5, 109, "t19"))  # local swing low forming ~108.5
+    candles.append(candle(109, 111, 108.8, 110.5, "t20"))
+    candles.append(candle(110.5, 114, 110, 113.5, "t21"))  # FVG prev (high 114)
+    candles.append(candle(113.5, 116, 113, 115.5, "t22"))  # FVG middle (irrelevant to the gap)
+    candles.append(candle(115.5, 119, 118, 118.5, "t23"))  # FVG next (low 118) -> bullish FVG [114, 118]
+    # wicks below the local swing low (108.5 at index 19) but closes back above it.
+    candles.append(candle(109.5, 110, 108, 109.8, "t24"))
+    return candles
+
+
+def test_signal_engine_require_ob_fvg_confluence_accepts_real_ob_and_fvg_both_present():
+    """The SAME strict mode as the rejection test above, only now the LTF
+    series has a genuinely matching order block AND FVG both present --
+    must still produce a real long TradeSignal, proving the stricter mode
+    narrows what's accepted without breaking the case it's designed to
+    require.
+    """
+    ltf_candles = _bullish_ob_and_fvg_confluence_candles()
+    htf_candles = _htf_bullish_candles()
+
+    signal = SignalEngine().generate_signal(
+        "BTCUSDT", ltf_candles, htf_candles, require_ob_fvg_confluence=True
+    )
+
+    assert isinstance(signal, TradeSignal)
+    assert signal.direction == "long"
+    assert signal.htf_bias == "bullish"
+    assert signal.sweep_type == "sell_side"
+    assert signal.stop_loss < signal.entry_price < signal.take_profit
+
+
 def _htf_bearish_candles() -> list[dict]:
     """Real lower-highs/lower-lows zigzag (bearish bias, same shape
     verified directly in test_strategy_bias.py), independent series from
