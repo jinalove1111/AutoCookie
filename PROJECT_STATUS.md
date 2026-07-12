@@ -51,6 +51,31 @@ resolved the confluence-strength spec ambiguity; hardened risk controls
 `CHANGELOG.md` for the full chronological history of this session's
 findings).
 
+## Profitability sprint (2026-07-12, operator-directed autonomous session)
+
+Paper trading started (Legacy engine, all experimental flags off,
+19:29:11) and is running continuously against live OKX data -- 0 trades
+so far as of this write-up (expected at this trade frequency, not an
+error). In parallel, built a rigorous controlled-experiment harness
+(`scripts/experiment_runner.py` -- fixed-anchor fetch shared across every
+config, in-sample/held-out-out-of-sample split, JSON results ledger) and
+tested every previously-unvalidated Legacy-pipeline flag against it.
+**`use_structure_tp` clears the project's three-metric keep rule** (Net
+Profit, Profit Factor, AND worst-period Drawdown all improve), confirmed
+out-of-sample on held-out data -- the strongest single-experiment result
+this project has produced, though still only 1 asset/1 time window
+(cross-asset/cross-year validation is the recommended next step, not yet
+run). `ob_fvg_confluence`/`premium_discount_filter`/the
+`structure_tp`+`premium_discount_filter` combination were all tested and
+rejected. A new opt-in `structure_tp_max_r` conservative-exit variant was
+built and also clears the bar. **Production default is unchanged** --
+Legacy stays the only production-approved configuration. Also closed 4
+real paper-trading observability gaps (`Signal.rejection_reason`,
+`Trade.exit_reason`/`r_multiple`/`strategy_config` -- were computed
+in-process but never persisted) additively, without touching the running
+process. Full detail: `docs/PROFITABILITY_EXPERIMENT_REPORT.md`,
+`ENGINEERING_DECISIONS.md` #37-#40, `ROADMAP.md`.
+
 ## Core rule completion (MVP) — ✅ COMPLETE (2026-07-12)
 
 Operator directive (2026-07-11): before resuming any parameter
@@ -111,7 +136,9 @@ approval — this is by design, not an oversight.
 
 ## Test suite
 
-363 backend tests, 0 known failures. Run: `cd backend &&
+366 backend tests, 0 known failures (363 + 3 new `structure_tp_max_r`
+tests, 2026-07-12 profitability sprint -- see ENGINEERING_DECISIONS.md
+#39/#40). Run: `cd backend &&
 ./.venv/Scripts/python.exe -m pytest -q`
 (or the platform-appropriate venv path). No frontend test failures
 (`npx tsc --noEmit` clean as of the last frontend-touching change).

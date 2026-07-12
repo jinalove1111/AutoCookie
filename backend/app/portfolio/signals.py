@@ -52,16 +52,27 @@ class SignalTracker:
             signal_id = row.id
         return signal_id
 
-    def update_signal_status(self, signal_id: int, status: str) -> None:
+    def update_signal_status(
+        self, signal_id: int, status: str, reason: str | None = None
+    ) -> None:
         """Update an existing Signal row's status. Raises ValueError if
         `signal_id` does not exist -- never silently no-ops (mirrors
         `TradeTracker.close_trade`'s contract).
+
+        `reason` (optional, default `None` -- backward compatible):
+        observability follow-up (2026-07-12 profitability sprint Phase E)
+        -- when set (e.g. a rejected signal's `risk_decision.reasons`,
+        joined), persists WHY into `rejection_reason`, so a later query
+        over signals can recover it instead of only ever having appeared
+        in that process's own stdout at the moment of rejection.
         """
         with session_scope() as db:
             row = db.get(Signal, signal_id)
             if row is None:
                 raise ValueError(f"Signal id={signal_id} not found")
             row.status = status
+            if reason is not None:
+                row.rejection_reason = reason
 
     def get_recent_signals(self, limit: int = 20) -> list[dict]:
         """Return the most recent Signal rows (newest first, by `timestamp`)

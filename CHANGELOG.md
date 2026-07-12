@@ -4,6 +4,46 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Profitability sprint: rigorous experiment harness, structure_tp clears the keep bar, paper trading started, observability gaps closed
+
+### Started paper trading (Legacy engine, all experimental flags off)
+`scripts/run_paper.py --iterations 100000 --interval-seconds 300` against
+live OKX BTCUSDT/5m data, 19:29:11. This is Phase 1 gate #3's real
+validation run -- the production-approved configuration only.
+
+### Built `scripts/experiment_runner.py` (controlled A/B harness)
+One candle fetch anchored to a FIXED `--end-date` (not "now"), reused
+across every config compared in an invocation; in-sample vs. held-out
+out-of-sample period split enforced structurally; results appended to
+`scripts/reports/experiment_results.json`. See ENGINEERING_DECISIONS.md
+#37.
+
+### `use_structure_tp` clears the three-metric keep rule (Net Profit,
+Profit Factor, Drawdown all improve), confirmed out-of-sample
+Net Profit $753.32 -> $2,731.46 (in-sample), Profit Factor 2.81 -> 6.29,
+worst-period drawdown 1.16% -> 1.14% (slightly BETTER), walk-forward
+PASSED 5/5 with 0 losing streak, out-of-sample confirmed ($611.01, PF
+5.77). Supersedes an earlier, less-rigorous same-session ad-hoc verdict
+that had rejected it on drawdown -- reconciled in ENGINEERING_DECISIONS.md
+#38 (period-boundary sensitivity, same mechanism as #18's BTCUSDT-2025
+finding). `ob_fvg_confluence`, `premium_discount_filter`, and the
+`structure_tp`+`premium_discount_filter` combination were tested and
+REJECTED. Production default unchanged -- see docs/PROFITABILITY_EXPERIMENT_REPORT.md.
+
+### Added `structure_tp_max_r` (opt-in conservative-exit variant)
+Caps `use_structure_tp`'s target at a given R ceiling; entry/zone/stop
+selection untouched. Diagnostic finding: capping cuts profit roughly in
+half but does NOT change worst-period drawdown -- target distance drives
+profit here, not drawdown. 3 new tests. See ENGINEERING_DECISIONS.md #39.
+
+### Closed 4 paper-trading observability gaps (additive, nullable columns)
+`Signal.rejection_reason`, `Trade.exit_reason`, `Trade.r_multiple`,
+`Trade.strategy_config` were computed in-process but never persisted.
+Fixed via new nullable columns + new optional method parameters
+(backward compatible). Does not affect the already-running paper-trading
+process (old code stays in memory; DB schema untouched). See
+ENGINEERING_DECISIONS.md #40.
+
 ## [Unreleased] - Cross-year validation (2025) on all 4 assets under new tuned defaults: 8 of 9 PASS, 1 real degradation found
 
 ### Ran the standard methodology (`--candles 3000 --periods 6 --walk-forward --end-date 2025-07-10`) on all 4 assets

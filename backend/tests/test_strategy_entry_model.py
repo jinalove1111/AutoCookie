@@ -395,6 +395,67 @@ def test_build_entry_model_use_structure_tp_targets_previous_swing_high():
     assert model["rr"] != 2.5
 
 
+def test_build_entry_model_structure_tp_max_r_caps_target_nearer():
+    """structure_tp_max_r (opt-in, default None -- 2026-07-12 profitability
+    sprint Phase D #5 conservative-exit variant) pulls take_profit IN when
+    the uncapped structure target's implied reward:risk exceeds the cap --
+    entry_price/stop_loss (zone/risk selection) are completely untouched,
+    only take_profit/rr move.
+    """
+    previous_swing_high = {"price": 130, "index": 20}
+
+    uncapped = build_entry_model(
+        "bullish", _SWEEP, None, _BULLISH_FVG, None,
+        previous_swing_high=previous_swing_high,
+        use_structure_tp=True,
+    )
+    capped = build_entry_model(
+        "bullish", _SWEEP, None, _BULLISH_FVG, None,
+        previous_swing_high=previous_swing_high,
+        use_structure_tp=True,
+        structure_tp_max_r=1.0,
+    )
+
+    assert capped["entry_price"] == uncapped["entry_price"]
+    assert capped["stop_loss"] == uncapped["stop_loss"]
+    risk = capped["entry_price"] - capped["stop_loss"]
+    assert capped["take_profit"] == capped["entry_price"] + 1.0 * risk
+    assert capped["take_profit"] < uncapped["take_profit"]
+    assert capped["rr"] == 1.0
+
+
+def test_build_entry_model_structure_tp_max_r_no_effect_when_target_already_under_cap():
+    """A cap higher than the uncapped target's implied rr is a no-op --
+    capping only ever pulls the target NEARER, never farther/different."""
+    previous_swing_high = {"price": 130, "index": 20}
+
+    uncapped = build_entry_model(
+        "bullish", _SWEEP, None, _BULLISH_FVG, None,
+        previous_swing_high=previous_swing_high,
+        use_structure_tp=True,
+    )
+    generously_capped = build_entry_model(
+        "bullish", _SWEEP, None, _BULLISH_FVG, None,
+        previous_swing_high=previous_swing_high,
+        use_structure_tp=True,
+        structure_tp_max_r=100.0,
+    )
+
+    assert generously_capped["take_profit"] == uncapped["take_profit"]
+    assert generously_capped["rr"] == uncapped["rr"]
+
+
+def test_build_entry_model_structure_tp_max_r_ignored_when_structure_tp_disabled():
+    """structure_tp_max_r has zero effect unless use_structure_tp=True --
+    same backward-compatibility discipline as every other opt-in flag."""
+    baseline = build_entry_model("bullish", _SWEEP, None, _BULLISH_FVG, None)
+    with_unused_cap = build_entry_model(
+        "bullish", _SWEEP, None, _BULLISH_FVG, None, structure_tp_max_r=1.0
+    )
+
+    assert with_unused_cap == baseline
+
+
 def test_build_entry_model_use_structure_tp_extends_to_equilibrium_when_further():
     """When the premium/discount equilibrium reaches FURTHER than the
     previous swing high, it is used instead -- "if structure allows,

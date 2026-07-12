@@ -156,6 +156,7 @@ def run_backtest(
     use_structure_tp: bool = False,
     require_premium_discount_filter: bool = False,
     use_jade_engine: bool = False,
+    structure_tp_max_r: float | None = None,
 ) -> Any:
     """Replay `ltf_candles`/`htf_candles` once through the real
     Strategy/Risk/Backtest engines."""
@@ -175,6 +176,7 @@ def run_backtest(
         use_structure_tp=use_structure_tp,
         require_premium_discount_filter=require_premium_discount_filter,
         use_jade_engine=use_jade_engine,
+        structure_tp_max_r=structure_tp_max_r,
     )
 
 

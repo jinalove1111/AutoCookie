@@ -21,3 +21,7 @@ Thumbs.db
 
 # Generated backtest output
 scripts/reports/
+
+# Local runtime databases (e.g. the paper-trading sqlite DB) -- never
+# commit live/moving trading state as a binary blob.
+*.db

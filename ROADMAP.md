@@ -302,6 +302,40 @@ varied conditions):
 
 See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all of this.
 
+## Profitability sprint results (2026-07-12, operator-directed autonomous session)
+
+Built `scripts/experiment_runner.py` (fixed-anchor fetch, in-sample/
+out-of-sample split, JSON results ledger -- see
+`ENGINEERING_DECISIONS.md` #37) and ran it against the 3 previously-
+unvalidated Legacy-pipeline flags plus one justified combination plus one
+new conservative-exit variant. Full results, diagnosis, and rejected-
+candidate reasons in `docs/PROFITABILITY_EXPERIMENT_REPORT.md`.
+
+**`use_structure_tp` clears the three-metric keep rule** (Net Profit,
+Profit Factor, and worst-period Drawdown all improve) under rigorous,
+fixed-anchor, out-of-sample-confirmed methodology -- superseding an
+earlier, less-rigorous same-session ad-hoc verdict that had rejected it on
+drawdown (see `ENGINEERING_DECISIONS.md` #38 for the full reconciliation).
+`ob_fvg_confluence`, `premium_discount_filter`, and the
+`structure_tp`+`premium_discount_filter` combination were all tested and
+REJECTED. A new opt-in `structure_tp_max_r` conservative-exit variant
+(`ENGINEERING_DECISIONS.md` #39) also clears the bar with a more
+conservative profile. **Production default is UNCHANGED** -- one
+experiment (1 asset, 1 time window) is evidence toward a future decision,
+not sufficient grounds to flip a default, per this project's own standing
+discipline (decisions #14/#15).
+
+**Next step (highest ROI, ready to run)**: cross-asset validation of
+`use_structure_tp` (ETHUSDT/SOLUSDT/XRPUSDT) via
+`scripts/experiment_runner.py --configs structure_tp --symbol <asset>`,
+same fixed-anchor methodology, before any default-flip discussion.
+Cross-year validation (`--end-date 2025-07-12`) is the second priority.
+
+Paper trading (Legacy engine, all experimental flags off) started
+2026-07-12 19:29:11 and is running continuously -- see
+`docs/PROFITABILITY_EXPERIMENT_REPORT.md` section 2 for status and the
+sandbox-persistence caveat.
+
 ## Immediate (highest ROI, unblocked, no operator input needed)
 
 **Un-paused 2026-07-12**: the 5-item Core Rule MVP (see "CURRENT

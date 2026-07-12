@@ -210,11 +210,19 @@ def _check_and_close_open_positions(current_price: float) -> list[int]:
         exit_price = exit_info["exit_price"]
         pnl = _compute_exit_pnl(position, exit_price)
         closed_at = datetime.now(timezone.utc)
+        risk_per_unit = abs(position["entry_price"] - position["stop_loss"])
+        r_multiple = (
+            pnl / (risk_per_unit * position["size"])
+            if risk_per_unit > 0 and position["size"] > 0
+            else None
+        )
         tracker.close_trade(
             position["id"],
             exit_price=exit_price,
             pnl=pnl,
             closed_at=closed_at,
+            exit_reason=exit_info["reason"],
+            r_multiple=r_multiple,
         )
         closed_ids.append(position["id"])
         print(
@@ -711,7 +719,9 @@ def run_once(
         summary["error"] = "; ".join(risk_decision.reasons)
         if signal_id is not None:
             try:
-                SignalTracker().update_signal_status(signal_id, "rejected")
+                SignalTracker().update_signal_status(
+                    signal_id, "rejected", reason=summary["error"]
+                )
             except Exception as exc:
                 print(f"WARNING: could not update signal status to 'rejected' ({exc}).")
         return summary
@@ -799,6 +809,10 @@ def run_once(
         "status": "open",
         "mode": "paper",
         "opened_at": datetime.now(timezone.utc),
+        "strategy_config": {
+            "use_jade_engine": settings.USE_JADE_ENGINE,
+            "enable_breakeven": settings.ENABLE_BREAKEVEN,
+        },
     }
 
     try:

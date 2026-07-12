@@ -55,7 +55,15 @@ class TradeTracker:
 
         `trade_data` keys map directly to Trade columns. Optional keys fall
         back to defaults: leverage=1.0, fee=0.0, slippage=0.0,
-        status="open", mode="paper", opened_at=now.
+        status="open", mode="paper", opened_at=now, strategy_config=None.
+
+        `strategy_config` (optional, default `None`): a plain dict snapshot
+        of which experimental flags were active when this trade was opened
+        (e.g. `{"use_jade_engine": False, "enable_breakeven": False}`) --
+        added so a later query over accumulated paper trades can tell which
+        configuration produced which trade, since a config can change
+        between one paper-trading run and the next (observability follow-up,
+        2026-07-12 profitability sprint Phase E).
         """
         with session_scope() as db:
             trade = Trade(
@@ -71,6 +79,7 @@ class TradeTracker:
                 status=trade_data.get("status", "open"),
                 mode=trade_data.get("mode", "paper"),
                 opened_at=trade_data.get("opened_at") or datetime.now(timezone.utc),
+                strategy_config=trade_data.get("strategy_config"),
             )
             db.add(trade)
             db.flush()  # populate trade.id (autoincrement PK) before commit
@@ -83,11 +92,20 @@ class TradeTracker:
         exit_price: float,
         pnl: float,
         closed_at: datetime | None = None,
+        exit_reason: str | None = None,
+        r_multiple: float | None = None,
     ) -> None:
         """
         Mark an existing Trade as closed: sets exit_price, pnl, status, and
         closed_at (defaulting to now). Raises ValueError if trade_id does
         not exist — never silently no-ops.
+
+        `exit_reason`/`r_multiple` (both optional, default `None` --
+        backward compatible with every existing caller): observability
+        follow-up (2026-07-12 profitability sprint Phase E) so a closed
+        trade's WHY (stop_loss/take_profit/breakeven/manual) and realized
+        R multiple are queryable later, not just visible in that process's
+        own stdout/alert at the moment of closing.
         """
         with session_scope() as db:
             trade = db.get(Trade, trade_id)
@@ -97,6 +115,10 @@ class TradeTracker:
             trade.pnl = pnl
             trade.status = "closed"
             trade.closed_at = closed_at or datetime.now(timezone.utc)
+            if exit_reason is not None:
+                trade.exit_reason = exit_reason
+            if r_multiple is not None:
+                trade.r_multiple = r_multiple
 
     def update_stop_loss(self, trade_id: int, new_stop_loss: float) -> None:
         """

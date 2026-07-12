@@ -177,6 +177,7 @@ class BacktestEngine:
         use_structure_tp: bool = False,
         require_premium_discount_filter: bool = False,
         use_jade_engine: bool = False,
+        structure_tp_max_r: float | None = None,
     ) -> "BacktestResult":
         """Replays historical LTF candles (with a time-aligned, no-lookahead
         HTF slice at each step) through the Strategy Engine and Risk Engine
@@ -323,6 +324,7 @@ class BacktestEngine:
                 use_structure_tp=use_structure_tp,
                 require_premium_discount_filter=require_premium_discount_filter,
                 use_jade_engine=use_jade_engine,
+                structure_tp_max_r=structure_tp_max_r,
             )
             if signal is None:
                 i += 1

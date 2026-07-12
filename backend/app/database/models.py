@@ -76,6 +76,12 @@ class Signal(Base):
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="pending", index=True
     )  # pending/approved/rejected/executed
+    # Observability follow-up (2026-07-12 profitability sprint, Phase E):
+    # WHY a rejected signal was rejected was never persisted -- only visible
+    # in that process's own stdout/summary dict at the moment it happened.
+    # Nullable/additive: existing rows and every existing caller that never
+    # passes a reason are unaffected.
+    rejection_reason: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -103,6 +109,18 @@ class Trade(Base):
     mode: Mapped[str] = mapped_column(String(16), nullable=False, index=True)  # backtest/paper/live
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Observability follow-up (2026-07-12 profitability sprint, Phase E):
+    # three fields that were computable in-process at the moment of the
+    # decision but never persisted, so a later query over the trades table
+    # couldn't recover WHY a position closed, what R it realized, or which
+    # experimental-flag configuration produced it. All three nullable/
+    # additive -- existing rows and every existing caller (backtest reports
+    # never touch the trades DB at all; paper trading callers that don't
+    # pass these keep getting NULL, same as before this change) are
+    # unaffected.
+    exit_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)  # stop_loss/take_profit/breakeven/manual
+    r_multiple: Mapped[float | None] = mapped_column(Float, nullable=True)
+    strategy_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

@@ -1599,3 +1599,169 @@ candle-per-period standard scale every prior finding in this project
 used for its OWN first pass), 0 cross-asset or cross-year validation
 yet. Full reports: `scripts/reports/jade_btc_period{1-6}.md`/`.csv`
 alongside the baseline's own `scripts/reports/baseline_btc_period{1-6}.md`/`.csv`.
+
+## 37. `scripts/experiment_runner.py`: one fixed-anchor fetch reused across every config, in-sample/held-out-out-of-sample split enforced structurally
+
+**Decision** (operator directive, 2026-07-12 "AUTONOMOUS 2-HOUR
+PROFITABILITY SPRINT", Phase B): built a new harness that (a) fetches LTF+HTF
+candles exactly ONCE per invocation, anchored to a caller-fixed `--end-date`
+(not "now"), and reuses that identical candle data across every named config
+in the run, and (b) splits the resulting periods into in-sample (used for
+the keep/reject decision) and a held-out tail (`--holdout-periods`, never
+used to pick a candidate, only to confirm one afterward). Results append to
+`scripts/reports/experiment_results.json` -- one JSON record per config per
+invocation, including the exact config dict and an exact reproducing
+command.
+
+**Why a fixed anchor, not "now"**: earlier the same session, comparing the
+Legacy baseline against the Jade engine required a full re-run because the
+original baseline's fetch and a later comparison fetch landed a few days
+apart (`--end-date` wasn't used), producing non-identical candle data for
+what was meant to be an apples-to-apples comparison. A fixed anchor shared
+across every config in one invocation makes that class of error structurally
+impossible going forward, not just something to remember to avoid.
+
+**Why in-sample/out-of-sample is enforced by the runner itself, not left to
+the caller's discipline**: this project's controlled parameter sweep
+(decision #18) already established the held-out-period discipline
+manually; this runner makes it the DEFAULT behavior of the tool, so a future
+caller cannot accidentally skip it the way an ad-hoc single-invocation
+comparison could (see decision #38 below for a concrete example of what
+skipping it costs).
+
+**Status**: `scripts/reports/experiment_results.json`, machine-readable,
+append-only. See `docs/PROFITABILITY_EXPERIMENT_REPORT.md` for the full
+results table and every config tested.
+
+## 38. `structure_tp` reproduces cleanly under rigorous methodology; an earlier same-session ad-hoc verdict on drawdown is superseded, not overturned by new evidence
+
+**Decision**: `use_structure_tp` clears this project's three-metric keep
+rule (Net Profit AND Profit Factor AND worst-period Drawdown all improve
+over baseline) under decision #37's fixed-anchor, in-sample/out-of-sample
+methodology -- Net Profit $753.32 -> $2,731.46, Profit Factor 2.81 -> 6.29,
+worst-period drawdown 1.16% -> 1.14% (slightly BETTER, not worse),
+walk-forward PASSED at 5/5 profitable periods with 0 losing streak, and
+**confirmed on the held-out out-of-sample period** ($611.01, 66.7% win
+rate, PF 5.77) -- never touched during the decision. This does NOT flip
+any production default (see decision #10's discipline, unchanged); it is
+evidence toward a future decision, gated on cross-asset/cross-year
+validation per decisions #14/#15's standing bar.
+
+**Why this appears to contradict an earlier finding from the SAME
+session**: an ad-hoc comparison earlier that session (no fixed `--end-date`,
+all 6 periods combined, no held-out split) found `structure_tp`'s
+worst-period drawdown (1.17%) WORSE than baseline's (0.77%) and rejected it
+on that basis. Both numbers are real, reproducible, and now recorded (the
+ad-hoc one in this session's own tool-call history and prior chat turns,
+the rigorous one in `scripts/reports/experiment_results.json`). The
+discrepancy traces to exactly where period boundaries fell: a few hours'
+difference in fetch anchor between the two ad-hoc runs moved which candles
+landed in which period, changing which period showed the worst drawdown --
+the SAME mechanism decision #18 already documented for BTCUSDT 2025's
+standard-scale degradation check. This is not "the earlier number was
+wrong" -- it's that period-boundary sensitivity is real and a less
+disciplined methodology (no fixed anchor, no confirmed-out-of-sample check)
+is not a reliable basis for a keep/reject call. The rigorous, fixed-anchor,
+out-of-sample-confirmed result in this entry supersedes the earlier one.
+
+**Diagnosis (separating entry edge / sizing / target distance / duration)**:
+`use_structure_tp` provably only changes `take_profit`/`rr` -- zone/entry/
+stop selection is byte-identical to the default path (verified directly
+from `entry_model.py`'s code, decision context in
+`docs/PROFITABILITY_EXPERIMENT_REPORT.md` section 8). Position sizing is
+therefore also identical (same formula, same entry/stop distance). Average
+R per trade jumped 0.78 -> 2.95 -- the entire Net Profit/PF improvement is
+a target-distance effect: wins run much farther, at the cost of a lower hit
+rate (68.6% -> 60.6%). The `structure_tp_capped_3r` variant (decision #39)
+isolates drawdown specifically: capping the target's implied R at 3.0 cuts
+average R back to 1.14 and roughly halves Net Profit, but worst-period
+drawdown is UNCHANGED (1.14% either way) -- meaning target distance drives
+profit here but is NOT what's driving drawdown; drawdown appears to be set
+by which specific trades/periods lose, independent of how far winners run.
+This refines the sprint's own initial framing ("~3x profit but failed the
+drawdown rule") -- under rigorous measurement, profit and drawdown did not
+trade off against each other the way that framing assumed.
+
+**Status**: 1 asset (BTCUSDT), 1 fixed time window, 5 in-sample + 1
+out-of-sample period. Cross-asset/cross-year validation is the explicit
+next step (not undertaken this round) before any default-flip discussion --
+see `docs/PROFITABILITY_EXPERIMENT_REPORT.md` section 10.
+
+## 39. `structure_tp_max_r`: a bounded target-distance cap, additive to `use_structure_tp`, not a new trading concept
+
+**Decision**: `entry_model.build_entry_model` gains `structure_tp_max_r:
+float | None = None` (opt-in, zero effect unless both `use_structure_tp=True`
+AND this is explicitly set). When the uncapped structure target's implied
+reward:risk exceeds the given ceiling, `take_profit` is clamped back toward
+`entry_price` at exactly that R multiple -- entry/zone/stop_loss selection
+is completely untouched, so this can only ever make a trade's target
+NEARER than the uncapped version would have chosen, never farther or
+different in kind. Threaded through the same 4-layer path as every other
+Legacy-pipeline flag (`entry_model.build_entry_model` ->
+`signal_engine.generate_signal` -> `BacktestEngine.run()` ->
+`run_backtest.run_backtest()`), matching decision #10's established
+pattern exactly.
+
+**Why this is not "inventing a new trading concept"** (explicit sprint
+scope-lock constraint): it is a bounded version of an already-implemented,
+already-shipped target (`use_structure_tp`, decision #19-context), built
+specifically to answer this sprint's own Phase D #5 request ("test whether
+a conservative risk or exit treatment can reduce drawdown without changing
+the entry strategy") -- see decision #38's diagnosis section for what
+running it revealed (drawdown did not move; only profit did).
+
+**Status**: 3 new unit tests (`tests/test_strategy_entry_model.py`) -- cap
+applies and clamps correctly, cap is a no-op when the uncapped target is
+already under the ceiling, cap has zero effect when `use_structure_tp=False`.
+81 pre-existing tests across the touched files (`test_strategy_entry_model.py`,
+`test_strategy_signal_engine.py`, `test_backtest_engine.py`) pass unchanged
+(one test fixture, `_FakeSignalEngineFixedSignal` in
+`test_backtest_engine.py`, needed a new optional parameter added to its
+stub signature -- not a behavior change). Not wired into any CLI flag or
+paper trading yet -- available only via `scripts/experiment_runner.py`'s
+`structure_tp_capped_3r` config pending a decision on broader exposure.
+
+## 40. Paper-trading observability gaps closed additively, without touching the already-running process
+
+**Decision** (2026-07-12 profitability sprint, Phase E): audited
+`app.database.models`/`app.portfolio.trades`/`app.portfolio.signals`
+against the sprint's required observability field list and found 4 real
+gaps -- `Signal.rejection_reason`, `Trade.exit_reason`, `Trade.r_multiple`,
+`Trade.strategy_config` were all computable in-process at the moment of the
+decision (e.g. `risk_decision.reasons`, `exit_info["reason"]`) but never
+persisted, visible only in that process's own stdout/alert at the moment it
+happened. All 4 added as new NULLABLE columns, with `TradeTracker.close_trade`/
+`record_trade` and `SignalTracker.update_signal_status` gaining new OPTIONAL
+parameters (default `None`, backward compatible with every existing
+caller). `scripts/run_paper.py`'s 3 relevant call sites updated to actually
+populate them going forward.
+
+**Why this is safe against the CURRENTLY RUNNING paper-trading process**
+(started 19:29:11, before this change): Python does not hot-reload already-
+imported modules -- the running process's `Trade`/`Signal`/`TradeTracker`/
+`SignalTracker` classes are the OLD in-memory definitions it loaded at
+start, matching the OLD `paper_validation.db` schema on disk exactly. This
+change only edits source files on disk; the running process never re-reads
+them. `paper_validation.db` itself was never touched (no migration run
+against it) -- verified by smoke-testing the new columns against a
+separate, throwaway sqlite DB instead. The improvements take effect the
+next time `run_paper.py` is started fresh, not on the currently running
+instance -- consistent with the sprint's explicit "do not restart the
+running production paper trader unless it is genuinely broken" instruction.
+
+**Real gap found while wiring this in**: `models.py` is NOT this project's
+actual schema source of truth for tests/production -- `app/database/
+migrations/` (Alembic) is; the test suite bootstraps its DB via `alembic
+upgrade head`, not `Base.metadata.create_all()` directly. Editing
+`models.py` alone left the 4 new columns entirely absent from every test
+DB, failing 27 tests with `no column named exit_reason` until migration
+`393afdf7fe67` (chained after the existing head `4b8a822a475b`) was added
+alongside it. `tests/test_db_bootstrap.py`'s pinned-migration-head
+assertion was updated to match (a self-documenting pattern the test itself
+already called out: "update this alongside adding any new migration").
+
+**Status**: smoke-tested end-to-end (record/close a trade with
+`exit_reason`/`r_multiple`/`strategy_config`, record/reject a signal with
+`reason`) against a throwaway DB, all fields round-trip correctly. Full
+backend test suite: 366/366 passing (363 pre-existing + 3 new
+`structure_tp_max_r` tests, decision #39).

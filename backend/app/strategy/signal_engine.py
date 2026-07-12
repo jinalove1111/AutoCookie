@@ -67,6 +67,7 @@ class SignalEngine:
         use_structure_tp: bool = False,
         require_premium_discount_filter: bool = False,
         use_jade_engine: bool = False,
+        structure_tp_max_r: float | None = None,
     ) -> "TradeSignal | None":
         """Analyze market structure for `symbol` and produce a TradeSignal, or None.
 
@@ -263,6 +264,7 @@ class SignalEngine:
             premium_discount=premium_discount,
             use_structure_tp=use_structure_tp,
             require_premium_discount_filter=require_premium_discount_filter,
+            structure_tp_max_r=structure_tp_max_r,
         )
         if model is None:
             return None

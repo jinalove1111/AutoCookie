@@ -53,6 +53,7 @@ def build_entry_model(
     premium_discount: dict | None = None,
     use_structure_tp: bool = False,
     require_premium_discount_filter: bool = False,
+    structure_tp_max_r: float | None = None,
 ) -> dict | None:
     """Combine bias/sweep/CHOCH/FVG/order-block(/breaker-block) signals into
     an entry candidate, or None.
@@ -261,6 +262,21 @@ def build_entry_model(
         )
         if structure_target is not None:
             reward = abs(structure_target - entry_price)
+            # structure_tp_max_r (opt-in, default None -- 2026-07-12
+            # profitability sprint Phase D #5: "test whether a conservative
+            # risk or exit treatment can reduce drawdown without changing
+            # the entry strategy"): caps the structure target's implied
+            # reward:risk at this ceiling, clamping take_profit back toward
+            # entry_price if the raw structure target would exceed it.
+            # Entry/zone/stop selection above is completely untouched --
+            # this only ever makes take_profit NEARER than the uncapped
+            # structure_tp would have chosen, never farther, so it cannot
+            # introduce a new failure mode beyond "smaller wins".
+            if structure_tp_max_r is not None and reward / risk > structure_tp_max_r:
+                reward = risk * structure_tp_max_r
+                structure_target = (
+                    entry_price + reward if direction == "long" else entry_price - reward
+                )
             take_profit = structure_target
             rr = reward / risk
 

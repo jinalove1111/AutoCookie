@@ -45,9 +45,9 @@ def test_fresh_sqlite_boots_via_real_alembic_migration(app_main):
     with engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
     # Pinned to the current migration head. Update this alongside adding any
-    # new migration (was "a0f5ebc23690" prior to the circuit-breaker
-    # persistence columns migration "4b8a822a475b").
-    assert version == "4b8a822a475b"
+    # new migration (was "4b8a822a475b" prior to the observability columns
+    # migration "393afdf7fe67", added for ENGINEERING_DECISIONS.md #40).
+    assert version == "393afdf7fe67"
     engine.dispose()
 
 
