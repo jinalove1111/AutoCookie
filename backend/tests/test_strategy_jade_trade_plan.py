@@ -80,6 +80,37 @@ def test_build_trade_plan_composes_bias_entry_exit_and_confluence():
 
     assert plan["htf_confluence"]["direction"] == "long"
 
+    # Trendline/CRT/session-bias additions (item #6, ENGINEERING_DECISIONS.md #33).
+    assert plan["trendline_signal"] is not None
+    assert plan["trendline_signal"]["trendline"]["type"] == "support"
+    assert set(plan["trendline_signal"].keys()) == {"trendline", "break", "liquidity_sweep"}
+    # This fixture's last two candles don't form a manipulation+distribution pair.
+    assert plan["crt_signal"] is None
+    # String-timestamp fixtures degrade gracefully (see _safe_session_bias_agreement).
+    assert plan["session_bias"] is None
+
+
+def test_build_trade_plan_crt_signal_populated_when_last_two_candles_form_one():
+    """Append two candles to the proven OB+FVG fixture that form a real
+    CRT manipulation+distribution pair (the immediately preceding
+    candle's range gets swept and reclaimed by the final candle) --
+    crt_signal must reflect it.
+    """
+    ltf_candles = _ltf_order_block_fvg_candles()
+    ltf_candles.append(candle(100, 101, 99.8, 100.5, "tE"))  # the CRT range candle
+    ltf_candles.append(candle(99.9, 100, 99.5, 100.7, "tF"))  # wicks below 99.8, closes back above
+    htf_candles = _htf_bullish_bias_candles()
+
+    plan = build_trade_plan(ltf_candles, htf_candles)
+
+    assert plan is not None
+    assert plan["crt_signal"] == {
+        "type": "bullish_crt",
+        "range_high": 101,
+        "range_low": 99.8,
+        "target_reference": 101,
+    }
+
 
 def test_build_trade_plan_exit_targets_computed_from_entry_zone_midpoint():
     """The entry_price fed to find_exit_targets is the entry zone's

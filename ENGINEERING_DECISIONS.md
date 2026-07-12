@@ -1344,3 +1344,54 @@ isolation. 357/357 backend tests passing. Not yet wired into
 `SignalEngine`/`jade_trade_plan` -- `detect_choch_mss` itself remains
 `SignalEngine`'s only structural-break input for now; wiring BOS in
 anywhere is a separate, deliberate step.
+
+## 33. Trendline/CRT/session-bias attached to `build_trade_plan` as purely informational context, exactly like `htf_confluence` -- none of the three can reject a trade
+
+**Decision**: `jade_trade_plan.build_trade_plan` now attaches 3 more
+fields, completing operator directive item #6 ("any remaining Jade
+methodology required for signal generation"): `trendline_signal`
+(`detect_trendline` in whichever direction -- `"support"`/`"resistance"`
+-- matches the entry, plus `detect_trendline_break`/`detect_trendline_
+liquidity_sweep` against it), `crt_signal`
+(`detect_crt_from_previous_candle` on `ltf_candles`), and
+`session_bias` (`session_bias_agreement` on `ltf_candles`, gracefully
+`None` on non-`datetime` timestamps -- same rationale as
+`entry_point_engine._session_high_low`, decision #27). None of the
+three can make `build_trade_plan` return `None` -- they're attached
+after `find_entry_point` has already produced a real entry candidate,
+purely as additional context on top of it.
+
+**Why purely informational, not additional entry requirements**: exact
+same reasoning as `htf_confluence` (decision #25) and Entry Model 1's
+displacement ranking (decision #23) -- this project has no backtest
+evidence for what minimum trendline/CRT/session-bias condition should
+gate an entry, and inventing one here would be exactly the kind of
+unevidenced rule `ROADMAP.md`'s "evidence over assumption" principle
+exists to prevent. Reporting what each detector found and deferring any
+accept/reject threshold to whatever eventually consumes this output
+(the same posture already established for every other Jade confluence
+signal) keeps the detection layer and the (future, separately
+evidenced) decision layer cleanly separated.
+
+**Why CRT uses the SAME-timeframe reading (`detect_crt_from_previous_
+candle` on `ltf_candles`) rather than a cross-timeframe one (an HTF
+candle as the range)**: `build_trade_plan` already has a well-defined
+role for `htf_candles` (bias + HTF confluence) and a well-defined role
+for `ltf_candles` (entry/exit/trendline/CRT/session) -- using an HTF
+candle as the CRT range here would mix those roles for one detector
+only, without a clear reason to. The general, cross-timeframe-capable
+`detect_crt` function still exists and is directly available to any
+caller that wants that reading (see decision #31); this composer just
+doesn't default to it.
+
+**Status**: 2 new tests
+(`tests/test_strategy_jade_trade_plan.py`), one confirming the 3 new
+fields' shape/behavior on the existing real fixture (trendline found,
+CRT/session-bias both correctly absent for that specific data), one
+proving `crt_signal` populates correctly when the data genuinely
+contains a manipulation+distribution pair. 358/358 backend tests
+passing. `build_trade_plan` is now the single, complete Jade
+signal-generation composer -- bias, all 5 entry models, exit targets,
+HTF confluence, trendline, CRT, and session bias, all reused from their
+own independently-tested modules with zero duplicated detection logic.
+Still NOT wired into `SignalEngine`/paper trading.
