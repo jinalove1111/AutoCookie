@@ -741,3 +741,124 @@ directed be completed (2026-07-11) before any further parameter
 optimization, sweeps, or multi-year backtesting resumes — see
 `ROADMAP.md`'s "CURRENT PRIORITY: Core Rule MVP completion" section for
 the full priority-ordered list and status.
+
+## 20. OB+FVG confluence and structure-based TP ship as opt-in flags with NO backtest evidence yet, unlike this project's usual practice
+
+**Decision**: core-rule-MVP items #3 (`require_ob_fvg_confluence`) and #4
+(`use_structure_tp`) both landed as opt-in, default-`False` parameters on
+`build_entry_model` (threaded through `SignalEngine`/`BacktestEngine`/
+`run_backtest.py`), following decision #10's "opt-in flag before any
+default change" pattern — but, unlike `use_breaker_block`/
+`require_full_confluence`/`use_breakeven`/`use_partial_tp`, they shipped
+WITHOUT an accompanying A/B backtest round in the same session.
+
+**Why**: these two items were explicit, named entries on an
+operator-directed priority list (`ROADMAP.md` "Core Rule MVP
+completion"), scoped as "implement the rule," not "implement AND
+A/B-validate the rule" — items #1 (Premium/Discount) and #5 (Equal
+High/Equal Low) on the same list shipped detection-only, with no
+backtest evidence either, and were accepted as "done" on that same
+basis. Treating #3/#4 differently (blocking on a backtest round neither
+the list nor the operator asked for at this step) would have been scope
+creep against an explicit priority list, not extra rigor.
+
+**Why this does NOT relax the project's "evidence over assumption"
+standard**: both flags default `False`, so neither changes any existing
+caller's behavior — the exact same non-negotiable discipline every prior
+experimental flag in this project has followed before being A/B tested.
+"Implemented" is documented everywhere (`ROADMAP.md`, `PROJECT_STATUS.md`,
+`docs/strategy_spec.md`) as explicitly NOT the same claim as "evidenced,"
+using the same "not yet A/B backtested" language applied to `use_breaker_
+block` between its implementation commit and its first A/B round. Turning
+either flag on by default remains gated on a future backtest round with
+the same in-sample/out-of-sample/cross-asset discipline as every other
+finding in this project (see decisions #14/#15).
+
+**Status**: both opt-in, both default `False`, both unvalidated by real
+backtest data as of this entry. A/B evaluation is listed as follow-up
+work, not committed to a specific session.
+
+## 21. OB+FVG "both agree" and structure-TP "farther of the two" resolve genuinely ambiguous ROADMAP prose, documented as judgment calls
+
+**Decision**: `ROADMAP.md`'s item #3 said "change from 'either zone' to
+'both agree'" — implemented literally: `require_ob_fvg_confluence=True`
+requires a matching order block/breaker AND a matching FVG both present
+(zone SELECTION, i.e. which one becomes the entry zone, is unchanged —
+still "most recent index wins" between the two, since the prose only
+named a presence requirement, not a selection rule). Item #4 said "long
+targets previous high first; if HTF structure allows, target the 0.5
+equilibrium instead/in addition" — implemented as: use the previous
+swing high/low as the default target, but use whichever of {previous
+swing high/low, equilibrium} is FURTHER from entry in the trade's favor,
+among candidates that are still valid forward targets (beyond entry
+price). "HTF structure allows" is read as "the broader swing-range
+context makes a farther target reachable," not a literal second (HTF)
+candle series — every other structural input `build_entry_model`
+receives (sweep, CHoCH, FVG, OB) is LTF-only per `docs/strategy_spec.md`
+section 1's HTF/LTF-separation rule, and `find_previous_swing_high`/
+`calculate_premium_discount` both operate on a single candle list by
+contract, so genuinely fetching a third (HTF) series for this one
+parameter would break that established separation for no stated reason
+in the roadmap text.
+
+**Why "farther of the two" rather than "always equilibrium when it
+exists" or "always previous high"**: "instead/in addition" is read
+literally — the FURTHER candidate is strictly the more favorable
+reading of "reaching past" the nearer one, and picking the maximum (long)
+/minimum (short) of the two valid candidates is the simplest rule that
+satisfies both "targets previous high first" (the default when
+equilibrium is absent, nearer, or invalid) and "if structure allows,
+[reach further]" (when equilibrium legitimately extends beyond it)
+without needing a separate, undocumented tie-break rule.
+
+**Why `rr` is recomputed instead of staying the fixed `_RR` constant
+when a structure target is used**: `risk_manager.py`'s `RiskManager.
+evaluate()` reads `signal.rr` directly against `settings.MIN_RR` as a
+real risk-approval gate (see decision context in `docs/strategy_spec.md`
+section 6's OB+FVG/structure-TP bullets). Once `take_profit` is no
+longer defined as `entry +/- risk * _RR`, reporting the fixed constant
+would misrepresent the trade's actual reward:risk to that gate — a
+correctness fix, not a style choice, same category as decision #12
+(ordering checks correctly within a single evaluation step) rather than
+an optional refinement.
+
+**Status**: both are documented, testable interpretations of prose that
+had no single unambiguous reading — flagged here explicitly (per this
+project's rule that every non-obvious judgment call gets its "why"
+recorded) rather than presented as the only possible implementation.
+
+## 22. Equal-highs/equal-lows uses a fractional tolerance and ADJACENT-pair-only comparison, not exact-match or all-pairs
+
+**Decision**: `app.strategy.liquidity.detect_equal_highs`/
+`detect_equal_lows` treat two confirmed swing highs (or lows) as "equal"
+if they're within a fractional `tolerance` (default 0.1%) of each other
+— not requiring exact price equality — and only compare ADJACENT pairs
+in the swing-point sequence (index `i` vs. `i+1` in `find_swing_highs`/
+`find_swing_lows`'s output), never every possible pair.
+
+**Why tolerance, not exact equality**: real OHLCV price data essentially
+never prints two swing highs/lows at the exact same float value; an
+exact-equality rule would report zero real-world zones, making the
+detector correct but useless. 0.1% was chosen as a reasonable starting
+default (explicitly NOT backtest-tuned, same "disclosed, not yet
+evidenced" status as `_RR`/`_STOP_BUFFER` before their 2026-07-11 sweep
+— see decision #18) and exposed as a parameter specifically so it CAN be
+tuned later with the same held-out-period discipline, rather than
+hardcoded.
+
+**Why adjacent pairs only, not all pairs**: standard ICT/SMC "equal
+highs/lows" reads as two (or more) CONSECUTIVE failed attempts at a new
+high/low near the same level — a level struck twice with an unrelated,
+genuinely different swing in between is a different structural event
+(a new range extreme was set and abandoned), not "the same liquidity
+pool being retested." Comparing all pairs would additionally report
+false-seeming zones between two swing points separated by real
+intervening structure, overstating how much resting liquidity actually
+sits at a given level.
+
+**Status**: detection-only, matching Premium/Discount's original ship
+status (decision #19) — not yet wired into `SignalEngine`. No wiring
+plan exists yet in `ROADMAP.md`; unlike structure-TP (which had an
+explicit dependent roadmap item), equal-highs/lows integration (e.g. as
+sweep-target confirmation or additional confluence) is unscoped future
+work.

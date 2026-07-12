@@ -40,19 +40,53 @@ moving to the next:
    `docs/strategy_spec.md` section 8. 5 new unit tests. Detection-only:
    not yet wired into `SignalEngine`/entry filtering or TP (that wiring
    is item #4 below, which depends on this).
-2. ⏳ Previous swing high / previous swing low detection.
-3. ⏳ OB + FVG confluence entry model (change from "either zone" to
-   "both agree").
-4. ⏳ TP logic: long targets previous high first; if HTF structure
-   allows, target the 0.5 equilibrium (premium/discount midpoint)
-   instead/in addition. Depends on #1 (equilibrium) and #2 (previous
-   high/low).
-5. ⏳ Equal High / Equal Low liquidity detection.
+2. ✅ **Previous swing high / previous swing low detection** — DONE.
+   `app.strategy.market_structure.find_previous_swing_high`/
+   `find_previous_swing_low`. New `docs/strategy_spec.md` section 3
+   bullet. 4 new unit tests.
+3. ✅ **OB + FVG confluence entry model** — DONE. Opt-in
+   `require_ob_fvg_confluence` on `build_entry_model` (default `False`,
+   same discipline as `use_breaker_block`/`require_full_confluence`)
+   changes zone selection from "either zone" to "both agree": a matching
+   order block/breaker AND a matching FVG must both be present. Threaded
+   through `SignalEngine`/`BacktestEngine`/`run_backtest.py
+   --ob-fvg-confluence`. New `docs/strategy_spec.md` section 6 bullet.
+   7 new unit/integration tests. Opt-in, default off, NOT YET A/B
+   backtested — same "implemented != evidenced" discipline as every
+   other experimental flag in this file.
+4. ✅ **TP logic: previous high/low first, HTF-permitting extension to
+   0.5 equilibrium** — DONE. Opt-in `use_structure_tp` on
+   `build_entry_model` (default `False`): `take_profit` targets the
+   previous swing high/low first, extends further to the premium/
+   discount equilibrium when that reaches farther, falls back to the
+   fixed-RR target when neither is a valid forward target; `rr` is
+   recomputed to the trade's real reward:risk whenever a structure
+   target is used (the Risk Engine's `MIN_RR` gate reads that field
+   directly). Threaded through `SignalEngine`/`BacktestEngine`/
+   `run_backtest.py --structure-tp`. New `docs/strategy_spec.md` section
+   6 bullet; section 8's status line updated to reflect the wiring.
+   8 new unit/integration tests. Opt-in, default off, NOT YET A/B
+   backtested.
+5. ✅ **Equal High / Equal Low liquidity detection** — DONE.
+   `app.strategy.liquidity.detect_equal_highs`/`detect_equal_lows`:
+   adjacent confirmed swing highs/lows within a 0.1% tolerance, reported
+   as resting liquidity pools. New `docs/strategy_spec.md` section 2
+   bullet. 8 new unit tests. Detection-only (not yet wired into
+   `SignalEngine`), same status Premium/Discount originally shipped
+   with.
 
-Once all 5 are implemented, verified against `docs/strategy_spec.md`,
-and documented, the paused optimization work (BTCUSDT-2025 investigation,
-2024 cross-year extension, `BREAKEVEN_TRIGGER_R`/`PARTIAL_TP_TRIGGER_R`
-sweep — see "Immediate"/"Near-term" below) resumes.
+All 5 Core Rule MVP items are now implemented, unit/integration tested
+(27 new tests across items #2-#5: 4+7+8+8 — full suite now 247 tests,
+0 known failures), and documented against
+`docs/strategy_spec.md`. Items #3 and #4 ship opt-in and default OFF
+pending A/B backtest evaluation — being implemented is not the same as
+being evidenced, same standard already applied to `use_breaker_block`/
+`require_full_confluence`/`use_breakeven`/`use_partial_tp`. The paused
+optimization work below (BTCUSDT-2025 investigation, 2024 cross-year
+extension, `BREAKEVEN_TRIGGER_R`/`PARTIAL_TP_TRIGGER_R` sweep) may now
+resume per the original operator directive; separately, Phase 1 gate #3
+(paper trading) validation is proceeding next per operator instruction
+(2026-07-12).
 
 ## Phase 1 gate status
 
@@ -268,12 +302,14 @@ varied conditions):
 
 See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all of this.
 
-## Immediate (highest ROI, unblocked, no operator input needed) — PAUSED
+## Immediate (highest ROI, unblocked, no operator input needed)
 
-**Paused 2026-07-11 per operator directive** (see "CURRENT PRIORITY"
-section above): no further parameter optimization, sweeps, or multi-year
-backtests until the 5-item core rule MVP is complete. Left in place
-below, unchanged, for when work resumes.
+**Un-paused 2026-07-12**: the 5-item Core Rule MVP (see "CURRENT
+PRIORITY" above) is now complete, meeting the condition the operator set
+on 2026-07-11 for resuming this section. Left otherwise unchanged below
+from when it was paused. Phase 1 gate #3 (paper trading) validation is
+being prioritized first per operator instruction (2026-07-12); this list
+resumes whenever that's picked back up.
 
 1. **Investigate the BTCUSDT 2025 standard-scale degradation directly**
    — periods 4-6 (Apr-Jun 2025) were meaningfully weaker than periods

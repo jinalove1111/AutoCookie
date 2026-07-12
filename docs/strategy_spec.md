@@ -46,6 +46,22 @@ The Strategy Engine never places orders directly. It only ever produces a
   check, the engine could enter a trade directly against the liquidity
   grab it just detected — e.g. going long right after detecting a
   buy-side sweep, which is the setup for a bearish move.)
+- **Equal High / Equal Low detection (implemented, ROADMAP "Core Rule MVP
+  completion" item #5):** `app.strategy.liquidity.detect_equal_highs`/
+  `detect_equal_lows` report resting liquidity pools — ADJACENT confirmed
+  swing highs (or lows) sitting within a `tolerance` (fractional, default
+  0.1%) of each other, standard ICT/SMC "equal highs/lows" concept: price
+  failing to make a clean new high (or low) twice near the same level
+  leaves a pool of resting liquidity just beyond both, a common sweep
+  target. Only adjacent pairs in the swing-point sequence are compared
+  (not every possible pair), matching how equal highs/lows are read in
+  practice. Returns a list of `{"type": "equal_highs"|"equal_lows",
+  "level", "first_index", "second_index"}` zones — `level` is the
+  higher (for highs) or lower (for lows) of the two matched prices, kept
+  as a real printed price rather than an average. Status: detection
+  implemented and unit-tested (`tests/test_strategy_liquidity.py`). NOT
+  YET wired into `SignalEngine`/`build_entry_model` — same detection-only
+  status Premium/Discount (section 8) shipped with.
 
 ## 3. CHOCH/MSS Detection
 - Purpose: detect Change of Character / Market Structure Shift following a
@@ -70,6 +86,17 @@ The Strategy Engine never places orders directly. It only ever produces a
   eligible. `SignalEngine` always calls `detect_liquidity_sweep(ltf_candles)`
   first and threads its `swept_index` (or `None` if no sweep) into
   `detect_choch_mss`.
+- **Previous swing high / previous swing low (implemented, ROADMAP "Core
+  Rule MVP completion" item #2):** `app.strategy.market_structure.
+  find_previous_swing_high`/`find_previous_swing_low` report the single
+  MOST RECENTLY confirmed swing high/low (same `find_swing_highs`/
+  `find_swing_lows` this section's swing-point helpers already use),
+  independent of whether a swing point of the other kind has formed yet.
+  Returns `{"price", "index"}` or `None`. Exposed as its own detector
+  because structure-based take-profit (section 6 below) needs just the
+  high (or low) side as a resting-liquidity TP target, not the full
+  premium/discount range. Status: implemented and unit-tested
+  (`tests/test_strategy_market_structure.py`).
 
 ## 4. FVG Detection
 - Purpose: detect Fair Value Gaps left behind by the CHOCH/MSS move.
@@ -140,6 +167,39 @@ The Strategy Engine never places orders directly. It only ever produces a
   mode remains available as an opt-in (`require_full_confluence=True` /
   `run_backtest.py --strict-confluence`) for further research but is not
   recommended.
+- **OB + FVG confluence — opt-in, implemented (ROADMAP "Core Rule MVP
+  completion" item #3):** the "FVG/OB" phrasing above (a slash, not
+  "and") has always been implemented as alternatives — either a matching
+  order block/breaker OR a matching FVG is enough, whichever has the
+  more recent candle index wins zone selection. `require_ob_fvg_
+  confluence=True` (opt-in, default `False`; `run_backtest.py
+  --ob-fvg-confluence`) changes this to "both agree": a matching order
+  block (or breaker block) AND a matching FVG must BOTH be present, or
+  no entry is produced. The zone actually used for entry is still
+  whichever of the two has the more recent index — this parameter only
+  gates whether both must be present, same treatment as
+  `require_full_confluence` above narrowing sweep/CHOCH from "either" to
+  "both". Ships opt-in and default `False`, same discipline as every
+  other experimental flag (`use_breaker_block`, `require_full_
+  confluence`) — not yet A/B backtested, so not recommended as a default
+  pending real evidence.
+- **Structure-based take-profit — opt-in, implemented (ROADMAP "Core
+  Rule MVP completion" item #4):** `use_structure_tp=True` (opt-in,
+  default `False`; `run_backtest.py --structure-tp`) replaces the
+  fixed-RR `take_profit` target with a real structure target: a `long`
+  targets the previous swing high first (section 3's `find_previous_
+  swing_high`), extending further to the premium/discount equilibrium
+  (section 8's `calculate_premium_discount`) when that reaches farther;
+  `short` mirrors this to the downside. Only candidates strictly beyond
+  `entry_price` in the trade's favor are valid forward targets; if
+  neither candidate is valid (missing, or already behind price), this
+  falls back to the exact fixed-RR target rather than rejecting an
+  otherwise-valid entry. Whenever a structure target IS used, `rr` is
+  recomputed as the trade's REAL reward:risk instead of the fixed `_RR`
+  constant, since the Risk Engine's `MIN_RR` gate (`risk_manager.py`)
+  reads that exact field — reporting the fixed constant would
+  misrepresent the trade. Ships opt-in and default `False`, not yet A/B
+  backtested.
 
 ## 7. Signal Engine
 - Purpose: aggregate all detection modules into a final trade signal.
@@ -181,11 +241,12 @@ The Strategy Engine never places orders directly. It only ever produces a
 - Outputs (conceptual): `{top, bottom, equilibrium, zone, range_high_index,
   range_low_index}` or `None`.
 - Status: detection implemented and unit-tested
-  (`tests/test_strategy_premium_discount.py`). NOT YET wired into
-  `SignalEngine`/`build_entry_model` as an entry filter or TP target —
-  see ROADMAP for the planned entry-quality-filter and TP-extension
-  integration work (structure-based TP, item #4 of the current core-rules
-  priority list).
+  (`tests/test_strategy_premium_discount.py`). Wired into `build_entry_
+  model` as an opt-in take-profit extension target (section 6's
+  `use_structure_tp`, ROADMAP item #4) — still NOT wired as an
+  entry-quality FILTER (i.e. rejecting a signal for entering from the
+  "wrong" half of the range), which remains unimplemented and would be a
+  separate, currently unplanned addition.
 
 ## Milestone Note
 

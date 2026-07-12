@@ -9,16 +9,26 @@ the "why" behind specific non-obvious engineering choices, see
 `ENGINEERING_DECISIONS.md`. For forward-looking prioritization, see
 `ROADMAP.md`.
 
-Last updated: 2026-07-11 (operator directive: pause all parameter
-optimization/sweeps/multi-year backtests and complete the remaining
-JadeCap MVP core trading rules first — Premium/Discount, previous swing
-high/low, OB+FVG confluence, structure-based TP, Equal High/Equal Low —
-before any further tuning. Progress tracked in the "Core rule completion
-(MVP)" section below, updated after each item. First item shipped:
-**Premium/Discount zone calculation** (`app.strategy.premium_discount`),
-detection-only so far, not yet wired into entry filtering or TP —
-see `docs/strategy_spec.md` section 8 and `ENGINEERING_DECISIONS.md`.
-Prior round, unchanged below: completed a
+Last updated: 2026-07-12 (all 5 JadeCap MVP core trading rules from the
+2026-07-11 operator directive are now COMPLETE: Premium/Discount,
+previous swing high/low, OB+FVG confluence, structure-based TP, Equal
+High/Equal Low. Progress tracked in the "Core rule completion (MVP)"
+section below. Previous swing high/low
+(`app.strategy.market_structure.find_previous_swing_high`/
+`find_previous_swing_low`) shipped in an earlier round; this round
+closed out the remaining three: **OB + FVG confluence entry model**
+(opt-in `require_ob_fvg_confluence` on `build_entry_model`, default off,
+not yet A/B backtested), **structure-based take-profit** (opt-in
+`use_structure_tp` on `build_entry_model`, wires Premium/Discount in as
+a TP extension target, default off, not yet A/B backtested), and
+**Equal High/Equal Low liquidity detection**
+(`app.strategy.liquidity.detect_equal_highs`/`detect_equal_lows`,
+detection-only). 27 new tests across the 4 non-Premium/Discount items
+(4 previous-swing + 7 OB+FVG confluence + 8 structure-TP + 8 equal
+highs/lows) — 247 total, up from 220, 0 known failures — see
+`docs/strategy_spec.md` sections 2/3/6/8 and `ENGINEERING_DECISIONS.md`.
+Next: Phase 1 gate #3 paper-trading validation, per operator instruction
+(2026-07-12). Prior round, unchanged below: completed a
 full 2025 cross-year check on all 4 assets under the new tuned defaults
 at the standard reporting scale -- **8 of 9 combinations PASSED
 cleanly** (2026: BTC/ETH/SOL/XRP all PASSED; 2025: ETH/SOL/XRP all
@@ -41,21 +51,21 @@ resolved the confluence-strength spec ambiguity; hardened risk controls
 `CHANGELOG.md` for the full chronological history of this session's
 findings).
 
-## Core rule completion (MVP) — in progress, operator-prioritized
+## Core rule completion (MVP) — ✅ COMPLETE (2026-07-12)
 
 Operator directive (2026-07-11): before resuming any parameter
-optimization/sweeps/multi-year backtests, finish these 5 remaining core
-Jade strategy rules, in this order. Each item's docs (this file, ROADMAP,
-ENGINEERING_DECISIONS) and a commit land immediately when it ships —
-this list is the single source of truth for what's done vs. pending.
+optimization/sweeps/multi-year backtests, finish these 5 core Jade
+strategy rules, in this order. All 5 are now done; each item's docs
+(this file, ROADMAP, ENGINEERING_DECISIONS) and a commit landed when it
+shipped — this list remains the single source of truth for what's done.
 
 | # | Rule | Status |
 |---|---|---|
-| 1 | Premium/Discount calculation from current swing range | ✅ Shipped — `app.strategy.premium_discount.calculate_premium_discount`, unit-tested, spec'd (`docs/strategy_spec.md` §8). Detection only; not yet wired into entry filter or TP target |
-| 2 | Previous swing high/previous swing low detection | ⏳ Pending |
-| 3 | OB + FVG confluence entry model | ⏳ Pending |
-| 4 | TP logic: previous high/low first, HTF-permitting extension to 0.5 equilibrium | ⏳ Pending (depends on #1 and #2) |
-| 5 | Equal High/Equal Low liquidity detection | ⏳ Pending |
+| 1 | Premium/Discount calculation from current swing range | ✅ Shipped — `app.strategy.premium_discount.calculate_premium_discount`, unit-tested, spec'd (`docs/strategy_spec.md` §8). Detection only when shipped; now also wired as an opt-in TP extension target (see #4) |
+| 2 | Previous swing high/previous swing low detection | ✅ Shipped — `app.strategy.market_structure.find_previous_swing_high`/`find_previous_swing_low`, unit-tested, spec'd (§3) |
+| 3 | OB + FVG confluence entry model | ✅ Shipped — opt-in `require_ob_fvg_confluence` on `build_entry_model` (default off), threaded through `SignalEngine`/`BacktestEngine`/`run_backtest.py --ob-fvg-confluence`, unit/integration-tested, spec'd (§6). Not yet A/B backtested |
+| 4 | TP logic: previous high/low first, HTF-permitting extension to 0.5 equilibrium | ✅ Shipped — opt-in `use_structure_tp` on `build_entry_model` (default off, depended on #1 and #2), threaded through `SignalEngine`/`BacktestEngine`/`run_backtest.py --structure-tp`, unit/integration-tested, spec'd (§6, §8). Not yet A/B backtested |
+| 5 | Equal High/Equal Low liquidity detection | ✅ Shipped — `app.strategy.liquidity.detect_equal_highs`/`detect_equal_lows`, unit-tested, spec'd (§2). Detection only; not yet wired into `SignalEngine` |
 
 ## Phase 1 gate status (operator scope lock)
 
@@ -91,7 +101,7 @@ approval — this is by design, not an oversight.
 | Layer | Status | Notes |
 |---|---|---|
 | Data (candle fetch) | ✅ Complete | Real OKX public API, deep pagination via `/market/history-candles` (fixed a long-standing 300-candle cap bug), no API key needed. `fetch_ohlcv_history()` can now anchor a fetch to end at a specific past date (`end_time_ms`), enabling genuine cross-YEAR backtesting via `run_backtest.py --end-date` |
-| Strategy Engine | 🔶 Core rule MVP in progress | Bias/sweep/CHOCH/FVG/OB/zone-mitigation/entry-model all real, all tested. Breaker Block detection now wired in too (opt-in, `use_breaker_block`, A/B tested — see findings below). Confluence-strength spec ambiguity RESOLVED — the existing looser rule (sweep OR CHOCH) is confirmed correct with A/B evidence; `require_full_confluence`/`--strict-confluence` available as an opt-in but not recommended. Core-rule constants TUNED via controlled parameter sweep (`entry_model._RR`=2.5, `_STOP_BUFFER`=0.0015, `order_block._LOOKBACK`=15, `_IMPULSE_MULT`=1.8 — all previously untuned defaults) — see `docs/parameter_sweep_report.md`. **Now completing remaining MVP rules** (Premium/Discount, previous swing high/low, OB+FVG confluence, structure-based TP, Equal High/Equal Low) per operator directive — see "Core rule completion (MVP)" above. Premium/Discount detection shipped (`app.strategy.premium_discount`) |
+| Strategy Engine | ✅ Core rule MVP complete | Bias/sweep/CHOCH/FVG/OB/zone-mitigation/entry-model all real, all tested. Breaker Block detection wired in (opt-in, `use_breaker_block`, A/B tested — see findings below). Confluence-strength spec ambiguity RESOLVED — the existing looser rule (sweep OR CHOCH) is confirmed correct with A/B evidence; `require_full_confluence`/`--strict-confluence` available as an opt-in but not recommended. Core-rule constants TUNED via controlled parameter sweep (`entry_model._RR`=2.5, `_STOP_BUFFER`=0.0015, `order_block._LOOKBACK`=15, `_IMPULSE_MULT`=1.8 — all previously untuned defaults) — see `docs/parameter_sweep_report.md`. **All 5 MVP core rules now shipped** (Premium/Discount, previous swing high/low, OB+FVG confluence, structure-based TP, Equal High/Equal Low) — see "Core rule completion (MVP)" above. The two newest, `require_ob_fvg_confluence`/`use_structure_tp`, ship opt-in and default OFF pending A/B backtest evaluation, same discipline as `use_breaker_block` |
 | Risk Engine | ✅ Complete | RR floor, daily/weekly loss limits, trades/day cap, position sizing, DB-persisted circuit breaker — all enforced in both paper AND backtest. Circuit breaker now auto-resets once a fresh daily/weekly check clears (previously a documented gap — see `ENGINEERING_DECISIONS.md` #16). Sizing/loss-limit math still keys off `PLACEHOLDER_ACCOUNT_BALANCE`, intentionally, until Phase 1 gate #4 |
 | Backtest Engine | ✅ Complete, actively used for research | Real fee/slippage/PnL, no-lookahead HTF cursor, multi-period out-of-sample splitting (`--periods`, HTF fetch now correctly sized to the LTF request's real time span), time-anchored fetching (`--end-date`), walk-forward validation (`--walk-forward`, explicit PASS/FAIL criteria — PASSED for BTCUSDT baseline), opt-in break-even (`--breakeven`, A/B **no reliable direction across 4 assets OR across 2 years on the same asset — even flips sign on BTCUSDT alone**), opt-in Breaker Block entries (`--breaker-block`, A/B **mostly negative across assets, zero effect in the 2025 BTCUSDT window**), opt-in partial take-profit (`--partial-tp`, A/B **negative on all 4 tested assets AND both tested years on BTCUSDT — the most robust finding in the project**) |
 | Paper Trading | ✅ Complete | Real open/close/PnL against live OKX data, no real capital. Break-even stop management is wired here too (`settings.ENABLE_BREAKEVEN`, off by default, PERMANENTLY -- see research findings below) — no reliable direction exists across assets OR across time (it flips sign on BTCUSDT alone between 2025 and 2026), so there is no direction to ever default toward. Breaker Block and partial-TP remain backtest-only (no positive evidence justifying paper trading) |
@@ -101,8 +111,8 @@ approval — this is by design, not an oversight.
 
 ## Test suite
 
-220 backend tests, 0 known failures, re-run 2x+ for flakiness on every
-change in this session. Run: `cd backend && ./.venv/Scripts/python.exe -m pytest -q`
+247 backend tests, 0 known failures. Run: `cd backend &&
+./.venv/Scripts/python.exe -m pytest -q`
 (or the platform-appropriate venv path). No frontend test failures
 (`npx tsc --noEmit` clean as of the last frontend-touching change).
 `scripts/run_paper.py` itself has no direct pytest coverage (needs a live
