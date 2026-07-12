@@ -10,6 +10,10 @@ Swing points use a symmetric lookback/lookforward window (default n=2): a
 candle only confirms as a swing high/low once `n` candles on both sides
 agree, which filters single-candle noise without needing a smoothing
 indicator (e.g. a moving average) that would lag entries.
+
+Also houses `find_previous_swing_high`/`find_previous_swing_low`: the most
+recently confirmed swing high/low, reported independently as resting
+liquidity targets (see docs/strategy_spec.md section 9).
 """
 
 from __future__ import annotations
@@ -37,6 +41,40 @@ def find_swing_lows(candles: list, n: int = 2) -> list[int]:
         if lows[i] == min(window):
             result.append(i)
     return result
+
+
+def find_previous_swing_high(candles: list, n: int = 2) -> dict | None:
+    """Return the most recently confirmed swing high, or `None` if none exists yet.
+
+    "Previous swing high" is the same "most recent swing high in the
+    series" concept `premium_discount.calculate_premium_discount` and
+    `bias.py` already read via `find_swing_highs` -- exposed here as its
+    own detector because ROADMAP item #4 (TP logic: "long targets previous
+    high first") needs just the high side as a resting liquidity target,
+    independent of whether a swing low has formed yet.
+
+    Returns `{"price": <high>, "index": <candle index>}`.
+    """
+    swing_highs = find_swing_highs(candles, n)
+    if not swing_highs:
+        return None
+    index = swing_highs[-1]
+    return {"price": cf(candles[index], "high"), "index": index}
+
+
+def find_previous_swing_low(candles: list, n: int = 2) -> dict | None:
+    """Return the most recently confirmed swing low, or `None` if none exists yet.
+
+    Symmetric to `find_previous_swing_high` -- the resting liquidity target
+    for short TPs (ROADMAP item #4).
+
+    Returns `{"price": <low>, "index": <candle index>}`.
+    """
+    swing_lows = find_swing_lows(candles, n)
+    if not swing_lows:
+        return None
+    index = swing_lows[-1]
+    return {"price": cf(candles[index], "low"), "index": index}
 
 
 def detect_choch_mss(

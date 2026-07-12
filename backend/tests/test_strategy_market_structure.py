@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from app.strategy.market_structure import (
     detect_choch_mss,
+    find_previous_swing_high,
+    find_previous_swing_low,
     find_swing_highs,
     find_swing_lows,
 )
@@ -41,6 +43,32 @@ def test_find_swing_highs_empty_on_strictly_monotonic_series():
     # window's max.
     candles = [candle(10 + i, 10 + i, 9 + i, 10 + i, f"t{i}") for i in range(6)]
     assert find_swing_highs(candles, n=2) == []
+
+
+def test_find_previous_swing_high_returns_most_recent_confirmed_high():
+    # Two peaks: index 2 (20) and index 6 (15) -- "previous" must be the
+    # LATTER one (most recently confirmed), not the first swing high found.
+    highs = [10, 11, 20, 11, 10, 11, 15, 11, 10]
+    candles = [candle(h, h, h - 1, h, f"t{i}") for i, h in enumerate(highs)]
+
+    assert find_previous_swing_high(candles, n=2) == {"price": 15, "index": 6}
+
+
+def test_find_previous_swing_low_returns_most_recent_confirmed_low():
+    lows = [10, 9, 1, 9, 10, 9, 5, 9, 10]
+    candles = [candle(l + 1, l + 1, l, l, f"t{i}") for i, l in enumerate(lows)]
+
+    assert find_previous_swing_low(candles, n=2) == {"price": 5, "index": 6}
+
+
+def test_find_previous_swing_high_none_on_strictly_monotonic_series():
+    candles = [candle(10 + i, 10 + i, 9 + i, 10 + i, f"t{i}") for i in range(6)]
+    assert find_previous_swing_high(candles, n=2) is None
+
+
+def test_find_previous_swing_low_none_on_strictly_monotonic_series():
+    candles = [candle(10 + i, 10 + i, 9 + i, 10 + i, f"t{i}") for i in range(6)]
+    assert find_previous_swing_low(candles, n=2) is None
 
 
 def test_detect_choch_mss_returns_none_when_series_too_short():
