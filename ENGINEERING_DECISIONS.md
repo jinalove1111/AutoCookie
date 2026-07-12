@@ -862,3 +862,115 @@ plan exists yet in `ROADMAP.md`; unlike structure-TP (which had an
 explicit dependent roadmap item), equal-highs/lows integration (e.g. as
 sweep-target confirmation or additional confluence) is unscoped future
 work.
+
+## 23. Jade Entry Point Engine: a separate, parallel module built directly against an operator-supplied spec, not an extension of `entry_model.py`
+
+**Decision**: `app.strategy.entry_point_engine.py` (operator directive,
+2026-07-12, "JADE ENTRY POINT ENGINE — OFFICIAL SPECIFICATION")
+implements the 5 Jade entry models as a standalone module, independent
+of `entry_model.build_entry_model`/`SignalEngine` — neither of those is
+modified. It reuses the same underlying detectors (`order_block.py`,
+`fvg.py`, `liquidity.py`, `premium_discount.py`, `market_structure.py`)
+without changing them, composed under the new spec's own rules, which
+differ from `SignalEngine`'s in one deliberate way: zone mitigation
+(`is_zone_mitigated`) is NOT applied here — the spec states "Repeated
+FVG tests do not invalidate the setup. Only the invalidation level
+invalidates the trade," directly conflicting with `SignalEngine`'s
+mitigation filter.
+
+**Why a separate module instead of extending `entry_model.py`**: the
+spec itself instructs "Implement ONLY the Entry Point Engine... Do not
+modify unrelated files," and its rules (e.g. no mitigation filtering,
+Premium/Discount as a standing limit zone rather than a live-price
+gate) are incompatible with `SignalEngine`'s existing, already-validated
+behavior. Two coexisting, independently-testable implementations of
+overlapping ICT concepts is the correct outcome here, not a duplication
+to clean up — they encode two different, deliberately-diverging rule
+sets against the same underlying detectors.
+
+**Key judgment calls made across several operator review rounds** (full
+rationale in each function's own docstring in the module):
+- **Liquidity Raid (Model 2)** uses only Equal High/Equal Low
+  (`detect_equal_highs`/`detect_equal_lows`) of the spec's 7 listed
+  liquidity sources — the only one with an existing, unambiguous
+  detector. Previous Weekly/Daily/Session High-Low and Asian/London
+  High-Low are explicit `TODO`s in the docstring, deferred pending real
+  session/timezone-boundary definitions this repo doesn't have (a wrong
+  session boundary would silently produce a WRONG level, not a missing
+  one — worth deferring rather than guessing).
+- **Breaker Block (Model 5)** confidence: 5 with a matching FVG overlap,
+  4 without (operator decision; the spec's own priority table only
+  states the FVG-overlap tier).
+- **Confidence scale**: integers 1–5, mapping the spec's ★ ratings
+  directly (operator decision).
+- **Premium/Discount (Model 1)**: the entry zone is a STANDING limit
+  zone (Equilibrium to the matching range extreme) that is NEVER gated
+  on current price — unlike Models 3–5, which require the current
+  candle to already be retracing into their zone. Both were genuinely
+  ambiguous readings of the spec prose; both confirmed as operator
+  decisions after being flagged.
+- **"Prefer Displacement-Formed Ranges" (Model 1)**: the spec's 5
+  qualitative criteria (breaks structure, oversized impulse, leaves a
+  valid FVG, one dominant candle rather than many small ones,
+  strong-bodied) are each operationalized against a real detector or a
+  disclosed-not-tuned numeric threshold (40% dominant-candle share of
+  the move's range, 50% body-to-range ratio) — see
+  `_displacement_strength`'s docstring for the exact mapping of each
+  criterion. This is ranking-only: a move that fails to qualify never
+  rejects a setup, it only fails to be PREFERRED over the existing
+  most-recent-swing-range fallback.
+
+**Status**: feature-complete against the spec as clarified across every
+review round, including the explicitly-deferred liquidity sources.
+34 tests (`tests/test_strategy_entry_point_engine.py`), all
+real-detector integration style. Not yet wired into any live/paper
+trading path — this module currently has no caller besides its own
+tests, same "detection-only until a wiring decision is made deliberately"
+discipline as Premium/Discount's original ship status (decision #19).
+
+## 24. Jade Exit Point Engine: take-profit targets as a ranked list of independent structural candidates, not a single fixed-RR level
+
+**Decision**: `app.strategy.exit_point_engine.find_exit_targets()`
+computes take-profit targets for an already-valid trade
+(`direction`/`entry_price`) as a RANKED LIST (`TP1`...`TPn`, nearest to
+farthest), not a single price. Candidate sources, each included only
+when it's a genuine forward target (strictly beyond `entry_price`):
+Equal High/Equal Low (nearest liquidity pool), previous swing high/low,
+the premium/discount equilibrium, and the opposite extreme of the
+current premium/discount range. Same "separate, parallel module" pattern
+as the Entry Point Engine (decision #23) — built independently of
+`entry_model.build_entry_model`'s existing `use_structure_tp` opt-in
+(which already does something similar but narrower: a SINGLE target,
+"previous high/low, extend to equilibrium if farther," tied to the OLD
+entry model's fixed-RR fallback design).
+
+**Why a ranked list instead of one target**: no spec document defines
+Jade's exact exit methodology (unlike the Entry Point Engine, which had
+one) — per operator instruction (2026-07-12: "if any ambiguity exists,
+implement the most reasonable ICT/Jade interpretation and document it
+here instead of waiting for approval"), this is the chosen
+interpretation. Standard ICT/SMC practice targets the NEXT liquidity
+pool first (a natural TP1/partial-exit point) and a further structural
+target second (TP2+/runner) — a single collapsed target throws away
+information a caller (future partial-exit logic) would want. Every
+valid candidate is returned rather than picking just one, deferring the
+"how many tiers, what portion at each" decision to whatever consumes
+this output (explicitly NOT this module's job — see its own docstring
+on scope: no position-sizing/portion-split logic here, that stays Risk
+Engine/`PARTIAL_TP_PORTION` territory).
+
+**Why each target's `level` is buffered INWARD (short of the raw
+liquidity level), reusing `entry_model._STOP_BUFFER`**: standard ICT
+observation that price reversing exactly AT a liquidity level without
+fully trading through it is common — a take-profit sitting fully at or
+past the raw level routinely misses fills that a level just short of it
+would have caught. This is the mirror of how `_STOP_BUFFER` already
+pushes a stop-loss AWAY from its invalidation level (for the opposite
+reason: to avoid being stopped out by a wick that doesn't truly
+invalidate the setup) — same constant, same magnitude, opposite
+direction of intent, reused rather than introducing a second
+similarly-named buffer constant.
+
+**Status**: 7 tests (`tests/test_strategy_exit_point_engine.py`),
+real-detector integration style. Like the Entry Point Engine, not yet
+wired into any live/paper trading path.
