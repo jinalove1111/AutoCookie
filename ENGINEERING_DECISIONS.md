@@ -1473,3 +1473,56 @@ actually exercises this path yet without a further, separate wiring
 step -- same "opt-in, unproven until exercised/evidenced" status every
 new SignalEngine behavior in this project has shipped with
 (`use_breaker_block`, `require_full_confluence`, etc., decision #10).
+
+## 35. Real performance bug found and fixed while attempting the first Jade engine A/B backtest: unbounded all-pairs displacement candidates
+
+**Decision**: `entry_point_engine._candidate_dealing_ranges` now bounds
+its swing-point inputs to the most recent `_MAX_CANDIDATE_SWING_POINTS`
+(10) of each type (`find_swing_highs(candles)[-10:]`/`find_swing_lows(
+candles)[-10:]`), instead of every confirmed swing point across the
+ENTIRE candle history.
+
+**What happened**: attempting the first real A/B backtest of
+`use_jade_engine` (operator directive, 2026-07-12) at this project's
+standard scale (`--candles 3000 --periods 6 --walk-forward`), the Jade
+side never completed within a 5-minute wait -- even a SINGLE 3000-candle
+period alone (not all 6) still hadn't finished after 5 more minutes.
+Root cause, confirmed by isolated timing tests: `_candidate_dealing_
+ranges` (decision #23's displacement-ranking feature) built an
+UNBOUNDED all-pairs cross join of every swing high x every swing low in
+the given candle slice, and `_displacement_strength` calls
+`detect_choch_mss(candles[:end_index+1])` (an `O(n)` rescan) once per
+candidate. Swing-point count grows with candle count, so candidate
+count grew roughly quadratically with candle count, each candidate
+costing another `O(n)` CHOCH rescan -- and `BacktestEngine`'s
+walk-forward loop calls this fresh at every one of `O(n)` steps with an
+ever-growing candle slice. The result was effectively unbounded, not
+just slow: 300 candles ran in ~1.6s, 1000 in ~2.75s, but 3000 never
+finished in 5+ minutes -- a real complexity blowup, not a constant-
+factor slowdown.
+
+**Why bounding to 10 is the right fix, not just a performance
+workaround**: a dealing range candidate formed thousands of candles in
+the past is not a real candidate for "the CURRENT dealing range" in the
+first place -- the entire concept Entry Model 1 is about. Bounding to
+the most recent 10 swing points of each type is simultaneously the
+performance fix (candidate count capped at 100 regardless of total
+history length, bringing this step back to the same `O(n)`-per-step
+complexity class every other detector in this package already has) AND
+the more semantically correct behavior. No existing test's fixtures
+(all small, hand-built, well under 10 swing points per type) were
+affected by this bound -- confirmed by the full 363-test suite passing
+unchanged before and after.
+
+**Verified fix**: the same 3000-candle single-period case that
+previously hung 5+ minutes now completes in ~37 seconds (vs. ~2-3s for
+the equivalent legacy-pipeline run at that scale -- the Jade engine
+evaluating all 5 entry models per step, instead of the legacy path's
+one, is expected to cost more; this is a reasonable, bounded overhead,
+not a runaway one).
+
+**Status**: found and fixed BEFORE any A/B backtest results were
+recorded -- this entry exists specifically so the performance
+characteristics of the Jade engine are disclosed alongside its
+strategy-quality findings (which follow in a later entry once the
+actual A/B backtest completes), not silently absent from the record.

@@ -88,6 +88,9 @@ def _last_candle_overlaps_zone(candles: list, top: float, bottom: float) -> bool
     return cf(last, "high") >= bottom and cf(last, "low") <= top
 
 
+_MAX_CANDIDATE_SWING_POINTS = 10  # see _candidate_dealing_ranges' docstring
+
+
 def _candidate_dealing_ranges(candles: list, direction: str) -> list[tuple[int, int]]:
     """Enumerate candidate dealing ranges for Model 1's displacement
     ranking (operator spec, 2026-07-12): "Bullish range: Swing Low ->
@@ -103,10 +106,23 @@ def _candidate_dealing_ranges(candles: list, direction: str) -> list[tuple[int, 
     range created by the strongest displacement" (spec) presumes exactly
     this kind of multi-candidate set.
 
+    Bounded to the most recent `_MAX_CANDIDATE_SWING_POINTS` (10) swing
+    points of EACH type (performance fix, ENGINEERING_DECISIONS.md #35):
+    an unbounded all-pairs join grows with the swing-point count, which
+    itself grows with total candle history -- on a real multi-thousand-
+    candle backtest, called fresh at every walk-forward step, this
+    turned what should be an O(n) detector into an effectively
+    unbounded one (confirmed empirically: a 3000-candle single-period
+    backtest never completed within 5 minutes before this fix). Bounding
+    to the 10 most recent is also the more semantically correct read
+    regardless of performance -- a dealing range from thousands of
+    candles ago is not a real candidate for "the CURRENT dealing range"
+    in the first place, the entire concept Model 1 is about.
+
     Returns `(start_index, end_index)` pairs, `start_index < end_index`.
     """
-    swing_highs = find_swing_highs(candles)
-    swing_lows = find_swing_lows(candles)
+    swing_highs = find_swing_highs(candles)[-_MAX_CANDIDATE_SWING_POINTS:]
+    swing_lows = find_swing_lows(candles)[-_MAX_CANDIDATE_SWING_POINTS:]
 
     candidates: list[tuple[int, int]] = []
     if direction == "long":
