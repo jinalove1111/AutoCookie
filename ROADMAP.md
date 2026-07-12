@@ -22,6 +22,38 @@ out of scope for now)" section below, not implemented. The objective
 does not change until JadeCap has completed, in order: Backtest ->
 Walk-Forward -> Paper Trading -> Small Live Validation.
 
+## CURRENT PRIORITY: Core Rule MVP completion (operator directive, 2026-07-11)
+
+**Supersedes everything under "Immediate"/"Near-term" below until closed.**
+Operator instruction: stop all parameter optimization, parameter sweeps,
+and multi-year backtests until the remaining core Jade trading rules are
+implemented. This also reverses the prior scope decision on equal-highs/
+equal-lows (see "Done" below, the "correctly out of scope" entry) — the
+operator has now explicitly named it as an in-scope core rule to
+implement, not deferred pending a future spec decision. Priority order,
+each item done in full (spec verification + implementation + tests +
+this-file/PROJECT_STATUS/ENGINEERING_DECISIONS updates + a commit) before
+moving to the next:
+
+1. ✅ **Premium/Discount calculation from the current swing range** — DONE.
+   `app.strategy.premium_discount.calculate_premium_discount`. New
+   `docs/strategy_spec.md` section 8. 5 new unit tests. Detection-only:
+   not yet wired into `SignalEngine`/entry filtering or TP (that wiring
+   is item #4 below, which depends on this).
+2. ⏳ Previous swing high / previous swing low detection.
+3. ⏳ OB + FVG confluence entry model (change from "either zone" to
+   "both agree").
+4. ⏳ TP logic: long targets previous high first; if HTF structure
+   allows, target the 0.5 equilibrium (premium/discount midpoint)
+   instead/in addition. Depends on #1 (equilibrium) and #2 (previous
+   high/low).
+5. ⏳ Equal High / Equal Low liquidity detection.
+
+Once all 5 are implemented, verified against `docs/strategy_spec.md`,
+and documented, the paused optimization work (BTCUSDT-2025 investigation,
+2024 cross-year extension, `BREAKEVEN_TRIGGER_R`/`PARTIAL_TP_TRIGGER_R`
+sweep — see "Immediate"/"Near-term" below) resumes.
+
 ## Phase 1 gate status
 
 | Gate | Status | Evidence |
@@ -183,14 +215,15 @@ varied conditions):
   rule (sweep OR CHOCH, not both) with this evidence cited directly in
   the spec text, closing the ambiguity for good. 5 new tests. See
   CHANGELOG.md for the full comparison table.
-- ~~Equal-highs/equal-lows liquidity detection~~ — NOT implemented,
-  correctly out of scope. Confirmed (again, per the operator's explicit
-  "only if they are core JadeCap trading rules" instruction this round):
-  `docs/strategy_spec.md` section 2 does not define this rule at all —
-  it would be a NEW rule requiring a spec decision first, not an
-  ambiguity resolution in an existing rule (unlike confluence strength
-  above). Stays documented below as a candidate that needs a spec
-  addition before any implementation work, not attempted this round.
+- ~~Equal-highs/equal-lows liquidity detection~~ — NOT implemented as of
+  that round, correctly out of scope AT THE TIME: `docs/strategy_spec.md`
+  section 2 did not define this rule, so it would have been a NEW rule
+  requiring a spec decision first, not an ambiguity resolution (unlike
+  confluence strength above). **SUPERSEDED 2026-07-11**: the operator has
+  now explicitly named this as an in-scope core rule (see "CURRENT
+  PRIORITY" section at the top of this file, item #5) — implementation
+  proceeding with the same spec-first-then-code discipline this entry
+  originally called for.
 - ~~Controlled parameter sweep (`_RR`/`_STOP_BUFFER`/`_LOOKBACK`/
   `_IMPULSE_MULT`)~~ — DONE. One-at-a-time sweep, in-sample selection by
   robustness (not highest profit) on BTCUSDT, validated on held-out
@@ -235,7 +268,12 @@ varied conditions):
 
 See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all of this.
 
-## Immediate (highest ROI, unblocked, no operator input needed)
+## Immediate (highest ROI, unblocked, no operator input needed) — PAUSED
+
+**Paused 2026-07-11 per operator directive** (see "CURRENT PRIORITY"
+section above): no further parameter optimization, sweeps, or multi-year
+backtests until the 5-item core rule MVP is complete. Left in place
+below, unchanged, for when work resumes.
 
 1. **Investigate the BTCUSDT 2025 standard-scale degradation directly**
    — periods 4-6 (Apr-Jun 2025) were meaningfully weaker than periods
@@ -275,15 +313,9 @@ See `CHANGELOG.md`/`HANDOFF.md` for full evidence tables on all of this.
    discipline used for the core-rule sweep, not by assumption. **Hard
    rule, non-negotiable, unchanged**: any sweep MUST reserve genuinely
    held-out data never inspected until the final decision.
-6. **Equal-highs/equal-lows liquidity detection** (audit item #3) — spec
-   addition required first (see "Done" above for why this is
-   deliberately NOT implemented yet): `detect_liquidity_sweep()` only
-   recognizes single swing-point sweeps; real SMC also treats clusters
-   of near-equal highs/lows as a stronger resting-liquidity signal.
-   Neither the spec nor the code currently defines this. If/when the
-   operator decides this should become a specified core rule, the
-   sequence is: spec addition first, then implementation, then the same
-   A/B discipline as every other change here.
+6. ~~**Equal-highs/equal-lows liquidity detection**~~ — MOVED to
+   "CURRENT PRIORITY" section at the top of this file (item #5); no
+   longer near-term/deferred as of the 2026-07-11 operator directive.
 
 ## Phase 2 (deferred, out of scope for Phase 1 — do not implement yet)
 

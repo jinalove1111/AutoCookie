@@ -688,3 +688,56 @@ favorable (1500-candle) result — the entire discipline this project has
 built around "reproduced" claims (decision #15) applies here too:
 "passed walk-forward" must specify at what granularity, the same way it
 must specify on what asset or in what time window.
+
+## 19. Premium/Discount range uses "most recent swing high/low independently", not "strict alternation"
+
+**Decision**: `app.strategy.premium_discount.calculate_premium_discount()`
+defines the "current swing range" as `[most recent swing low, most recent
+swing high]`, where each is found independently via the existing
+`find_swing_highs`/`find_swing_lows` helpers (`market_structure.py`) —
+NOT by requiring the two to strictly alternate (e.g. "the last swing high
+AND the swing low that immediately preceded/followed it"). If the range
+is degenerate (`top <= bottom` — the most recent swing high's value is at
+or below the most recent swing low's, meaning that high has already been
+broken through), the function returns `None` rather than guessing.
+
+**Why**: real market structure routinely prints two swing lows before the
+next swing high confirms (or vice versa) — requiring strict alternation
+would mean silently ignoring a fresher, more relevant swing point just
+because it's the same type as the previous one, which contradicts the
+project's existing convention: `bias.py`'s `detect_htf_bias()` already
+reads "the last N swing highs" and "the last N swing lows" as two
+independent series, not an alternating pair. Premium/Discount reuses that
+same independence for consistency, and because "most recent swing point
+of each type" is what actually defines the range a trader is currently
+inside, regardless of how many same-type swings happened to print before
+it confirmed.
+
+**Why return `None` instead of clamping/swapping when the range is
+degenerate**: a `top <= bottom` result means structure has already moved
+past the point where "the current range" is a coherent concept (the most
+recent high is no longer above the most recent low) — swapping top/bottom
+or clamping to zero-width would produce a plausible-looking but
+meaningless classification. Every other detector in this package
+(`detect_htf_bias`, `detect_choch_mss`, `detect_liquidity_sweep`) already
+follows this "return `None`/`neutral` on insufficient or incoherent
+structure rather than fabricate an answer" pattern; this is the same
+discipline applied to a new detector.
+
+**Status**: detection-only as of this decision (see `docs/strategy_spec.md`
+section 8, `PROJECT_STATUS.md`'s "Core rule completion (MVP)" table). Not
+yet wired into `SignalEngine`/`build_entry_model` as an entry-quality
+filter or take-profit target — that wiring is core-rule-MVP item #4
+(structure-based TP), which depends on this AND on previous swing high/
+low detection (item #2), both still pending as of this entry. Per
+decision #10 (opt-in flag threaded end-to-end before any default
+changes), when that wiring happens it should follow the same pattern
+already established for `use_breaker_block`/`require_full_confluence`
+rather than becoming an unconditional new filter on every existing
+caller.
+
+**Context**: this is the first of 5 core JadeCap rules the operator
+directed be completed (2026-07-11) before any further parameter
+optimization, sweeps, or multi-year backtesting resumes — see
+`ROADMAP.md`'s "CURRENT PRIORITY: Core Rule MVP completion" section for
+the full priority-ordered list and status.

@@ -117,7 +117,7 @@ if settings.TRADING_MODE == "live" and not settings.is_live_trading_allowed:
 from app.data.candle_fetcher import CandleFetcher
 from app.execution.execution_engine import ExecutionEngine
 from app.execution.order_manager import OrderManager
-from app.execution.paper_broker import FEE_PERCENT, SLIPPAGE_PERCENT, PaperBroker
+from app.execution.paper_broker import FEE_PERCENT, PaperBroker
 from app.notifications.discord import send_discord_alert
 from app.notifications.telegram import send_telegram_alert
 from app.portfolio.journal import TradeJournal
@@ -750,12 +750,25 @@ def run_once(
     # planned `signal.entry_price` (not the fill), mirroring
     # `BacktestEngine`'s own size-before-fill ordering: risk is sized
     # against the planned entry/stop distance before the fill/slippage is
-    # known. fee/leverage are not sourced from ExecutionResult or
-    # TradeSignal, so they are recorded as 0.0/1.0 placeholders below --
-    # matching `BacktestEngine`'s trade record, which likewise nets fees
-    # into `pnl` rather than storing them as a separate field. Slippage is
-    # recorded as the actual applied fraction (not a 0.0 placeholder) since
-    # `PaperBroker` already computes and exposes it via `fill_price`.
+    # known.
+    #
+    # fee: `ExecutionResult` now exposes `fee_percent` (PaperBroker's flat
+    # taker-fee rate, e.g. 0.05 == 0.05%) -- previously not sourced from
+    # ExecutionResult at all (hardcoded 0.0 here). Recorded as the
+    # ENTRY-LEG fee in account-currency units (fee_rate * size * fill
+    # price), the same per-leg-notional model `_compute_exit_pnl` above
+    # uses for the matching exit leg at close time (see that function's
+    # docstring). This column stays entry-leg-only even after close, since
+    # `close_trade()` has no fee parameter to fold the exit-leg fee into it
+    # too -- the ROUND-TRIP fee total instead lands inside `pnl` at close
+    # time via `_compute_exit_pnl`.
+    # slippage: the actual applied price-unit delta between the signal's
+    # planned entry_price and the broker's real fill_price -- previously
+    # the flat `SLIPPAGE_PERCENT` RATE constant was stored here directly,
+    # which is a percentage, not a price-unit delta comparable to this
+    # column's other float values. "How many price units did the fill move
+    # against us" is the simplest, most directly inspectable definition
+    # given no prior convention exists for this column.
     size = calculate_position_size(
         account_balance=settings.PLACEHOLDER_ACCOUNT_BALANCE,
         risk_percent=settings.RISK_PER_TRADE_PERCENT,
@@ -764,6 +777,9 @@ def run_once(
     )
 
     entry_price = result.fill_price if result.fill_price is not None else signal.entry_price
+    fee_percent = result.fee_percent if result.fee_percent is not None else 0.0
+    entry_fee = (fee_percent / 100) * size * entry_price
+    slippage_amount = abs(entry_price - signal.entry_price)
 
     trade_data: dict[str, Any] = {
         "symbol": signal.symbol,
@@ -773,8 +789,8 @@ def run_once(
         "take_profit": signal.take_profit,
         "size": size,
         "leverage": 1.0,
-        "fee": 0.0,
-        "slippage": SLIPPAGE_PERCENT,
+        "fee": entry_fee,
+        "slippage": slippage_amount,
         "status": "open",
         "mode": "paper",
         "opened_at": datetime.now(timezone.utc),

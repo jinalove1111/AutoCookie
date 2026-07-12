@@ -152,6 +152,41 @@ The Strategy Engine never places orders directly. It only ever produces a
   places orders directly. Its only output is a `TradeSignal` object passed
   downstream to the Risk Engine.
 
+## 8. Premium / Discount Zones
+
+- Purpose: classify where the latest price sits within the current swing
+  range, as an entry-quality signal and (per ROADMAP) a candidate
+  take-profit extension target.
+- Implemented in `app.strategy.premium_discount.calculate_premium_discount`.
+- Inputs (conceptual): candle series, swing-high/swing-low detection
+  (reuses `find_swing_highs`/`find_swing_lows` from
+  `app.strategy.market_structure`, the same helpers `bias.py` uses).
+- Definition: the "current swing range" is bounded by the MOST RECENT
+  swing high and MOST RECENT swing low in the series (independently —
+  they are not required to alternate strictly). Its midpoint is the
+  **equilibrium** (`(top + bottom) / 2`). The upper half of the range
+  (above equilibrium) is **premium**; the lower half (below equilibrium)
+  is **discount**; exactly at the midpoint is **equilibrium**.
+- Standard ICT/SMC rationale: discount is the "cheap" half of the range
+  and favors long entries; premium is the "expensive" half and favors
+  short entries — entering from the wrong half of the range means buying
+  into supply or selling into demand that the range itself already
+  contains.
+- Degenerate-range guard: if the most recent swing high's value is at or
+  below the most recent swing low's value (`top <= bottom` — e.g. the
+  most recent swing high has already been broken below the most recent
+  swing low), there is no coherent current range to classify against, so
+  the function returns `None` rather than a misleading zone. Also returns
+  `None` if fewer than one swing high or one swing low exists yet.
+- Outputs (conceptual): `{top, bottom, equilibrium, zone, range_high_index,
+  range_low_index}` or `None`.
+- Status: detection implemented and unit-tested
+  (`tests/test_strategy_premium_discount.py`). NOT YET wired into
+  `SignalEngine`/`build_entry_model` as an entry filter or TP target —
+  see ROADMAP for the planned entry-quality-filter and TP-extension
+  integration work (structure-based TP, item #4 of the current core-rules
+  priority list).
+
 ## Milestone Note
 
 No detection logic (bias/liquidity/CHOCH/FVG/OB/entry/signal) is implemented
