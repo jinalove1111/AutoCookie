@@ -1186,3 +1186,38 @@ live/paper decision path remains a deliberate, separate step not taken
 in this round, same "detection-only until a wiring decision is made
 deliberately" status every Jade module has shipped with so far
 (decisions #19/#23/#24/#25/#26/#27).
+
+## 29. `build_trade_plan` computes HTF bias itself; no other Jade module does
+
+**Decision**: `jade_trade_plan.build_trade_plan(ltf_candles,
+htf_candles)` no longer takes `bias` as a parameter -- it computes bias
+itself via `bias.detect_htf_bias(htf_candles)` (an existing, already-
+tested detector, unmodified) and short-circuits to `None` immediately
+on a `"neutral"` read, before calling any of the 3 composed modules.
+Every OTHER Jade module (`find_entry_point`, `find_exit_targets`,
+`evaluate_htf_ltf_confluence`) still takes `direction`/`bias` as a
+caller-supplied, trusted input and is UNCHANGED by this decision.
+
+**Why only the top-level composer computes bias, not each module
+individually**: `detect_htf_bias` already existed and was already
+tested before any Jade module in this series was written -- operator
+directive (2026-07-12, "1. HTF Bias Engine") asked for it to be
+COMPLETED as part of the Jade system, and the actual gap was that
+nothing in the new pipeline called it, not that it needed to be
+rebuilt. Computing it once, at the single entry point where both
+`ltf_candles` AND `htf_candles` are already available together, and
+threading the result down, is the same pattern `SignalEngine.
+generate_signal` already uses for its own (separate, `entry_model.py`-
+based) pipeline -- consistency with an established, working precedent,
+rather than inventing a second bias-computation convention. Pushing
+bias computation into each of the 3 lower-level modules individually
+would mean each would need its own `htf_candles` parameter (only
+`evaluate_htf_ltf_confluence` currently has one) and would recompute
+the identical bias redundantly on every composed call.
+
+**Status**: `test_build_trade_plan_none_on_neutral_htf_bias` added,
+proving the new short-circuit; the 3 existing tests updated to the new
+signature (no more explicit `bias` argument) and a real bullish-bias
+HTF fixture (matching `test_strategy_signal_engine.py`'s own
+`_htf_bullish_candles` shape) rather than a hardcoded string. 334/334
+backend tests passing.
