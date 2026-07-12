@@ -1034,3 +1034,49 @@ convention states otherwise.
 real-detector integration style. Not yet wired into any live/paper
 trading path or into `find_entry_point`'s own output, same status as
 the Entry/Exit Point Engines (decisions #23/#24).
+
+## 26. Trendlines are 2-point lines through the most recent matching swing pair, not a best-fit regression through more
+
+**Decision**: `app.strategy.trendline.detect_trendline(candles,
+direction)` defines a trendline using exactly the TWO most recent
+confirmed swing points of the matching type -- `"support"` connects the
+last two confirmed swing lows (`find_swing_lows`), `"resistance"` the
+last two confirmed swing highs (`find_swing_highs`) -- fitting an exact
+line through those two points (`slope`/`intercept`), not a best-fit
+(e.g. least-squares) regression through three or more touch points.
+`trendline_price_at(trendline, index)` projects the line's price at any
+index, including forward extrapolation past the two defining points.
+`detect_trendline_break`/`detect_trendline_liquidity_sweep` mirror
+`detect_choch_mss`/`detect_liquidity_sweep`'s own break/sweep mechanics
+exactly, generalized from a constant horizontal level to the
+trendline's projected (diagonal) price at the current candle's index.
+
+**Why 2 points, not a best-fit line through more**: no spec document
+defines Jade's exact trendline construction; per operator instruction
+(2026-07-12: "if any ambiguity exists, implement the most reasonable
+ICT/Jade interpretation and document it here instead of waiting for
+approval"), a 2-point line is the simplest, most literal, and most
+commonly taught definition ("connect the last two swing lows") --
+unambiguous and deterministic given just `find_swing_lows`/
+`find_swing_highs`'s existing output, with no additional parameters
+(how many points, what fitting method, how to weight touches) that a
+regression approach would require without any evidence to justify a
+specific choice. This is the same "don't invent an unevidenced
+parameter" discipline as decision #25's confluence-threshold call.
+
+**Why the trendline is recomputed fresh from `candles` on every call,
+not a persistent, evolving object**: matches this package's existing
+functional, stateless-detector convention throughout (every other
+detector -- `detect_order_block`, `detect_fair_value_gap`,
+`calculate_premium_discount` -- takes a candle list and returns a fresh
+result, with no detector maintaining state across calls). A caller
+wanting to track how a trendline evolves over time (e.g. re-anchoring
+after a break) recomputes it each time it needs a fresh read, the same
+way every other caller in this codebase already re-runs detectors on an
+updated candle window rather than mutating a persisted detector object.
+
+**Status**: 9 tests (`tests/test_strategy_trendline.py`), real-detector
+integration style. Not yet wired into any other module -- like the
+Entry/Exit Point Engines and HTF/LTF confluence (decisions #23/#24/#25),
+this is a standalone, independently-testable piece with no caller yet
+besides its own tests.
