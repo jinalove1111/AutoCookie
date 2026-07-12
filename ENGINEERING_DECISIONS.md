@@ -1297,3 +1297,50 @@ than inventing new terminology for the same idea.
 explicitly proving cross-timeframe usage (a real HTF candle as the
 range, an independent LTF series as the check). 351/351 backend tests
 passing. Not yet wired into `jade_trade_plan`/`SignalEngine`.
+
+## 32. BOS chosen as "the confirmed remaining market structure detector"; implemented as a disclosed near-duplicate of `detect_choch_mss`, not a shared-code refactor
+
+**Decision**: `market_structure.detect_bos(candles, n=2, swept_index=None)`
+detects Break of Structure -- a structural break that CONFIRMS the
+prevailing trend (an uptrend breaking above its own most recent swing
+high, or a downtrend breaking below its own most recent swing low),
+the direct mirror of `detect_choch_mss`'s reversal detection (a trend
+breaking in the OPPOSITE direction). Same signature, same `swept_index`
+gating, same return shape (`{"type", "broken_level", "broken_index",
+"confirm_index"}`) so callers can handle either uniformly. Implemented
+as its OWN self-contained function in `market_structure.py`, not
+refactored to share an internal helper with `detect_choch_mss`.
+
+**Why BOS was the confirmed gap chosen** (operator directive,
+2026-07-12, "5. Remaining market structure detectors"): BOS and CHOCH
+are always taught as a PAIR in ICT/SMC material -- you cannot have the
+concept of "a break that signals reversal" (CHOCH) without the
+complementary concept of "a break that confirms continuation" (BOS).
+This codebase already had a real, tested CHOCH detector but no BOS
+counterpart at all -- the clearest, most unambiguous, most clearly
+"confirmed Jade methodology" gap available, unlike more speculative
+candidates (internal/external structure grading, wave counting) that
+would require inventing thresholds with no clear settled definition.
+
+**Why a disclosed duplication instead of extracting shared code**:
+`detect_choch_mss` is an already-shipped, heavily-relied-upon function
+(used directly by `SignalEngine.generate_signal`, tested since this
+project's early milestones). Refactoring it to share logic with a new
+function carries real risk of a subtle regression in code every other
+part of the live/paper/backtest pipeline depends on, for the sake of
+avoiding ~15 lines of duplicated trend-detection logic that will not
+independently drift (both functions read the exact same swing-high/
+swing-low trend condition, just apply it to the opposite break
+direction) -- same "small, disclosed duplication preferred over a risky
+cross-cutting change to already-shipped code" judgment already applied
+in `session_liquidity.py` (decision #27, day/week boundary math) and
+`crt.py`'s independence from `detect_liquidity_sweep`.
+
+**Status**: 10 new tests
+(`tests/test_strategy_market_structure.py`), including one proving
+`detect_bos` and `detect_choch_mss` are mutually exclusive on the exact
+same real fixture (a genuine CHOCH), not just independently correct in
+isolation. 357/357 backend tests passing. Not yet wired into
+`SignalEngine`/`jade_trade_plan` -- `detect_choch_mss` itself remains
+`SignalEngine`'s only structural-break input for now; wiring BOS in
+anywhere is a separate, deliberate step.

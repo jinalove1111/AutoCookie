@@ -14,6 +14,12 @@ indicator (e.g. a moving average) that would lag entries.
 Also houses `find_previous_swing_high`/`find_previous_swing_low`: the most
 recently confirmed swing high/low, reported independently as resting
 liquidity targets (see docs/strategy_spec.md section 9).
+
+Also houses `detect_bos`: Break of Structure, the trend-CONTINUATION
+sibling of `detect_choch_mss`'s trend-REVERSAL detection (operator
+directive, 2026-07-12, "5. Remaining market structure detectors" --
+see ENGINEERING_DECISIONS.md #32 for why this was the confirmed gap
+chosen).
 """
 
 from __future__ import annotations
@@ -129,6 +135,75 @@ def detect_choch_mss(
         if level_idx < last_idx and last_close < level:
             return {
                 "type": "bearish_choch",
+                "broken_level": level,
+                "broken_index": level_idx,
+                "confirm_index": last_idx,
+            }
+
+    return None
+
+
+def detect_bos(candles: list, n: int = 2, swept_index: int | None = None) -> dict | None:
+    """Detect a Break of Structure (BOS) event: a structural break that
+    CONFIRMS the prevailing trend, the mirror of `detect_choch_mss`'s
+    reversal detection. Same higher-highs/higher-lows (or lower-highs/
+    lower-lows) trend read, same "only the latest candle's close counts"
+    discipline, same `swept_index` gating -- deliberately NOT refactored
+    to share code with `detect_choch_mss` (see ENGINEERING_DECISIONS.md
+    #32 for why a small, disclosed duplication was chosen over touching
+    that already-shipped, heavily-relied-upon function).
+
+    Where `detect_choch_mss` fires when the trend is X but the break
+    happens in the OPPOSITE direction (a reversal), `detect_bos` fires
+    when the trend is X and the break happens in the SAME direction (a
+    continuation): an UPTREND (higher highs, higher lows) breaking above
+    its own most recent swing high confirms bullish continuation
+    (`"bullish_bos"`); a DOWNTREND breaking below its own most recent
+    swing low confirms bearish continuation (`"bearish_bos"`). A given
+    candle series and trend state can produce a CHOCH or a BOS, never
+    both -- the trend/break-direction combination that satisfies one is
+    the exact combination the other requires to NOT fire.
+
+    Returns `{"type", "broken_level", "broken_index", "confirm_index"}`
+    or `None` -- identical shape to `detect_choch_mss`'s own return
+    value, so callers can handle either uniformly.
+    """
+    if len(candles) < 2 * n + 3:
+        return None
+
+    swing_highs = find_swing_highs(candles, n)
+    swing_lows = find_swing_lows(candles, n)
+    if swept_index is not None:
+        swing_highs = [i for i in swing_highs if i >= swept_index]
+        swing_lows = [i for i in swing_lows if i >= swept_index]
+    if len(swing_highs) < 2 or len(swing_lows) < 2:
+        return None
+
+    last_idx = len(candles) - 1
+    last_close = cf(candles[last_idx], "close")
+
+    high_vals = [cf(candles[i], "high") for i in swing_highs]
+    low_vals = [cf(candles[i], "low") for i in swing_lows]
+
+    uptrend = high_vals[-1] > high_vals[-2] and low_vals[-1] > low_vals[-2]
+    downtrend = high_vals[-1] < high_vals[-2] and low_vals[-1] < low_vals[-2]
+
+    if uptrend:
+        level_idx = swing_highs[-1]
+        level = high_vals[-1]
+        if level_idx < last_idx and last_close > level:
+            return {
+                "type": "bullish_bos",
+                "broken_level": level,
+                "broken_index": level_idx,
+                "confirm_index": last_idx,
+            }
+    elif downtrend:
+        level_idx = swing_lows[-1]
+        level = low_vals[-1]
+        if level_idx < last_idx and last_close < level:
+            return {
+                "type": "bearish_bos",
                 "broken_level": level,
                 "broken_index": level_idx,
                 "confirm_index": last_idx,
