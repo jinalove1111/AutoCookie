@@ -974,3 +974,63 @@ similarly-named buffer constant.
 **Status**: 7 tests (`tests/test_strategy_exit_point_engine.py`),
 real-detector integration style. Like the Entry Point Engine, not yet
 wired into any live/paper trading path.
+
+## 25. HTF/LTF confluence is a pure 0-3 confirmation score, never a gate, built on 3 checks reusing detectors called against the HTF series
+
+**Decision**: `app.strategy.htf_ltf_confluence.evaluate_htf_ltf_
+confluence(direction, entry_zone, htf_candles)` scores how much a real
+HTF series confirms an LTF entry candidate via 3 independent checks,
+each reusing an existing detector called against `htf_candles` instead
+of `ltf_candles`:
+
+1. `htf_premium_discount_alignment` -- the LTF direction isn't on the
+   wrong half of the HTF premium/discount range (`calculate_premium_
+   discount` on `htf_candles`).
+2. `htf_pd_array_overlap` -- the LTF entry zone overlaps a real,
+   direction-matching HTF Order Block or HTF FVG (`detect_order_block`/
+   `detect_fair_value_gap` on `htf_candles`).
+3. `htf_liquidity_draw` -- real HTF liquidity exists beyond the entry to
+   draw price toward, reusing `exit_point_engine.find_exit_targets`
+   directly against `htf_candles` (a non-empty target list = a real
+   draw exists).
+
+Returns a `confluence_score` (0-3, the count of checks that passed), a
+per-check boolean breakdown, and a reasons list.
+
+**Why 3 checks, these specific 3**: no spec document defines Jade's
+exact HTF/LTF confluence rules (unlike the Entry Point Engine); per
+operator instruction (2026-07-12: "if any ambiguity exists, implement
+the most reasonable ICT/Jade interpretation and document it here
+instead of waiting for approval"), these are standard ICT/SMC "does the
+bigger picture agree" concepts already represented by detectors this
+project already has, just called against a genuinely separate HTF
+series (same discipline as `bias.py`'s existing HTF/LTF separation,
+docs/strategy_spec.md section 1) -- rather than inventing new detection
+logic, this module composes 3 existing detectors against a different
+input. `find_exit_targets` reuse for check 3 is itself notable: an
+HTF-series "is there room to run" check IS an exit-target search, just
+scoped to the higher timeframe, so calling the Exit Point Engine
+directly (decision #24) instead of re-deriving liquidity-draw logic
+avoids a third implementation of the same concept.
+
+**Why a score, never a reject**: same "ranking/scoring only" discipline
+already established for Entry Model 1's displacement preference
+(decision #23) -- this module has no basis (no spec, no backtest
+evidence) for choosing a "minimum acceptable confluence" threshold, so
+it reports what it found and defers any accept/reject decision entirely
+to whatever consumes this output. Inventing a threshold here would be
+exactly the kind of unevidenced rule this project's "evidence over
+assumption" discipline (`ROADMAP.md`'s guiding principle) exists to
+prevent.
+
+**Why the LTF entry zone's MIDPOINT is used as the reference price for
+check 3** (`find_exit_targets` needs a single `entry_price`, but
+`entry_zone` is a range): the simplest, most defensible single
+representative point for "is there room beyond this zone" without
+favoring either the zone's near or far edge -- no spec or existing
+convention states otherwise.
+
+**Status**: 12 tests (`tests/test_strategy_htf_ltf_confluence.py`),
+real-detector integration style. Not yet wired into any live/paper
+trading path or into `find_entry_point`'s own output, same status as
+the Entry/Exit Point Engines (decisions #23/#24).
