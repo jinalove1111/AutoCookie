@@ -1146,3 +1146,43 @@ the module itself, plus 3 new tests in
 backend tests passing. This closes out ALL 7 of the spec's Liquidity
 Raid sources -- Entry Model 2 is now feature-complete, not just
 Equal-High/Low-only.
+
+## 28. Jade modules composed by a separate top-level function, not by merging them into `find_entry_point` itself
+
+**Decision**: `app.strategy.jade_trade_plan.build_trade_plan(ltf_candles,
+htf_candles, bias)` is a NEW, separate top-level function that calls
+`find_entry_point`, `find_exit_targets`, and `evaluate_htf_ltf_
+confluence` in a fixed pipeline and merges their results into one dict
+-- none of the three modules it composes were modified to call each
+other directly.
+
+**Why a separate composer instead of having `find_entry_point` call the
+other two itself**: `find_entry_point`, `find_exit_targets`, and
+`evaluate_htf_ltf_confluence` are independently useful and independently
+tested with zero coupling between them (any one can be called alone,
+with only `ltf_candles`/`htf_candles`/a direction as inputs) -- folding
+exit-target and HTF-confluence computation INTO `find_entry_point`
+would force every caller that only wants entry detection (e.g. a future
+A/B test isolating just the entry-model change) to also pay for exit-
+target and HTF-confluence computation, and would require
+`find_entry_point` to take an `htf_candles` parameter it has never
+needed. A thin composition layer gets the "one full trade plan" call
+site this system will eventually want without coupling the 3 already-
+shipped, already-tested pieces to each other.
+
+**Why `entry_price` for `find_exit_targets` is the entry zone's
+MIDPOINT**: identical reasoning and identical convention to
+`htf_ltf_confluence`'s own choice for the same "a zone, but this
+function needs one price" mismatch (decision #25) -- deliberately kept
+consistent rather than introducing a second convention for the same
+underlying problem.
+
+**Status**: 3 tests (`tests/test_strategy_jade_trade_plan.py`),
+real-detector integration style, 333/333 backend tests passing. Still
+NOT wired into `SignalEngine`/paper trading -- this composer completes
+the DETECTION-side Jade system (entry + exit targets + HTF confluence,
+all reusable independently or together), but wiring any of it into a
+live/paper decision path remains a deliberate, separate step not taken
+in this round, same "detection-only until a wiring decision is made
+deliberately" status every Jade module has shipped with so far
+(decisions #19/#23/#24/#25/#26/#27).
