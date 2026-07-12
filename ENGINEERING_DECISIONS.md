@@ -1526,3 +1526,76 @@ recorded -- this entry exists specifically so the performance
 characteristics of the Jade engine are disclosed alongside its
 strategy-quality findings (which follow in a later entry once the
 actual A/B backtest completes), not silently absent from the record.
+
+## 36. First real A/B result: the Jade engine underperforms the legacy pipeline badly on BTCUSDT at standard scale -- stays opt-in, default off, NOT recommended
+
+**Decision**: `use_jade_engine=True` remains opt-in and default `False`
+everywhere it was wired in (decisions #34/#35) -- this first real
+backtest result does not justify changing that default, and actively
+argues against ever flipping it without a fundamentally different
+finding.
+
+**The test**: `run_backtest.py --symbol BTCUSDT --candles 3000
+--periods 6 --walk-forward`, this project's standard reporting scale
+(same exact methodology/window as every prior A/B test in this
+project), run twice on the identical fetched candle data -- once with
+the existing (legacy `entry_model.build_entry_model`) pipeline, once
+with `--jade-engine`.
+
+| | Legacy (baseline) | Jade engine |
+|---|---|---|
+| Total trades (6 periods) | 47 | 6 |
+| Profitable periods | 6/6 (100%) | 0/6 (0%) |
+| Total PnL | +$1,334.17 | -$77.28 |
+| Max losing streak | 0 | 6 |
+| Walk-forward | **PASSED** (>=66% profitable, <=2 losing streak) | **FAILED** on both criteria |
+
+This is not a close or mixed result: the Jade engine produced roughly
+1/8th as many trades as the legacy pipeline on the identical data, was
+profitable in ZERO of 6 periods (vs. all 6 for the legacy pipeline),
+and lost money in aggregate where the legacy pipeline made $1,334.17.
+
+**Plausible (not yet confirmed) explanation for the trade-count gap**:
+3 of the Jade engine's 5 entry models (Order Block, Breaker Block, Fair
+Value Gap) require the CURRENT (most recent) candle to already be
+actively retracing INTO the zone at that exact bar
+(`_last_candle_overlaps_zone`, ENGINEERING_DECISIONS.md #23) before
+producing a candidate at all. The legacy pipeline's zone selection has
+no equivalent same-bar timing requirement -- it accepts whichever
+zone (FVG/OB/breaker) is most recent among what's currently unmitigated,
+without requiring price to be touching it on this exact candle. This is
+a real structural difference between the two systems worth
+investigating further, but is disclosed here as a HYPOTHESIS, not a
+confirmed root cause -- no isolated test was run to confirm it
+specifically explains the gap.
+
+**Why this is being recorded as a real, if early, negative finding
+rather than "insufficient data, no conclusion yet"**: the gap is large
+enough (0/6 vs 6/6 profitable periods, not a marginal difference) that
+even a single-asset, single-window result is informative -- consistent
+with how this project has always treated a first real result: reported
+honestly, not dismissed for being early, but also explicitly flagged as
+NOT yet cross-asset or cross-year validated (same caveat this project
+applied to every one of its OWN findings before broader validation --
+see decisions on break-even/Breaker Block/partial-TP, all of which
+took 3-4 assets and 2 calendar years before being treated as settled).
+Unlike those features, which were built ON TOP of the same core
+pipeline and A/B tested as narrow, single-variable toggles, the Jade
+engine REPLACES the entire pipeline -- a first bad result here is
+grounds for real caution before investing further validation effort
+onto it, not a false alarm to explain away.
+
+**Recommendation**: do NOT enable `use_jade_engine` in paper trading
+(`settings.USE_JADE_ENGINE` stays `False`) or backtesting by default.
+If the Jade engine is revisited, the highest-value next steps (not
+undertaken in this round) would be: (1) confirm or rule out the
+same-bar-retracement-requirement hypothesis directly, (2) check
+whether the low trade count is specific to BTCUSDT/this window or
+general, (3) only then decide whether further tuning or cross-asset
+validation is worth the effort, given how large this first gap is.
+
+**Status**: 1 asset (BTCUSDT), 1 time window (2026, same 6-period/3000-
+candle-per-period standard scale every prior finding in this project
+used for its OWN first pass), 0 cross-asset or cross-year validation
+yet. Full reports: `scripts/reports/jade_btc_period{1-6}.md`/`.csv`
+alongside the baseline's own `scripts/reports/baseline_btc_period{1-6}.md`/`.csv`.

@@ -111,7 +111,7 @@ approval — this is by design, not an oversight.
 
 ## Test suite
 
-247 backend tests, 0 known failures. Run: `cd backend &&
+363 backend tests, 0 known failures. Run: `cd backend &&
 ./.venv/Scripts/python.exe -m pytest -q`
 (or the platform-appropriate venv path). No frontend test failures
 (`npx tsc --noEmit` clean as of the last frontend-touching change).
@@ -122,6 +122,23 @@ script exercising long/short/idempotency/disabled-gate paths end to end.
 
 ## Current research findings (the actual point of this project)
 
+- **First Jade engine A/B result: bad, stays opt-in/off by default**
+  (2026-07-12). The full Jade methodology (5 entry models, exit
+  targets, HTF confluence, trendline, CRT, session bias -- see
+  `ENGINEERING_DECISIONS.md` #23-#33) was wired end-to-end into
+  `SignalEngine`/`BacktestEngine`/`scripts/run_paper.py` behind
+  `use_jade_engine`/`settings.USE_JADE_ENGINE` (both default `False`)
+  and A/B tested against the existing pipeline at this project's
+  standard scale (BTCUSDT, `--candles 3000 --periods 6 --walk-forward`).
+  **Result: 6 total trades vs. the legacy pipeline's 47 on the same
+  data, 0/6 profitable periods vs. 6/6, -$77.28 total PnL vs. +$1,334.17,
+  walk-forward FAILED vs. PASSED.** Not a marginal or mixed result.
+  A real performance bug (unbounded displacement-candidate complexity)
+  was also found and fixed along the way -- see
+  `ENGINEERING_DECISIONS.md` #35/#36 for the full numbers, the
+  (unconfirmed) hypothesis for the trade-count gap, and why this is
+  disclosed as a real finding despite being only 1 asset/1 window so
+  far. **Not recommended for use; `use_jade_engine` stays off.**
 - **Deep-history backtesting works** (was capped at ~300 candles/~1 day
   until a real OKX pagination bug was fixed). This is the single most
   important infrastructure fix in the project's history — nothing about
