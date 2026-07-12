@@ -1080,3 +1080,69 @@ integration style. Not yet wired into any other module -- like the
 Entry/Exit Point Engines and HTF/LTF confluence (decisions #23/#24/#25),
 this is a standalone, independently-testable piece with no caller yet
 besides its own tests.
+
+## 27. Session/day/week liquidity: standard ICT session windows, day/week math reimplemented (not imported) to avoid an inverted layer dependency, and graceful degradation for non-`datetime` timestamps
+
+**Decision**: `app.strategy.session_liquidity.py` closes the 5 sources
+`entry_point_engine.py`'s Liquidity Raid model left as `TODO`s
+(decision #23): `previous_weekly_high_low`, `previous_daily_high_low`,
+`previous_session_high_low`, `asian_session_high_low`,
+`london_session_high_low`. Asian = 00:00-08:00 UTC, London =
+08:00-16:00 UTC (the commonly-cited ICT convention). Wired into
+`_evaluate_liquidity_raid` as the first 5 sources checked, in that
+priority order (highest timeframe/most significant first), falling
+through to Equal High/Equal Low (the pre-existing 6th source) only if
+none of the 5 produce a confirmed sweep + close-back-inside on the last
+candle.
+
+**Why these specific session windows, and why now (previously
+deferred)**: no spec document defines Jade's exact session windows; per
+operator instruction (2026-07-12: "if any ambiguity exists, implement
+the most reasonable ICT/Jade interpretation and document it here
+instead of waiting for approval"), these are standard, disclosed (not
+backtest-tuned) ICT convention -- unlike the earlier deferral (decision
+#23), which was about not having ANY defensible default, this round's
+instruction explicitly asks for the most reasonable interpretation
+rather than waiting.
+
+**Why day/week boundary math is REIMPLEMENTED here rather than
+importing `app.backtesting.backtest_engine`'s existing `_day_bounds`/
+`_week_bounds`** (same UTC-day/ISO-week convention, deliberately kept
+identical): `backtest_engine.py` already imports from the `strategy`
+package (`SignalEngine`, etc.), so `strategy` importing FROM
+`backtesting` would invert the established layer dependency direction
+(backtesting depends on strategy, never the reverse elsewhere in this
+codebase) for the sake of ~10 lines of date arithmetic. A small,
+disclosed duplication of trivial boundary math is preferable to
+introducing a new, backwards cross-layer dependency; both
+implementations are named and documented as intentionally mirroring the
+same convention (`TradeJournal`'s daily/weekly report boundaries, per
+docs/risk_rules.md), so a future convention change would need to update
+both, which is disclosed here, not hidden.
+
+**Why the 5 session-based sources gracefully degrade (return `None` via
+`entry_point_engine._session_high_low`'s try/except) rather than raise,
+when `timestamp` isn't a real `datetime`**: `session_liquidity.py` is
+the FIRST detector in this entire package that needs `timestamp` parsed
+as a real calendar date -- every other detector only cares about candle
+ORDER (index), so every hand-built candle fixture across this package's
+entire test suite (34 tests in `test_strategy_entry_point_engine.py`
+alone) uses plain strings (`"t0"`, etc.) for that field, since nothing
+ever read it. Real production candles DO carry a real `datetime`
+(`app.data.data_normalizer.normalize_candle` always produces one).
+Raising on a non-`datetime` timestamp would have broken every existing
+test fixture in this package the moment Liquidity Raid started checking
+these 5 new sources; treating it as "source unavailable" instead keeps
+every existing test passing unchanged (proven directly: all 34 pre-existing
+`entry_point_engine` tests pass byte-for-byte after this wiring, with 3
+new tests added specifically to prove BOTH the real-`datetime` path
+(`previous_daily_low`/`previous_weekly_high` fire correctly) AND the
+graceful-degradation path (string timestamps fall through to Equal
+Lows, exactly as the model behaved before this round).
+
+**Status**: 8 new tests (`tests/test_strategy_session_liquidity.py`) for
+the module itself, plus 3 new tests in
+`tests/test_strategy_entry_point_engine.py` proving the wiring. 330/330
+backend tests passing. This closes out ALL 7 of the spec's Liquidity
+Raid sources -- Entry Model 2 is now feature-complete, not just
+Equal-High/Low-only.

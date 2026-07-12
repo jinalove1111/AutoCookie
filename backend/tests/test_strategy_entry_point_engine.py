@@ -7,6 +7,8 @@ strategy test in this package.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from app.strategy.entry_point_engine import (
     _displacement_strength,
     _evaluate_breaker_block,
@@ -226,6 +228,60 @@ def test_liquidity_raid_target_reference_matches_premium_discount_range():
     pd = calculate_premium_discount(candles)
     expected = pd["top"] if pd is not None else None
     assert result["target_reference"] == expected
+
+
+# --- Liquidity Raid: real session/day/week sources (session_liquidity.py,
+# ENGINEERING_DECISIONS.md #27) -- these need real `datetime` timestamps,
+# unlike every fixture above, which uses plain strings -----------------
+
+
+def test_liquidity_raid_long_on_previous_daily_low_swept_and_reclaimed():
+    candles = [
+        candle(95, 100, 90, 95, datetime(2026, 1, 13, 10, tzinfo=timezone.utc)),  # previous day, low=90
+        candle(96, 101, 92, 96, datetime(2026, 1, 13, 14, tzinfo=timezone.utc)),
+        candle(97, 102, 95, 97, datetime(2026, 1, 14, 10, tzinfo=timezone.utc)),  # today so far
+        candle(96, 98, 88, 96, datetime(2026, 1, 14, 12, tzinfo=timezone.utc)),   # sweeps below 90, reclaims
+    ]
+
+    result, reject_reason = _evaluate_liquidity_raid(candles, "bullish")
+
+    assert reject_reason is None
+    assert result["direction"] == "long"
+    assert result["entry_zone"] == {"top": 90, "bottom": 88}
+    assert result["reasons"] == ["previous_daily_low liquidity swept at 90, closed back inside the range"]
+
+
+def test_liquidity_raid_short_on_previous_weekly_high_swept_and_reclaimed():
+    candles = [
+        # ISO week Mon 2026-01-12 - Sun 2026-01-18 (the immediately preceding week).
+        candle(100, 120, 95, 100, datetime(2026, 1, 14, 10, tzinfo=timezone.utc)),
+        candle(100, 110, 95, 100, datetime(2026, 1, 16, 10, tzinfo=timezone.utc)),
+        # ISO week Mon 2026-01-19 - Sun 2026-01-25 ("now").
+        candle(100, 105, 95, 100, datetime(2026, 1, 20, 10, tzinfo=timezone.utc)),
+        candle(100, 125, 95, 96, datetime(2026, 1, 20, 12, tzinfo=timezone.utc)),  # sweeps above 120, reclaims
+    ]
+
+    result, reject_reason = _evaluate_liquidity_raid(candles, "bearish")
+
+    assert reject_reason is None
+    assert result["direction"] == "short"
+    assert result["entry_zone"] == {"top": 125, "bottom": 120}
+    assert result["reasons"] == ["previous_weekly_high liquidity swept at 120, closed back inside the range"]
+
+
+def test_liquidity_raid_string_timestamps_degrade_gracefully_to_equal_lows():
+    """Every OTHER liquidity-raid test in this file uses plain string
+    timestamps (`"t0"`, etc.) -- session_liquidity's 5 sources can't
+    parse those as real dates, so they must be silently skipped (not
+    raise), falling through to Equal Lows exactly as this model behaved
+    before session_liquidity was wired in.
+    """
+    candles = _equal_lows_base_candles() + [candle(6, 6.5, 4.5, 5.5, "t10")]
+
+    result, reject_reason = _evaluate_liquidity_raid(candles, "bullish")
+
+    assert reject_reason is None
+    assert result["reasons"] == ["equal_lows liquidity swept at 5.0, closed back inside the range"]
 
 
 # --- Entry Model 3: Fair Value Gap -------------------------------------

@@ -36,6 +36,13 @@ from .liquidity import detect_equal_highs, detect_equal_lows
 from .market_structure import detect_choch_mss, find_swing_highs, find_swing_lows
 from .order_block import _IMPULSE_MULT, _LOOKBACK, _range, detect_breaker_block, detect_order_block
 from .premium_discount import calculate_premium_discount
+from .session_liquidity import (
+    asian_session_high_low,
+    london_session_high_low,
+    previous_daily_high_low,
+    previous_session_high_low,
+    previous_weekly_high_low,
+)
 from .utils import cf
 
 # Displacement-scoring thresholds (Entry Model 1's "Prefer Displacement-
@@ -46,6 +53,26 @@ from .utils import cf
 # started at before its own eventual sweep.
 _DOMINANT_CANDLE_RATIO = 0.4  # criterion 4: impulse candle's share of the move's total range
 _MIN_BODY_RATIO = 0.5  # criterion 5: impulse candle's body as a fraction of its own range
+
+
+def _session_high_low(fn, candles: list) -> dict | None:
+    """Call a `session_liquidity` high/low function, treating a
+    non-parseable `timestamp` field as "source unavailable" rather than
+    an error. `session_liquidity`'s functions are the only detectors in
+    this package that need `timestamp` as a real `datetime`
+    (`app.data.data_normalizer` produces exactly that for real
+    production candles) -- every hand-built test fixture throughout this
+    package's entire test suite uses plain strings instead (e.g. `"t0"`)
+    since no OTHER detector ever reads the field. Real production
+    candles get the full session/day/week liquidity check; existing
+    string-timestamp test fixtures degrade gracefully to whichever
+    sources don't need it (Equal High/Low), exactly as before this was
+    added -- see ENGINEERING_DECISIONS.md #27.
+    """
+    try:
+        return fn(candles)
+    except (AttributeError, TypeError):
+        return None
 
 
 def _last_candle_overlaps_zone(candles: list, top: float, bottom: float) -> bool:
@@ -276,21 +303,19 @@ def _evaluate_liquidity_raid(candles: list, bias: str) -> tuple[dict | None, str
     back inside, is explicitly "NEVER an entry" per spec, so a bare wick
     with no reclaim produces no result here).
 
-    Liquidity source: Equal High / Equal Low only (`detect_equal_highs`/
-    `detect_equal_lows`, ROADMAP item #5) -- operator decision
-    (2026-07-12): implement only the liquidity detectors that already
-    exist in the codebase; do not build new ones yet. The other 5 of the
-    spec's 7 listed sources are explicit TODOs, deferred pending real
-    session/day/week timezone-boundary definitions this repo doesn't
-    have yet (getting a session boundary wrong would silently produce a
-    WRONG liquidity level, not a missing one, so these are deferred
-    rather than guessed at):
-
-    TODO: Previous Weekly High / Low
-    TODO: Previous Daily High / Low
-    TODO: Previous Session High / Low
-    TODO: Asian High / Low
-    TODO: London High / Low
+    Liquidity sources: all 7 the spec lists, checked in this priority
+    order (highest timeframe/most significant first -- operator decision,
+    2026-07-12, ENGINEERING_DECISIONS.md #27): Previous Weekly High/Low,
+    Previous Daily High/Low, Previous Session High/Low, Asian High/Low,
+    London High/Low (all `session_liquidity.py`, ROADMAP-deferred pending
+    real session/day/week timezone-boundary definitions until that
+    module shipped), then Equal High/Equal Low
+    (`detect_equal_highs`/`detect_equal_lows`, ROADMAP item #5) as the
+    fallback. The first source (in that order) with a confirmed sweep +
+    close-back-inside on the LAST candle wins -- see `_session_high_low`
+    for why the 5 session-based sources gracefully degrade to
+    unavailable (rather than erroring) against candles whose `timestamp`
+    isn't a real `datetime`.
 
     Target Reference ("opposite side of the range" per spec) uses
     `calculate_premium_discount`'s range (the same "current dealing
@@ -308,23 +333,50 @@ def _evaluate_liquidity_raid(candles: list, bias: str) -> tuple[dict | None, str
     last_idx = len(candles) - 1
 
     level = None
+    source = None
     if direction == "long":
-        for z in reversed(detect_equal_lows(candles)):
-            if z["second_index"] >= last_idx:
-                continue
-            if last_low < z["level"] and last_close > z["level"]:
-                level = z["level"]
+        session_sources = (
+            ("previous_weekly_low", previous_weekly_high_low),
+            ("previous_daily_low", previous_daily_high_low),
+            ("previous_session_low", previous_session_high_low),
+            ("asian_low", asian_session_high_low),
+            ("london_low", london_session_high_low),
+        )
+        for name, fn in session_sources:
+            high_low = _session_high_low(fn, candles)
+            if high_low is not None and last_low < high_low["low"] and last_close > high_low["low"]:
+                level, source = high_low["low"], name
                 break
+        if level is None:
+            for z in reversed(detect_equal_lows(candles)):
+                if z["second_index"] >= last_idx:
+                    continue
+                if last_low < z["level"] and last_close > z["level"]:
+                    level, source = z["level"], "equal_lows"
+                    break
     else:
-        for z in reversed(detect_equal_highs(candles)):
-            if z["second_index"] >= last_idx:
-                continue
-            if last_high > z["level"] and last_close < z["level"]:
-                level = z["level"]
+        session_sources = (
+            ("previous_weekly_high", previous_weekly_high_low),
+            ("previous_daily_high", previous_daily_high_low),
+            ("previous_session_high", previous_session_high_low),
+            ("asian_high", asian_session_high_low),
+            ("london_high", london_session_high_low),
+        )
+        for name, fn in session_sources:
+            high_low = _session_high_low(fn, candles)
+            if high_low is not None and last_high > high_low["high"] and last_close < high_low["high"]:
+                level, source = high_low["high"], name
                 break
+        if level is None:
+            for z in reversed(detect_equal_highs(candles)):
+                if z["second_index"] >= last_idx:
+                    continue
+                if last_high > z["level"] and last_close < z["level"]:
+                    level, source = z["level"], "equal_highs"
+                    break
 
     if level is None:
-        return None, "no confirmed equal-high/low liquidity sweep with a close back inside"
+        return None, "no confirmed liquidity sweep with a close back inside"
 
     if direction == "long":
         stop_loss = last_low * (1 - _STOP_BUFFER)
@@ -345,8 +397,7 @@ def _evaluate_liquidity_raid(candles: list, bias: str) -> tuple[dict | None, str
         "target_reference": target_reference,
         "confidence_score": 4,
         "reasons": [
-            f"equal-{'lows' if direction == 'long' else 'highs'} liquidity swept at "
-            f"{level}, closed back inside the range"
+            f"{source} liquidity swept at {level}, closed back inside the range"
         ],
     }, None
 
