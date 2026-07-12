@@ -1221,3 +1221,39 @@ signature (no more explicit `bias` argument) and a real bullish-bias
 HTF fixture (matching `test_strategy_signal_engine.py`'s own
 `_htf_bullish_candles` shape) rather than a hardcoded string. 334/334
 backend tests passing.
+
+## 30. Session Bias reports each completed session's OWN printed direction; it does not predict one session from another
+
+**Decision**: `app.strategy.session_bias.py` (`asian_session_bias`,
+`london_session_bias`, `session_bias_agreement`) reports the directional
+bias a completed session itself printed -- that session's first
+candle's `open` compared to its last candle's `close` (bullish if it
+closed higher, bearish if lower, neutral if unchanged). Reuses
+`session_liquidity.asian_session_high_low`/`london_session_high_low`
+unmodified for session-window detection (their `window_start`/
+`window_end` fields are exactly what's needed to find that session's
+own first/last candle). `session_bias_agreement` reports whether the
+two most recently completed sessions agreed, as an observed fact.
+
+**Why this stops at "what did the session do" and does NOT attempt
+"what does session X predict for session Y"**: a genuinely common ICT
+teaching is a PREDICTIVE claim (e.g. "a bullish Asian session favors
+continuation/expects London to raid the Asian low before reversing
+bullish") -- but that is a specific, falsifiable trading hypothesis
+this project has no backtest evidence for, and per this project's
+"evidence over assumption" discipline (`ROADMAP.md`'s guiding
+principle, and the precedent of `break-even`/`Breaker Block`/`partial-
+TP` all shipping opt-in and unproven until A/B tested — see decisions
+#10/#11), inventing and shipping an unevidenced predictive rule as if
+it were a settled definition would be exactly backwards. Reporting each
+session's own observed bias (an objective fact readable directly from
+its candles) and how the two most recent sessions relate to each other
+(also an objective fact) is the part of "Session Bias" that IS a
+definition, not a hypothesis -- anything predictive built on top of it
+is future, separately-evidenced work, not this module's job.
+
+**Status**: 9 tests (`tests/test_strategy_session_bias.py`),
+real-`datetime` fixtures (same requirement as `session_liquidity.py`,
+the only other detector needing real calendar time). 343/343 backend
+tests passing. Not yet wired into `jade_trade_plan`/`SignalEngine` --
+same status as every other standalone Jade module.
