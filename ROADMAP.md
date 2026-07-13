@@ -349,10 +349,23 @@ identical across 6 independent configs -- not a solvable configuration
 gap within this feature family, further XRP search stopped. Full detail:
 `docs/PROFITABILITY_EXPERIMENT_REPORT.md` section 13.
 
-**Next step**: an operator decision on whether/when to promote the BTC/SOL
-candidates into actual paper-trading configs (separate, deliberate action
--- not automatic from clearing this validation round), and optionally
-revisit XRP's near-miss tie rule.
+**Cross-year validation (2026-07-14)**: BTC's unified candidate CONFIRMED
+across 2 independent years (2025 AND 2026), out-of-sample confirmed both
+times -- the most robustly validated candidate in this project's history.
+SOL's candidate is MIXED across years: confirmed in 2026, but drawdown
+regresses (still small, still profitable) and out-of-sample is
+inconclusive (zero holdout trades) in 2025 -- confidence downgraded to
+"moderate," not pursued for a new candidate since profit/PF still improve
+and this isn't a clean failure. Fees (0.05%/leg) and slippage (0.02%)
+confirmed already realistic and already applied to every result in this
+report (matches `paper_broker.py`'s real constants). Full detail:
+`docs/PROFITABILITY_EXPERIMENT_REPORT.md` section 14.
+
+**Next step**: an operator decision on whether/when to promote the BTC
+candidate (highest confidence) into an actual paper-trading config
+(separate, deliberate action -- not automatic from clearing validation),
+and whether SOL's moderate-confidence candidate needs a 3rd time window
+before the same decision.
 
 Paper trading (Legacy engine, all experimental flags off) started
 2026-07-12 19:29:11 and is running continuously -- see

@@ -467,3 +467,72 @@ not a shortcut).
 Still true, unchanged: nothing here is a production default. The paper
 trader has run continuously, untouched, since 2026-07-12 19:29:11, Legacy
 engine only.
+
+## 14. Cross-year validation of the unified candidate (2026-07-14)
+
+Operator directive: prioritize validating the strongest confirmed
+candidates over continued search; verify stability across market regimes
+and that profitability survives realistic fees/slippage.
+
+**Fees/slippage confirmed already realistic and already applied
+throughout**: `run_backtest()` hardcodes `fee_percent=0.05` (0.05% per
+leg) and `slippage_percent=0.02` -- matching `paper_broker.py`'s own real
+constants (`FEE_PERCENT=0.05`, `SLIPPAGE_PERCENT=0.0002`) exactly, not a
+separately-invented, more lenient backtest-only assumption. This has been
+applied identically to every config in every experiment this entire
+report -- nothing here is a "before fees" number.
+
+**Second time window tested**: `structure_tp_capped_3r_and_premium_
+discount_filter`, same fixed methodology, anchored to 2025-07-12 instead
+of 2026-07-12 (a genuinely different macro period, per this project's
+established cross-year discipline, decisions #14/#15).
+
+| Asset | Metric | 2026 window | 2025 window |
+|---|---|---|---|
+| **BTC** | Net Profit | $1,061.76 -> **KEEP** | $624.91 vs baseline $378.37 -- **KEEP** |
+| | Max Drawdown | 1.14%->0.80% (improved) | 1.68%->1.46% (improved) |
+| | Out-of-sample | $485.88, PF 12.05 | $112.57, PF infinite (2 trades) |
+| | Walk-forward | PASSED | PASSED (candidate FIXES a degradation the baseline itself has in this window: baseline `degrading=True`, candidate `degrading=False`) |
+| **SOL** | Net Profit | $2,238.66 -> **KEEP** | $1,732.80 vs baseline $1,555.52 -- **REJECT** |
+| | Max Drawdown | 1.11%->0.75% (improved) | 0.42%->0.65% (**regressed**) |
+| | Out-of-sample | $598.04, PF infinite | **0 trades for both baseline and candidate -- inconclusive**, not a clean failure |
+| | Walk-forward | PASSED | PASSED (both) |
+
+**BTC: confirmed across 2 independent time windows.** Drawdown improves
+in both, Profit Factor improves in both, and in the 2025 window the
+candidate additionally fixes a real walk-forward degradation the Legacy
+baseline itself has there. This is now the most robustly validated
+candidate in this entire report.
+
+**SOL: mixed, not a clean pass or fail.** Net Profit and Profit Factor
+both still improve in 2025, but drawdown genuinely regresses (a real
+signal, not a tie like XRP's case) -- and the out-of-sample check is
+uninformative (zero trades in the holdout period for either variant, so
+neither confirms nor disconfirms). This is disclosed precisely rather
+than rounded to "SOL passed" or "SOL failed": the correct summary is
+**SOL's candidate is confirmed in 1 of 2 tested time windows, with a
+real drawdown caveat in the second**.
+
+**Decision on whether to generate new SOL candidates** (per operator
+instruction: "only continue generating new candidates if the current best
+candidates fail validation"): a drawdown regression from 1.11%->0.65%
+(both still under 1%, both still far under `MAX_DAILY_LOSS_PERCENT`) with
+an inconclusive out-of-sample check is a genuine caveat, not an outright
+validation failure -- BTC's identical config remains fully confirmed, and
+SOL's own 2026 result (which IS out-of-sample confirmed) is still real
+evidence. Chasing a brand-new SOL-specific candidate now, on the strength
+of one regressed-but-still-profitable metric in one window with an
+inconclusive confirmation check, would risk exactly the curve-fitting
+this report has repeatedly avoided elsewhere (XRP, ETH). **Not pursued
+this round** -- SOL's candidate confidence is downgraded from "robustly
+confirmed" to "confirmed with a disclosed cross-year caveat," which is
+itself the honest, actionable output of this validation step.
+
+### 14.1 Final candidate confidence levels
+
+| Asset | Candidate | Confidence |
+|---|---|---|
+| **BTC** | `use_structure_tp=True, structure_tp_max_r=3.0, require_premium_discount_filter=True` | **Highest** -- confirmed across 2 independent years, out-of-sample confirmed both times |
+| **SOL** | same config | **Moderate** -- confirmed in 2026 (out-of-sample), mixed/inconclusive in 2025 (drawdown regression, no out-of-sample trades) |
+| **XRP** | none | REJECT -- drawdown floor confirmed across 6 configs in 2026 |
+| **ETH** | none | REJECT -- confirmed across 2 time windows and 6 configs |

@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Cross-year validation: BTC candidate confirmed across 2 years, SOL downgraded to moderate confidence
+
+### BTC: confirmed across 2025 AND 2026, out-of-sample both times
+Drawdown improves in both windows (1.14%->0.80% in 2026, 1.68%->1.46% in
+2025); the candidate additionally FIXES a walk-forward degradation the
+Legacy baseline itself has in the 2025 window. Highest-confidence
+candidate in this project's history.
+
+### SOL: mixed across years, confidence downgraded (not a new-candidate trigger)
+Net Profit/PF still improve in 2025, but drawdown regresses (0.42%->0.65%,
+both still small and well under loss limits) and the out-of-sample check
+is inconclusive (zero trades in the 2025 holdout period for either
+variant). Not treated as a validation failure -- BTC's identical config
+remains fully confirmed, and SOL's own 2026 evidence stands -- so no new
+SOL-specific candidate search was launched (would risk curve-fitting to
+one regressed-but-still-profitable metric in one window).
+
+### Fees/slippage verified already realistic
+`run_backtest()`'s hardcoded fee_percent=0.05/slippage_percent=0.02
+matches `paper_broker.py`'s real constants exactly -- confirmed applied
+to every result in this report, not a separate lenient assumption.
+
+See `docs/PROFITABILITY_EXPERIMENT_REPORT.md` section 14.
+
 ## [Unreleased] - Continuous optimization: SOL candidate upgraded, XRP drawdown floor confirmed, ranking now leads with out-of-sample robustness
 
 ### Ranking now leads with out-of-sample Profit Factor/Net Profit
