@@ -76,6 +76,20 @@ in-process but never persisted) additively, without touching the running
 process. Full detail: `docs/PROFITABILITY_EXPERIMENT_REPORT.md`,
 `ENGINEERING_DECISIONS.md` #37-#40, `ROADMAP.md`.
 
+## Cross-asset validation (2026-07-13, per-asset optimization round)
+
+`use_structure_tp` promoted to documented CANDIDATE status (still opt-in,
+still NOT a production default, paper trader still Legacy-only) for
+**BTC and SOL** -- both out-of-sample confirmed. **XRP**: no candidate
+(the capped-3R variant ties baseline drawdown rather than beating it).
+**ETH**: no candidate across 2 time windows and 6 config variants --
+diagnosed as a baseline-level regime characteristic in the tested
+windows, not fixable by further tuning without curve-fitting. Ranking
+now uses Net Profit/Profit Factor/Max Drawdown/Sharpe (walk-forward +
+out-of-sample kept as gates ahead of the score, to prevent an unattended
+candidate-generation loop from ranking a curve-fit winner #1). Full
+detail: `docs/PROFITABILITY_EXPERIMENT_REPORT.md` section 12.
+
 ## Core rule completion (MVP) — ✅ COMPLETE (2026-07-12)
 
 Operator directive (2026-07-11): before resuming any parameter

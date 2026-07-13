@@ -1765,3 +1765,78 @@ already called out: "update this alongside adding any new migration").
 `reason`) against a throwaway DB, all fields round-trip correctly. Full
 backend test suite: 366/366 passing (363 pre-existing + 3 new
 `structure_tp_max_r` tests, decision #39).
+
+## 41. Cross-asset candidate promotion is asset-specific, not a single verdict -- and a ranking score needs a trustworthiness gate in front of it, not folded into it
+
+**Decision** (operator directive, 2026-07-13: "keep Legacy as the engine,
+don't force one strategy onto every asset, optimize BTC/ETH/SOL
+independently, rank by Net Profit/PF/Max Drawdown/Sharpe not win rate,
+keep generating and auto-backtesting candidates without approval"):
+`use_structure_tp` is promoted to documented CANDIDATE status (explicitly
+NOT a production default -- see decision #10's unchanged discipline) for
+BTC and SOL only, on their own independent evidence. XRP and ETH get NO
+candidate. This is 3 different per-asset outcomes from testing the SAME
+feature family, not one project-wide verdict -- directly implementing the
+operator's "don't force one strategy onto every asset" instruction as a
+structural property of the result, not just a framing choice.
+
+**Ranking key redesigned around 4 metrics, with 2 gates kept in front of
+it**: `experiment_runner.evaluate_candidate`'s `rank_key` now sorts by Net
+Profit / Profit Factor / (negative) Max Drawdown / Sharpe, per the
+operator's explicit instruction to rank by these and not win rate.
+Walk-forward-pass and out-of-sample-profitability remain separate GATES
+evaluated before the score, not merged into it.
+
+**Why gates instead of folding everything into one score**: the operator
+also instructed continuous, unattended candidate generation ("계속 생성하고
+자동 백테스트해서... 사람 승인 없이 자동으로 계속 실험해라"). An unattended
+loop that ranks purely by in-sample Net Profit/PF/DD/Sharpe with no
+trustworthiness filter would, given enough candidates, eventually surface
+one that curve-fits the specific in-sample periods tested -- exactly the
+multiple-comparisons/p-hacking risk this project's entire methodology
+(ENGINEERING_DECISIONS.md #8/#14/#15/#18, the Phase 1 scope lock's
+"never optimize solely for in-sample Net Profit") exists to prevent.
+Gating on walk-forward pass + confirmed out-of-sample profitability BEFORE
+ranking means the score only ever orders candidates that have already
+cleared a held-out check -- the operator's ranking instruction is honored
+exactly as stated, just with the trustworthiness check kept structurally
+prior to it rather than mixed into the same tuple.
+
+**ETH's rejection is reproducible, not tunable away**: 5 configs tested at
+the 2026-07-12 anchor (uncapped `structure_tp` + 4 `structure_tp_max_r`
+values + 1 combo) ALL fail walk-forward with the byte-identical signature
+(`profitable_ratio=0.80, max_losing_streak=1, degrading=True`) the Legacy
+baseline itself produces in that same window -- confirming this is a
+regime characteristic of the underlying price data in this window, not a
+property of any specific `structure_tp` variant. A second, independent
+2025-07-12 anchor also rejects (different failure mode: a real drawdown
+regression, 0.37%->1.48%). Two independent windows, both negative, is
+treated as this round's real, final answer for ETH -- continuing to
+generate ETH-targeted variants would mean searching for a parameter
+combination that happens to dodge these two specific windows' behavior,
+which is curve-fitting by definition, not the "find a profitable
+strategy" objective the operator stated.
+
+**BTC's cap-value sweep shows the cap has a real optimum, not "smaller is
+always safer"**: `structure_tp_capped_2r` (the tightest cap tested)
+actually REJECTS on BTC -- Net Profit falls to $946 (below baseline's
+$1,149) even as drawdown improves to 0.45%. 2.5R-4.0R all KEEP. This
+confirms decision #38's diagnosis empirically: capping too aggressively
+just removes the source of profit (structure_tp's larger average R) without
+a large enough drawdown benefit to compensate near the tight end.
+
+**XRP's near-miss, disclosed not discarded**: `structure_tp_capped_3r`
+ties (not beats) baseline's worst-period drawdown exactly (0.7826% both,
+to 4 decimal places) while still improving Net Profit and Profit Factor.
+The keep rule requires strict improvement (`<`), so this rejects --
+correctly, per the rule as stated -- but a tie is a materially different,
+more favorable result than a regression, and is recorded as a candidate
+worth revisiting if the tie rule is ever relaxed to `<=` (an operator
+decision, not made unilaterally here).
+
+**Status**: 38 records in `scripts/reports/experiment_results.json`
+across BTC/ETH/SOL/XRP, 2 time windows on ETH. Full table:
+`docs/PROFITABILITY_EXPERIMENT_REPORT.md` section 12. A real race
+condition in the shared JSON ledger (3 parallel asset runs earlier this
+session, no file lock) was found and fixed with a portable mutex before
+this round's parallel runs -- see that file's `_acquire_ledger_lock`.

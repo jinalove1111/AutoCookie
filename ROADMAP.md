@@ -325,11 +325,23 @@ experiment (1 asset, 1 time window) is evidence toward a future decision,
 not sufficient grounds to flip a default, per this project's own standing
 discipline (decisions #14/#15).
 
-**Next step (highest ROI, ready to run)**: cross-asset validation of
-`use_structure_tp` (ETHUSDT/SOLUSDT/XRPUSDT) via
-`scripts/experiment_runner.py --configs structure_tp --symbol <asset>`,
-same fixed-anchor methodology, before any default-flip discussion.
-Cross-year validation (`--end-date 2025-07-12`) is the second priority.
+**Cross-asset validation COMPLETE (2026-07-13)**: `structure_tp` promoted
+to documented CANDIDATE status (not production) for **BTC and SOL**
+(clean keep, out-of-sample confirmed on both). **XRP**: no candidate --
+`structure_tp_capped_3r` ties baseline's drawdown exactly rather than
+strictly improving it, a near-miss worth revisiting if the tie rule is
+ever loosened to `<=` (operator decision, not made this round). **ETH**:
+no viable candidate found across 2 independent time windows and 6 config
+variants -- diagnosed as a Legacy-baseline-level regime characteristic in
+both tested windows, not a `structure_tp`-family defect; NOT something
+further parameter search should chase (would be curve-fitting to the
+specific windows tested). Full detail:
+`docs/PROFITABILITY_EXPERIMENT_REPORT.md` section 12.
+
+**Next step**: an operator decision on whether/when to promote the BTC/SOL
+candidates into actual paper-trading configs (separate, deliberate action
+-- not automatic from clearing this validation round), and optionally
+revisit XRP's near-miss tie rule.
 
 Paper trading (Legacy engine, all experimental flags off) started
 2026-07-12 19:29:11 and is running continuously -- see

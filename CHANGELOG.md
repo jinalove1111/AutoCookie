@@ -4,6 +4,38 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Cross-asset validation: structure_tp promoted to candidate status for BTC/SOL, no candidate for ETH/XRP
+
+### Ranking reworked to Net Profit / Profit Factor / Max Drawdown / Sharpe
+Per operator directive (2026-07-13). Walk-forward-pass and out-of-sample-
+profitability kept as gates ahead of the score (not folded in) -- prevents
+an unattended candidate-generation loop from ranking a curve-fit in-sample
+winner #1. Added Sharpe to `SegmentMetrics` (reuses existing
+`performance.calculate_sharpe_ratio`). Fixed a real race condition in the
+shared JSON results ledger (parallel invocations, no lock -- added a
+portable file-lock mutex).
+
+### 6 new candidate configs (bounded cap-R sweep, no new trading concepts)
+`structure_tp_capped_2r/2_5r/4r` + a cap+premium_discount_filter combo, all
+reusing the already-implemented `structure_tp_max_r` lever.
+
+### Cross-asset results
+- **BTC, SOL**: `use_structure_tp` promoted to documented CANDIDATE status
+  (still opt-in, still not a production default) -- both out-of-sample
+  confirmed, best result of the whole report on SOL (PF 6.81 in-sample,
+  PF 56.45 out-of-sample).
+- **XRP**: no candidate -- `structure_tp_capped_3r` ties baseline's
+  drawdown exactly rather than beating it (a near-miss, not a regression).
+- **ETH**: no candidate -- 5 configs tested at 2026-07-12 all fail
+  walk-forward with the SAME signature the Legacy baseline itself
+  produces in that window (a regime characteristic, not a strategy
+  defect); a second 2025-07-12 window also rejects independently. Not
+  pursued further -- would require curve-fitting to these specific
+  windows.
+
+See `docs/PROFITABILITY_EXPERIMENT_REPORT.md` section 12 and
+`ENGINEERING_DECISIONS.md` #41 for full methodology and diagnosis.
+
 ## [Unreleased] - Profitability sprint: rigorous experiment harness, structure_tp clears the keep bar, paper trading started, observability gaps closed
 
 ### Started paper trading (Legacy engine, all experimental flags off)
