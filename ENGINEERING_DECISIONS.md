@@ -1840,3 +1840,25 @@ across BTC/ETH/SOL/XRP, 2 time windows on ETH. Full table:
 condition in the shared JSON ledger (3 parallel asset runs earlier this
 session, no file lock) was found and fixed with a portable mutex before
 this round's parallel runs -- see that file's `_acquire_ledger_lock`.
+
+**Follow-up (2026-07-13/14, same-day continuous optimization round)**:
+`rank_key` was updated a second time per an explicit follow-up operator
+instruction ("rank every candidate by out-of-sample robustness") to lead
+with out-of-sample Profit Factor/Net Profit, falling back to in-sample
+Net Profit/PF/DD/Sharpe only as tie-breakers -- the gates (walk-forward
+pass, out-of-sample profitable) are unchanged and still evaluated first.
+Two results from applying this: (1) XRP's near-miss from this decision's
+first version was independently reconfirmed via a completely different
+lever -- `premium_discount_filter` (an ENTRY-side change) produces the
+exact same 0.7826% worst-period drawdown as every `structure_tp_max_r`
+(EXIT-side) variant already tested, strong evidence this is an
+irreducible property of the underlying price data in this window, not a
+configuration gap; further XRP search was stopped as genuinely redundant,
+not merely paused. (2) SOL's candidate was upgraded: the SOL analogue of
+BTC's `structure_tp_capped_3r_and_premium_discount_filter` combo (untested
+until this round) has a materially better risk-adjusted profile than
+plain `structure_tp` (drawdown 1.11%->0.75%, a real improvement not a
+tie; Sharpe 0.76->1.08; out-of-sample PF infinite, zero losing trades)
+despite lower raw in-sample profit ($2,238.66 vs $4,292.03) -- promoted as
+the new SOL candidate specifically because the operator's instruction was
+to rank/promote by robustness, not by the single highest raw number.

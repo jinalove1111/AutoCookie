@@ -226,22 +226,34 @@ def evaluate_candidate(
 
     verdict = "KEEP" if not reasons else "REJECT"
 
-    # Ranking score (2026-07-13 update, operator directive: rank by Net
-    # Profit / Profit Factor / Max Drawdown / Sharpe -- explicitly NOT win
-    # rate). Walk-forward-pass and out-of-sample-profitability stay as
-    # GATES ahead of the score, not folded into it -- this is deliberate,
-    # not a deviation from the operator's ranking spec: with many
-    # auto-generated candidates being compared unattended, a pure
-    # in-sample profit/PF/DD/Sharpe ranking WITHOUT a walk-forward/
-    # out-of-sample gate in front of it would let a candidate that curve-
-    # fits the in-sample periods rank #1 on paper while being worthless
-    # out of sample -- exactly the failure mode this project's holdout
-    # discipline (ENGINEERING_DECISIONS.md #8/#14/#15/#18) exists to catch.
-    # Gates answer "is this candidate trustworthy at all"; the score then
-    # answers "how good is it" among trustworthy candidates.
+    # Ranking score (2026-07-13, updated same day per a second operator
+    # directive: "rank every candidate by out-of-sample robustness").
+    # Walk-forward-pass and out-of-sample-profitability stay as GATES
+    # ahead of the score (unchanged rationale -- see below), but the score
+    # itself now leads with OUT-OF-SAMPLE Profit Factor and Net Profit
+    # BEFORE any in-sample figure, then falls back to in-sample Net
+    # Profit / Profit Factor / Max Drawdown / Sharpe as tie-breakers among
+    # candidates with similar out-of-sample robustness. This directly
+    # answers "rank by out-of-sample robustness" rather than "rank by
+    # in-sample profit, confirmed out-of-sample" (the previous ordering) --
+    # a subtle but real difference: two candidates that both clear the
+    # gates can now be told apart by how well each one generalized, not
+    # just by which one fit its own training window better.
+    #
+    # Gates vs. score, unchanged rationale: with many auto-generated
+    # candidates compared unattended, a pure profit/PF/DD/Sharpe ranking
+    # WITHOUT a walk-forward/out-of-sample gate in front of it would let a
+    # candidate that curve-fits the in-sample periods rank #1 on paper
+    # while being worthless out of sample -- exactly the failure mode this
+    # project's holdout discipline (ENGINEERING_DECISIONS.md #8/#14/#15/#18)
+    # exists to catch. Gates answer "is this candidate trustworthy at
+    # all"; the score then answers "how robust/good is it" among
+    # trustworthy candidates.
     rank_key = (
         1 if wf["passed"] else 0,
         1 if out_of_sample.total_pnl > 0 else 0,
+        out_of_sample.profit_factor if out_of_sample.profit_factor != float("inf") else 1e9,
+        out_of_sample.total_pnl,
         in_sample.total_pnl,
         in_sample.profit_factor if in_sample.profit_factor != float("inf") else 1e9,
         -in_sample.max_drawdown_worst,

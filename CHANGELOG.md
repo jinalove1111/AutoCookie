@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Continuous optimization: SOL candidate upgraded, XRP drawdown floor confirmed, ranking now leads with out-of-sample robustness
+
+### Ranking now leads with out-of-sample Profit Factor/Net Profit
+Per a second same-day operator directive ("rank every candidate by
+out-of-sample robustness"). Gates (walk-forward pass, out-of-sample
+profitable) unchanged, still ahead of the score.
+
+### SOL candidate upgraded
+`structure_tp_capped_3r_and_premium_discount_filter` replaces plain
+`structure_tp` as the recommended SOL candidate -- lower raw profit
+($2,238.66 vs $4,292.03 in-sample) but materially better risk-adjusted
+profile: drawdown genuinely improves over baseline (1.11%->0.75%, not
+just ties), Sharpe 1.08 (highest of any SOL config), out-of-sample
+$598.04 with zero losing trades (PF infinite).
+
+### XRP drawdown floor confirmed across 6 independent configs
+baseline, 3 exit-cap values, an entry-side filter, and a combo all
+produce the IDENTICAL worst-period drawdown (0.7826%) -- strong evidence
+this is an irreducible property of one specific trade/period in this
+window, not a solvable configuration gap. Further XRP search stopped
+after this was established twice independently (once via exit-side caps,
+once via an entry-side filter).
+
+See `docs/PROFITABILITY_EXPERIMENT_REPORT.md` section 13.
+
 ## [Unreleased] - Cross-asset validation: structure_tp promoted to candidate status for BTC/SOL, no candidate for ETH/XRP
 
 ### Ranking reworked to Net Profit / Profit Factor / Max Drawdown / Sharpe

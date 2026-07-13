@@ -350,3 +350,79 @@ risk from the opposite direction. The evidence-based stopping point for
 this round is: 2 confirmed candidates, 1 near-miss with a clear next step
 (loosen the drawdown-tie rule to `<=` and re-evaluate, an operator
 decision), 1 asset with a diagnosed, non-strategy-fixable rejection.
+
+## 13. Continuous optimization round (2026-07-13/14): out-of-sample-led ranking, XRP's drawdown floor confirmed, SOL's candidate upgraded
+
+Operator directive: keep experimenting autonomously, rank every candidate
+by out-of-sample robustness specifically, compare only against the Legacy
+baseline, never restart completed work, only promote objectively-improving
+candidates.
+
+**Ranking change**: `evaluate_candidate`'s `rank_key` now leads with
+out-of-sample Profit Factor and Net Profit (after the walk-forward/
+out-of-sample-profitable gates, unchanged), THEN falls back to in-sample
+Net Profit/PF/DD/Sharpe as tie-breakers -- see
+`ENGINEERING_DECISIONS.md` #41 update below for why gates stay separate
+from the score.
+
+### 13.1 XRP's drawdown floor: definitively confirmed, not a configuration gap
+
+Six independent configs tested on XRP now ALL produce the EXACT SAME
+worst-period in-sample drawdown, 0.7826%: baseline, `structure_tp_capped_
+{2.5,3,4}r`, `premium_discount_filter` alone, and the capped+filter combo.
+Since `structure_tp` never touches entry/stop selection and
+`premium_discount_filter` changes entry selection but STILL produces the
+identical figure, this is strong, now-repeated evidence that XRP's
+worst-period drawdown in this window is set by a specific stop-loss-hitting
+trade/price move that no reasonable Legacy-pipeline configuration change
+avoids -- an irreducible floor for this asset/window, not a solvable
+configuration problem. **No further XRP configs were tested after this
+was established twice independently** -- continuing would be redundant,
+not informative (the operator's "never restart completed work" instruction
+applies in spirit even to a still-open question once the answer is this
+consistently confirmed).
+
+### 13.2 SOL: candidate upgraded from `structure_tp` to `structure_tp_capped_3r_and_premium_discount_filter`
+
+The SOL+`premium_discount_filter` combo (uncapped `structure_tp`) was
+tested first, following the pattern that succeeded on BTC (capping fixed
+a combo's drawdown regression there): Net Profit $7,273.55 (the highest
+raw number in this entire report), PF 9.10 -- but in-sample drawdown
+1.13%, marginally WORSE than baseline's 1.11%. REJECT, consistent with
+BTC's same uncapped-combo pattern.
+
+Applying the SAME fix that worked on BTC -- `structure_tp_capped_3r`
+instead of uncapped -- to this SOL combo:
+
+| Metric | SOL baseline | SOL `structure_tp` (prior candidate) | SOL `structure_tp_capped_3r_and_premium_discount_filter` (new candidate) |
+|---|---|---|---|
+| In-sample Net Profit | $1,482.46 | $4,292.03 | $2,238.66 |
+| In-sample Profit Factor | 4.15 | 6.81 | 6.92 |
+| In-sample Max Drawdown | 1.11% | 1.03% | **0.75%** |
+| In-sample Sharpe | 0.76 | n/a (added later) | **1.08** |
+| Out-of-sample | $384.03 (PF 12.72) | $2,278.06 (PF 56.45) | $598.04 (PF infinite -- zero losing trades) |
+| Walk-forward | PASSED 5/5 | PASSED 5/5 | PASSED 5/5 |
+
+The new candidate has LOWER raw profit than plain `structure_tp` but a
+materially BETTER risk-adjusted profile -- drawdown genuinely improves
+(not ties) over baseline, and Sharpe is the highest of any SOL config
+tested. Per the operator's "rank by out-of-sample robustness" instruction
+and "only promote objectively-improving, robust candidates" (not "promote
+whichever has the single highest raw number"), **`structure_tp_capped_3r_
+and_premium_discount_filter` replaces plain `structure_tp` as the SOL
+candidate** -- both remain available, opt-in, non-default; this is a
+refinement of which one is recommended, not a reversal of SOL being a
+strong asset for this feature family.
+
+### 13.3 Updated per-asset candidate table
+
+| Asset | Candidate | Status |
+|---|---|---|
+| **SOL** | `use_structure_tp=True, structure_tp_max_r=3.0, require_premium_discount_filter=True` | **KEEP** -- best risk-adjusted profile in this report |
+| **BTC** | `use_structure_tp=True` (uncapped) | **KEEP** -- unchanged from section 12 |
+| **XRP** | none | REJECT -- drawdown floor confirmed across 6 configs, not solvable within this feature family |
+| **ETH** | none | REJECT -- confirmed across 2 time windows and 6 configs, regime characteristic |
+
+Still true, unchanged: nothing here is a production default. The paper
+trader has run continuously, untouched, since 2026-07-12 19:29:11, Legacy
+engine only.
