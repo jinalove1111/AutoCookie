@@ -42,8 +42,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import statistics
 import sys
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,7 +55,11 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from app.backtesting.performance import calculate_profit_factor, calculate_win_rate  # noqa: E402
+from app.backtesting.performance import (  # noqa: E402
+    calculate_profit_factor,
+    calculate_sharpe_ratio,
+    calculate_win_rate,
+)
 from app.config import settings  # noqa: E402
 
 from run_backtest import (  # noqa: E402
@@ -86,6 +92,18 @@ CONFIGS: dict[str, dict[str, Any]] = {
     # uncapped structure_tp would, never farther. Not a new trading
     # concept -- a bounded version of the same, already-implemented target.
     "structure_tp_capped_3r": {"use_structure_tp": True, "structure_tp_max_r": 3.0},
+    # 2026-07-13 per-asset optimization round: a small, bounded sweep of the
+    # SAME already-implemented cap (not a new trading concept -- see #18's
+    # "one parameter at a time, never a full grid" discipline) at a few
+    # values around the 3.0R point that already cleared BTC/SOL.
+    "structure_tp_capped_2r": {"use_structure_tp": True, "structure_tp_max_r": 2.0},
+    "structure_tp_capped_2_5r": {"use_structure_tp": True, "structure_tp_max_r": 2.5},
+    "structure_tp_capped_4r": {"use_structure_tp": True, "structure_tp_max_r": 4.0},
+    "structure_tp_capped_3r_and_premium_discount_filter": {
+        "use_structure_tp": True,
+        "structure_tp_max_r": 3.0,
+        "require_premium_discount_filter": True,
+    },
 }
 # Deliberately NOT re-included: use_breaker_block/use_breakeven/use_partial_tp/
 # require_full_confluence/use_jade_engine -- already conclusively A/B tested
@@ -108,6 +126,7 @@ class SegmentMetrics:
     max_drawdown_worst: float
     max_drawdown_avg: float
     return_over_drawdown: float
+    sharpe: float
     profitable_periods: int
     period_pnls: list[float] = field(default_factory=list)
 
@@ -129,6 +148,13 @@ def _segment_metrics(results: list, account_balance: float) -> SegmentMetrics:
     else:
         return_over_dd = float("inf") if total_pnl > 0 else 0.0
 
+    # Sharpe on PER-TRADE PnL (calculate_sharpe_ratio's own documented
+    # convention -- see performance.py -- a plain mean/stdev ratio, no
+    # annualization). Consistent unit across every config/asset compared,
+    # even though trade count/duration differs -- not a return-on-time
+    # Sharpe, disclosed as such in the report.
+    trade_pnls = [t["pnl"] for t in all_trades]
+
     return SegmentMetrics(
         periods=len(results),
         total_trades=total_trades,
@@ -140,6 +166,7 @@ def _segment_metrics(results: list, account_balance: float) -> SegmentMetrics:
         max_drawdown_worst=worst_dd,
         max_drawdown_avg=avg_dd,
         return_over_drawdown=return_over_dd,
+        sharpe=calculate_sharpe_ratio(trade_pnls),
         profitable_periods=sum(1 for r in results if r.total_pnl > 0),
         period_pnls=[r.total_pnl for r in results],
     )
@@ -199,18 +226,26 @@ def evaluate_candidate(
 
     verdict = "KEEP" if not reasons else "REJECT"
 
-    # Phase C ranking score: a sortable tuple in the EXACT stated priority
-    # order (walk-forward pass > out-of-sample profitability > profit
-    # factor > drawdown control > expectancy > adequate trade count > net
-    # profit). Higher is better in every position.
+    # Ranking score (2026-07-13 update, operator directive: rank by Net
+    # Profit / Profit Factor / Max Drawdown / Sharpe -- explicitly NOT win
+    # rate). Walk-forward-pass and out-of-sample-profitability stay as
+    # GATES ahead of the score, not folded into it -- this is deliberate,
+    # not a deviation from the operator's ranking spec: with many
+    # auto-generated candidates being compared unattended, a pure
+    # in-sample profit/PF/DD/Sharpe ranking WITHOUT a walk-forward/
+    # out-of-sample gate in front of it would let a candidate that curve-
+    # fits the in-sample periods rank #1 on paper while being worthless
+    # out of sample -- exactly the failure mode this project's holdout
+    # discipline (ENGINEERING_DECISIONS.md #8/#14/#15/#18) exists to catch.
+    # Gates answer "is this candidate trustworthy at all"; the score then
+    # answers "how good is it" among trustworthy candidates.
     rank_key = (
         1 if wf["passed"] else 0,
         1 if out_of_sample.total_pnl > 0 else 0,
+        in_sample.total_pnl,
         in_sample.profit_factor if in_sample.profit_factor != float("inf") else 1e9,
         -in_sample.max_drawdown_worst,
-        in_sample.expectancy,
-        1 if in_sample.total_trades >= MIN_TRADES_FOR_CONFIDENCE else 0,
-        in_sample.total_pnl,
+        in_sample.sharpe,
     )
 
     return {
@@ -258,17 +293,60 @@ def run_one_config(
     }
 
 
-def _append_ledger(records: list[dict], run_meta: dict) -> None:
+_LOCK_PATH = RESULTS_LEDGER.parent / "experiment_results.json.lock"
+_LOCK_STALE_SECONDS = 120  # a lock older than this is assumed to be from a crashed process, not a live one
+
+
+def _acquire_ledger_lock(timeout_seconds: float = 60.0) -> None:
+    """Portable mutex via exclusive file creation (`os.O_CREAT | os.O_EXCL`)
+    -- found necessary after running 3 `experiment_runner.py` invocations in
+    parallel (one per asset) against the SAME shared JSON ledger: each
+    process's read-modify-write of the whole file is not atomic, so two
+    processes writing back-to-back can silently drop each other's records.
+    That specific run got lucky (verified all 14 expected records survived
+    intact), but the race is real and this closes it structurally rather
+    than relying on luck a second time.
+    """
     RESULTS_LEDGER.parent.mkdir(parents=True, exist_ok=True)
-    existing: list[dict] = []
-    if RESULTS_LEDGER.exists():
+    deadline = time.monotonic() + timeout_seconds
+    while True:
         try:
-            existing = json.loads(RESULTS_LEDGER.read_text())
-        except (json.JSONDecodeError, OSError):
-            existing = []
-    for record in records:
-        existing.append({**run_meta, **record})
-    RESULTS_LEDGER.write_text(json.dumps(existing, indent=2, default=str))
+            fd = os.open(str(_LOCK_PATH), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+            return
+        except FileExistsError:
+            try:
+                if time.monotonic() - _LOCK_PATH.stat().st_mtime > _LOCK_STALE_SECONDS:
+                    _LOCK_PATH.unlink(missing_ok=True)
+                    continue
+            except OSError:
+                pass
+            if time.monotonic() > deadline:
+                raise TimeoutError(
+                    f"Could not acquire {_LOCK_PATH} within {timeout_seconds}s "
+                    "-- another experiment_runner.py invocation may be stuck."
+                )
+            time.sleep(0.5)
+
+
+def _release_ledger_lock() -> None:
+    _LOCK_PATH.unlink(missing_ok=True)
+
+
+def _append_ledger(records: list[dict], run_meta: dict) -> None:
+    _acquire_ledger_lock()
+    try:
+        existing: list[dict] = []
+        if RESULTS_LEDGER.exists():
+            try:
+                existing = json.loads(RESULTS_LEDGER.read_text())
+            except (json.JSONDecodeError, OSError):
+                existing = []
+        for record in records:
+            existing.append({**run_meta, **record})
+        RESULTS_LEDGER.write_text(json.dumps(existing, indent=2, default=str))
+    finally:
+        _release_ledger_lock()
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -373,18 +451,18 @@ def main() -> int:
             record["name"], in_sample, out_of_sample, wf, baseline_in_sample
         )
 
-    print("\n" + "=" * 100)
-    print(f"{'config':<45} {'net_profit':>12} {'PF':>7} {'WR':>7} {'DD_worst':>9} {'trades':>7} {'verdict':>10}")
-    print("=" * 100)
+    print("\n" + "=" * 110)
+    print(f"{'config':<45} {'net_profit':>12} {'PF':>7} {'Sharpe':>7} {'DD_worst':>9} {'trades':>7} {'verdict':>10}")
+    print("=" * 110)
     for record in records:
         m = record["combined"]
         v = record["evaluation"]["verdict"]
         print(
             f"{record['name']:<45} {m['total_pnl']:>12.2f} {m['profit_factor']:>7.2f} "
-            f"{m['win_rate']*100:>6.1f}% {m['max_drawdown_worst']*100:>8.2f}% "
+            f"{m['sharpe']:>7.2f} {m['max_drawdown_worst']*100:>8.2f}% "
             f"{m['total_trades']:>7} {v:>10}"
         )
-    print("=" * 100)
+    print("=" * 110)
 
     _append_ledger(records, run_meta)
     print(f"\nResults appended to {RESULTS_LEDGER}")
