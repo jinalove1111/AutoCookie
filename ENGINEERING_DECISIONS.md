@@ -1862,3 +1862,62 @@ tie; Sharpe 0.76->1.08; out-of-sample PF infinite, zero losing trades)
 despite lower raw in-sample profit ($2,238.66 vs $4,292.03) -- promoted as
 the new SOL candidate specifically because the operator's instruction was
 to rank/promote by robustness, not by the single highest raw number.
+
+## 42. `entry_delay_candles`: a real backtest-fidelity gap closed, and the first robustness test it enabled found a material, not cosmetic, failure
+
+**Decision**: `BacktestEngine.run()` gains `entry_delay_candles: int = 0`
+(opt-in, zero effect unless set). When `> 0`, the actual fill price
+shifts to `i + entry_delay_candles`'s own close instead of the signal's
+originally-planned structural `entry_price` -- everything else (stop_loss/
+take_profit levels, position sizing, which both happen against the
+ORIGINAL planned entry/stop) stays unchanged. Implemented via
+`copy.copy(signal)` + attribute overwrite rather than `dataclasses.
+replace()` specifically so it works against ANY signal-shaped object
+(including this project's plain, non-dataclass test fakes), not just the
+real `TradeSignal` dataclass.
+
+**Why this gap existed and mattered**: every backtest this entire project
+has ever run (`run_backtest()`, `experiment_runner.py`, `parameter_sweep.py`,
+all of it) has silently assumed a signal fills INSTANTLY at its planned
+structural price -- zero network/exchange/dispatch latency. This is not
+how real paper/live trading works (`scripts/run_paper.py` polls on a
+fixed interval and then still has to place/confirm an order). No test in
+this project's history had ever quantified how much that zero-latency
+assumption was worth.
+
+**First real use, operator-directed 2026-07-14 robustness validation**:
+tested against the BTC production candidate
+(`use_structure_tp=True, structure_tp_max_r=3.0,
+require_premium_discount_filter=True`) at delays of 0/1/2/3 candles (5m
+timeframe, so 0/5/10/15 minutes). Result: Profit Factor collapses from
+5.24 (no delay) to 0.16 at just ONE candle of delay (a full sign
+reversal, not a graceful degradation) and stays there at 2-3 candles.
+Root cause identified mechanistically, not just observed: this
+candidate's average stop distance is 0.23% of entry price (the
+`structure_tp_max_r`/`premium_discount_filter` combination that won
+sections 12-14's validation produces very tight structural stops) --
+ordinary 5-minute price movement can be comparable to or exceed that
+distance, so a delayed fill routinely lands already invalidated relative
+to the risk math the position was sized against.
+
+**Why this is treated as a material robustness failure, not just another
+disclosed sensitivity** (contrast with the SAME test round's slippage/fee
+stress results, which degrade gracefully and only fail at unrealistic
+extremes -- `docs/ROBUSTNESS_REPORT.md` tests 3/4): a sign-reversing
+collapse from the SHORTEST delay tested is qualitatively different from a
+gradual erosion -- it means the entire backtested edge is conditional on
+an assumption (zero latency) that cannot be guaranteed in any real
+deployment, paper or live. Per the operator's own explicit decision rule
+for this round ("only reject if robustness materially fails"), the
+candidate is NOT promoted as deployable-as-is.
+
+**Status**: 2 new unit tests (`tests/test_backtest_engine.py`) --
+delayed fill uses the later candle's close (not the original signal
+entry_price) with sizing unaffected, and `entry_delay_candles=0` is
+byte-for-byte identical to omitting the parameter. `scripts/run_backtest.py`'s
+wrapper also gained caller-overridable `fee_percent`/`slippage_percent`/
+`account_balance` (previously hardcoded) for the same round's fee/
+slippage stress tests. 368/368 backend tests passing. Full 7-part
+robustness suite: `scripts/robustness_report.py`,
+`scripts/reports/robustness_report.json`,
+`docs/ROBUSTNESS_REPORT.md`.

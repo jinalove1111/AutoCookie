@@ -699,6 +699,59 @@ def test_run_wires_real_settings_risk_per_trade_percent_into_trade_size():
     assert result.trades[0]["size"] == expected_size
 
 
+def test_run_entry_delay_candles_fills_at_the_delayed_candles_close():
+    """entry_delay_candles=1 must fill at the candle ONE STEP AFTER signal
+    generation, using ITS close (not the signal's originally-planned
+    entry_price) as the pre-slippage fill reference -- simulating real
+    dispatch/network/exchange latency (2026-07-14 robustness validation,
+    ENGINEERING_DECISIONS.md #42). Position sizing must stay keyed to the
+    ORIGINAL planned entry/stop (unaffected by the delay).
+    """
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=110.0, direction="long")
+    signal_engine = _FakeSignalEngineFixedSignal(signal)
+    ltf_candles = _flat_ltf_candles(MIN_CANDLES - 1)
+    ltf_candles.append(_c(100, 101, 99, 100, BASE_TS + (MIN_CANDLES - 1) * LTF_STEP))
+    # Delayed fill candle -- close (102) is what the trade must actually
+    # fill against, not the signal's planned 100.
+    ltf_candles.append(_c(101, 103, 100, 102, BASE_TS + MIN_CANDLES * LTF_STEP))
+    ltf_candles.append(_c(102, 111, 101, 105, BASE_TS + (MIN_CANDLES + 1) * LTF_STEP))
+
+    result = BacktestEngine().run(
+        ltf_candles,
+        [],
+        signal_engine,
+        _FakeRiskManager(),
+        account_balance=10000.0,
+        slippage_percent=0.0,
+        entry_delay_candles=1,
+    )
+
+    assert result.total_trades == 1
+    assert result.trades[0]["entry_price"] == 102.0
+    expected_size = calculate_position_size(
+        10000.0, settings.RISK_PER_TRADE_PERCENT, 100.0, 95.0
+    )
+    assert result.trades[0]["size"] == expected_size
+
+
+def test_run_entry_delay_candles_zero_is_unchanged_behavior():
+    """entry_delay_candles=0 (the default) must be byte-for-byte identical
+    to not passing the parameter at all -- backward compatibility for
+    every existing caller."""
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=110.0, direction="long")
+    ltf_candles = _flat_ltf_candles(MIN_CANDLES + 1)
+
+    result_default = BacktestEngine().run(
+        ltf_candles, [], _FakeSignalEngineFixedSignal(signal), _FakeRiskManager(), account_balance=10000.0
+    )
+    result_explicit_zero = BacktestEngine().run(
+        ltf_candles, [], _FakeSignalEngineFixedSignal(signal), _FakeRiskManager(),
+        account_balance=10000.0, entry_delay_candles=0,
+    )
+
+    assert result_default.trades == result_explicit_zero.trades
+
+
 def test_run_skips_degenerate_zero_size_signal_without_recording_a_fake_trade():
     """When entry == stop_loss, `calculate_position_size` returns 0.0 (its
     own division-by-zero guard). `run()` must treat this exactly like a

@@ -157,17 +157,30 @@ def run_backtest(
     require_premium_discount_filter: bool = False,
     use_jade_engine: bool = False,
     structure_tp_max_r: float | None = None,
+    entry_delay_candles: int = 0,
+    fee_percent: float = 0.05,
+    slippage_percent: float = 0.02,
+    account_balance: float = 10000.0,
 ) -> Any:
     """Replay `ltf_candles`/`htf_candles` once through the real
-    Strategy/Risk/Backtest engines."""
+    Strategy/Risk/Backtest engines.
+
+    `fee_percent`/`slippage_percent`/`account_balance` default to this
+    project's standard assumptions (matching `app.execution.paper_broker`'s
+    real constants -- see ENGINEERING_DECISIONS.md #41's fee/slippage
+    verification) but are now caller-overridable -- added for the
+    2026-07-14 robustness validation's fee/slippage stress tests, which
+    need to re-run the SAME candidate under deliberately worse cost
+    assumptions.
+    """
     return BacktestEngine().run(
         ltf_candles,
         htf_candles,
         SignalEngine(),
         RiskManager(),
-        account_balance=10000.0,
-        fee_percent=0.05,
-        slippage_percent=0.02,
+        account_balance=account_balance,
+        fee_percent=fee_percent,
+        slippage_percent=slippage_percent,
         use_breakeven=use_breakeven,
         use_breaker_block=use_breaker_block,
         use_partial_tp=use_partial_tp,
@@ -177,6 +190,7 @@ def run_backtest(
         require_premium_discount_filter=require_premium_discount_filter,
         use_jade_engine=use_jade_engine,
         structure_tp_max_r=structure_tp_max_r,
+        entry_delay_candles=entry_delay_candles,
     )
 
 

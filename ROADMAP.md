@@ -372,11 +372,25 @@ with out-of-sample support in both. `ROADMAP.md`'s own long-standing
 candidate specifically. Full detail:
 `docs/PROFITABILITY_EXPERIMENT_REPORT.md` section 14.2.
 
-**Next step**: an operator decision on whether/when to promote the BTC
-candidate (highest-confidence of the two, 2/3 years) into an actual
-paper-trading config (separate, deliberate action -- not automatic from
-clearing validation), and whether either candidate needs a 2024 check on
-SOL too before that decision.
+**Robustness validation (2026-07-14): NOT PROMOTED — material failure
+found.** Ran the operator's full 7-part robustness suite (Monte Carlo,
+execution delay, slippage stress, fee stress, volatility regimes,
+sessions, leverage) against the BTC candidate as the designated
+production candidate. 5 of 7 tests pass cleanly; 1 (leverage) is a
+non-issue by construction. **Test 2 (randomized execution delay) is a
+material failure**: a single 5-minute delay flips the candidate from
+Profit Factor 5.24 to 0.16 (full sign reversal), traced to its very tight
+average stop distance (0.23% of price). Per the operator's own rule
+("only reject if robustness materially fails"), this candidate is NOT
+promoted as deployable-as-is. Full detail: `docs/ROBUSTNESS_REPORT.md`.
+This does not invalidate sections 12-14's cross-asset/cross-year work --
+it's a latency-fragility finding backtesting alone could never surface
+(`run_backtest()` has always assumed zero-latency fills). **Next step is
+an operator decision** (not assumed): accept only with verified
+sub-candle execution infra, re-derive a wider-stop variant of the SAME
+already-validated feature family, or hold at "validated but not
+deployable" -- explicitly not treated as "go search for a new strategy"
+per this round's own instruction.
 
 Paper trading (Legacy engine, all experimental flags off) started
 2026-07-12 19:29:11 and is running continuously -- see

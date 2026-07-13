@@ -3,6 +3,7 @@
 BACKTEST_MODE only. Never places live orders, never imports execution/.
 """
 
+import copy
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta, timezone
 from typing import Any
@@ -178,6 +179,7 @@ class BacktestEngine:
         require_premium_discount_filter: bool = False,
         use_jade_engine: bool = False,
         structure_tp_max_r: float | None = None,
+        entry_delay_candles: int = 0,
     ) -> "BacktestResult":
         """Replays historical LTF candles (with a time-aligned, no-lookahead
         HTF slice at each step) through the Strategy Engine and Risk Engine
@@ -261,6 +263,18 @@ class BacktestEngine:
         engine against this project's existing, extensively-validated
         strategy (ENGINEERING_DECISIONS.md #35 -- see that entry for
         results once run).
+
+        `entry_delay_candles` (default `0`, opt-in -- 2026-07-14
+        robustness validation, ENGINEERING_DECISIONS.md #42): when `> 0`,
+        simulates real-world dispatch/network/exchange latency between
+        signal generation (candle `i`) and actual order fill (candle
+        `i + entry_delay_candles`). The signal's STRUCTURAL stop_loss/
+        take_profit (and position sizing, which happens before this) are
+        UNCHANGED -- only the fill-price reference shifts to the delayed
+        candle's own close, then the normal slippage model applies on top
+        of that. This can make a trade fill already past its own stop or
+        target if price moved sharply during the delay window -- that is
+        the realistic risk this test exists to surface, not a bug to hide.
 
         Walk-forward, expanding window, one trade open at a time (no
         overlap): starts at index MIN_CANDLES - 1 so LTF signal generation
@@ -375,10 +389,21 @@ class BacktestEngine:
                 continue
 
             trades_today += 1
+            fill_index = i
+            fill_signal = signal
+            if entry_delay_candles > 0:
+                fill_index = min(i + entry_delay_candles, len(ltf_candles) - 1)
+                delayed_price = _get(ltf_candles[fill_index], "close")
+                # copy.copy (not dataclasses.replace) so this works against
+                # ANY signal-shaped object, not just a real dataclass --
+                # e.g. test fakes that duck-type TradeSignal's attributes
+                # without being a dataclass themselves.
+                fill_signal = copy.copy(signal)
+                fill_signal.entry_price = delayed_price
             trade, exit_index, account_balance = self._simulate_trade(
-                signal,
+                fill_signal,
                 ltf_candles,
-                i,
+                fill_index,
                 account_balance,
                 fee_percent,
                 slippage_percent,

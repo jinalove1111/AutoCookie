@@ -4,6 +4,45 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Robustness validation: production candidate NOT PROMOTED, material execution-delay failure found
+
+### Full 7-part robustness suite run against the BTC production candidate
+Monte Carlo (2000-iteration bootstrap), randomized execution delay,
+slippage stress, fee stress, volatility regimes, market sessions,
+leverage analysis. New `scripts/robustness_report.py`,
+`scripts/reports/robustness_report.json`, `docs/ROBUSTNESS_REPORT.md`.
+
+### New: `entry_delay_candles` on `BacktestEngine.run()`
+Closes a real backtest-fidelity gap -- every backtest this project has
+ever run assumed zero-latency instant fills. Opt-in, zero effect unless
+set; shifts the fill price to a later candle's close while leaving
+stop/target/sizing at their original planned levels. 2 new tests.
+`run_backtest()`'s fee_percent/slippage_percent/account_balance are now
+also caller-overridable (previously hardcoded) for the stress tests.
+
+### Result: 5 of 7 tests pass, 1 is a non-issue by construction, 1 is a material failure
+Monte Carlo (0% chance of a negative outcome across 2000 resamples),
+slippage stress, fee stress (both graceful, fail only at unrealistic
+extremes), volatility regimes, and sessions (profitable in every session
+tested) all PASS. Leverage is a non-issue given this codebase's
+risk-based position sizing. **Execution delay is a material failure**:
+Profit Factor collapses from 5.24 (no delay) to 0.16 at a single
+5-minute delay -- a full sign reversal, not a graceful degradation --
+traced to the candidate's very tight average stop distance (0.23% of
+price).
+
+### Candidate NOT PROMOTED, per the operator's own stated rule
+"Only reject if robustness materially fails" -- this is a material
+failure. Does not invalidate the cross-asset/cross-year validation work
+(sections 12-14 of `docs/PROFITABILITY_EXPERIMENT_REPORT.md`) -- it's a
+latency-fragility finding backtest-only validation could never surface.
+Left as an explicit operator decision point (verified low-latency infra,
+a wider-stop variant of the same feature family, or hold) rather than
+auto-triggering a new strategy search, per this round's own "do not
+search for more strategy ideas" instruction.
+
+See `docs/ROBUSTNESS_REPORT.md` and `ENGINEERING_DECISIONS.md` #42.
+
 ## [Unreleased] - Third-year validation (2024): BTC candidate confidence revised from "highest" to "high"
 
 Extended BTC's cross-year check to a 3rd independent year (2024).
