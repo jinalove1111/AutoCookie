@@ -361,11 +361,22 @@ confirmed already realistic and already applied to every result in this
 report (matches `paper_broker.py`'s real constants). Full detail:
 `docs/PROFITABILITY_EXPERIMENT_REPORT.md` section 14.
 
+**Third-year validation (2026-07-14, BTC 2024 anchor)**: revises BTC's
+confidence from "highest" to "high" -- 2024 is a genuinely difficult
+regime where BOTH baseline and candidate fail walk-forward (not a
+candidate-specific defect), but the candidate has FEWER profitable
+periods than baseline in this window (2/5 vs 3/5) despite higher absolute
+profit. BTC remains confirmed in 2 of 3 independent years (2025, 2026)
+with out-of-sample support in both. `ROADMAP.md`'s own long-standing
+"extend cross-year testing to 2024" item is now addressed for this
+candidate specifically. Full detail:
+`docs/PROFITABILITY_EXPERIMENT_REPORT.md` section 14.2.
+
 **Next step**: an operator decision on whether/when to promote the BTC
-candidate (highest confidence) into an actual paper-trading config
-(separate, deliberate action -- not automatic from clearing validation),
-and whether SOL's moderate-confidence candidate needs a 3rd time window
-before the same decision.
+candidate (highest-confidence of the two, 2/3 years) into an actual
+paper-trading config (separate, deliberate action -- not automatic from
+clearing validation), and whether either candidate needs a 2024 check on
+SOL too before that decision.
 
 Paper trading (Legacy engine, all experimental flags off) started
 2026-07-12 19:29:11 and is running continuously -- see

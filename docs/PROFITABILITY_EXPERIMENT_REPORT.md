@@ -532,7 +532,46 @@ itself the honest, actionable output of this validation step.
 
 | Asset | Candidate | Confidence |
 |---|---|---|
-| **BTC** | `use_structure_tp=True, structure_tp_max_r=3.0, require_premium_discount_filter=True` | **Highest** -- confirmed across 2 independent years, out-of-sample confirmed both times |
+| **BTC** | `use_structure_tp=True, structure_tp_max_r=3.0, require_premium_discount_filter=True` | **High** -- confirmed in 2 of 3 independent years (2025, 2026); see 14.2 for the 2024 caveat |
 | **SOL** | same config | **Moderate** -- confirmed in 2026 (out-of-sample), mixed/inconclusive in 2025 (drawdown regression, no out-of-sample trades) |
 | **XRP** | none | REJECT -- drawdown floor confirmed across 6 configs in 2026 |
 | **ETH** | none | REJECT -- confirmed across 2 time windows and 6 configs |
+
+## 14.2 Third independent year (2024): BTC candidate confidence revised down slightly, honestly
+
+A third year was tested on BTC specifically because it's the highest-value
+candidate, extending the validation this project's own history already
+flagged as a natural next step ("extend cross-year testing to 2024" --
+`ROADMAP.md`, pre-dating this session).
+
+| Metric | Baseline (2024) | Candidate (2024) |
+|---|---|---|
+| In-sample Net Profit | $206.67 | $217.88 (higher) |
+| In-sample Profit Factor | 1.41 | 1.42 (marginally higher) |
+| In-sample Max Drawdown | 2.02% | 2.00% (marginally better) |
+| Profitable periods (in-sample) | 3/5 | **2/5 (worse)** |
+| Walk-forward | FAILED (ratio 0.60, streak 2, degrading) | FAILED (ratio 0.40, streak 2, degrading) |
+| Out-of-sample | $154.85, PF 2.08 | $333.78, PF 8.53 (higher) |
+
+**Honest read**: 2024 appears to be a genuinely difficult regime for this
+ENTIRE strategy family -- the Legacy BASELINE itself fails walk-forward
+here (3/5 profitable periods, a degrading trend), same pattern already
+seen for BTCUSDT 2025 at earlier points in this project's history. This is
+not a candidate-specific failure. But the candidate does NOT fix this
+regime's problems the way it fixed 2025's degradation -- it has FEWER
+profitable in-sample periods than baseline (2/5 vs 3/5) despite higher
+absolute profit and a better out-of-sample number. This is a real,
+disclosed nuance: absolute Net Profit still favors the candidate in every
+one of the 3 years tested, but the walk-forward/consistency picture is
+genuinely mixed in the hardest of the 3 regimes tried.
+
+**Revised BTC confidence: HIGH, not HIGHEST.** 2 of 3 independent years
+(2025, 2026) show clean confirmation with out-of-sample support. The 3rd
+(2024) shows the candidate outperforming baseline on raw profit while
+underperforming it on consistency, inside a regime where neither variant
+clears this project's own walk-forward bar. This is reported precisely
+rather than rounded up (an earlier draft of this section, based on only 2
+years, called BTC "the most robustly validated candidate... highest
+confidence" -- corrected here now that a 3rd data point exists, per this
+project's own standing rule that a claim's evidentiary base must be
+stated exactly, not rounded favorably; ENGINEERING_DECISIONS.md #15).

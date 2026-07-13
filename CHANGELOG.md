@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Third-year validation (2024): BTC candidate confidence revised from "highest" to "high"
+
+Extended BTC's cross-year check to a 3rd independent year (2024).
+Baseline itself fails walk-forward in this window (3/5 profitable
+periods, degrading) -- a regime-level difficulty, not candidate-specific.
+The candidate has HIGHER raw profit and out-of-sample PF than baseline in
+2024, but FEWER profitable in-sample periods (2/5 vs 3/5) and also fails
+walk-forward. Reported precisely rather than rounded favorably: BTC's
+candidate is confirmed in 2 of 3 independent years (2025, 2026), not a
+clean 3-for-3 record. This corrects the previous entry's "highest
+confidence" framing, which was based on only 2 years. See
+`docs/PROFITABILITY_EXPERIMENT_REPORT.md` section 14.2.
+
 ## [Unreleased] - Cross-year validation: BTC candidate confirmed across 2 years, SOL downgraded to moderate confidence
 
 ### BTC: confirmed across 2025 AND 2026, out-of-sample both times
