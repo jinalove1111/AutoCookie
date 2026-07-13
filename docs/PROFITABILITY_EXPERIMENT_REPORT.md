@@ -414,7 +414,7 @@ candidate** -- both remain available, opt-in, non-default; this is a
 refinement of which one is recommended, not a reversal of SOL being a
 strong asset for this feature family.
 
-### 13.3 Updated per-asset candidate table
+### 13.3 Updated per-asset candidate table (superseded by 13.4 for BTC -- see below)
 
 | Asset | Candidate | Status |
 |---|---|---|
@@ -422,6 +422,47 @@ strong asset for this feature family.
 | **BTC** | `use_structure_tp=True` (uncapped) | **KEEP** -- unchanged from section 12 |
 | **XRP** | none | REJECT -- drawdown floor confirmed across 6 configs, not solvable within this feature family |
 | **ETH** | none | REJECT -- confirmed across 2 time windows and 6 configs, regime characteristic |
+
+### 13.4 Consistency correction: BTC's candidate re-evaluated under the SAME robustness-first ranking, no new backtest run
+
+Re-examining data ALREADY COLLECTED in section 12 (no new backtest --
+pure re-analysis, per "never restart completed work") under the same
+out-of-sample-robustness-first ranking just applied to SOL:
+
+| Metric | BTC `structure_tp` (uncapped) | BTC `structure_tp_capped_3r_and_premium_discount_filter` |
+|---|---|---|
+| In-sample Net Profit | $2,731.46 | $1,061.76 |
+| In-sample Profit Factor | 6.29 | 4.31 |
+| In-sample Max Drawdown | 1.14% | **0.80%** |
+| In-sample Sharpe | 0.54 | **0.77** |
+| Out-of-sample Net Profit | $611.01 | **$485.88** (lower) |
+| Out-of-sample Profit Factor | 5.77 | **12.05** |
+
+The same pattern found on SOL holds on BTC: the capped+filter combo has
+materially better drawdown, Sharpe, AND out-of-sample Profit Factor (the
+FIRST criterion in the updated rank_key), despite lower raw profit on
+both segments. Under the ranking actually being used this round (OOS PF
+first), this combo outranks plain `structure_tp` for BTC too.
+
+**Updated conclusion: the SAME single configuration --
+`use_structure_tp=True, structure_tp_max_r=3.0,
+require_premium_discount_filter=True` -- is the best risk-adjusted
+candidate for BOTH BTC and SOL.** This is a cleaner result than two
+different per-asset configs, though it was NOT assumed or forced -- it
+fell out of applying the same ranking rule independently to each asset's
+own data (the operator's "optimize each asset independently, don't force
+one strategy onto every asset" instruction was followed literally; that
+both independent optimizations converged on the same answer is a finding,
+not a shortcut).
+
+### 13.5 Final per-asset candidate table (supersedes 13.3)
+
+| Asset | Candidate | Status |
+|---|---|---|
+| **BTC** | `use_structure_tp=True, structure_tp_max_r=3.0, require_premium_discount_filter=True` | **KEEP** |
+| **SOL** | `use_structure_tp=True, structure_tp_max_r=3.0, require_premium_discount_filter=True` | **KEEP** (identical config to BTC) |
+| **XRP** | none | REJECT -- drawdown floor confirmed across 6 configs |
+| **ETH** | none | REJECT -- confirmed across 2 time windows and 6 configs |
 
 Still true, unchanged: nothing here is a production default. The paper
 trader has run continuously, untouched, since 2026-07-12 19:29:11, Legacy

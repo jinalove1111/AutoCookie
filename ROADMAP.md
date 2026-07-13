@@ -338,12 +338,15 @@ further parameter search should chase (would be curve-fitting to the
 specific windows tested). Full detail:
 `docs/PROFITABILITY_EXPERIMENT_REPORT.md` section 12.
 
-**Continuous optimization round (2026-07-13/14)**: SOL's candidate
-upgraded to `structure_tp_capped_3r_and_premium_discount_filter` (better
-Sharpe/drawdown than plain `structure_tp`, out-of-sample confirmed with
-zero losing trades). XRP's drawdown floor (0.7826%) confirmed identical
-across 6 independent configs -- not a solvable configuration gap within
-this feature family, further XRP search stopped. Full detail:
+**Continuous optimization round (2026-07-13/14)**: applying the same
+out-of-sample-robustness-first ranking to BOTH BTC and SOL independently
+converged on the SAME best candidate config for both:
+`use_structure_tp=True, structure_tp_max_r=3.0,
+require_premium_discount_filter=True` (better Sharpe/drawdown/
+out-of-sample Profit Factor than plain `structure_tp` on both assets,
+despite lower raw profit). XRP's drawdown floor (0.7826%) confirmed
+identical across 6 independent configs -- not a solvable configuration
+gap within this feature family, further XRP search stopped. Full detail:
 `docs/PROFITABILITY_EXPERIMENT_REPORT.md` section 13.
 
 **Next step**: an operator decision on whether/when to promote the BTC/SOL

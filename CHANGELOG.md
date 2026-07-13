@@ -27,6 +27,14 @@ window, not a solvable configuration gap. Further XRP search stopped
 after this was established twice independently (once via exit-side caps,
 once via an entry-side filter).
 
+### BTC candidate re-evaluated under the same ranking (no new backtest)
+Re-analyzed already-collected BTC data under the robustness-first ranking
+just applied to SOL: `structure_tp_capped_3r_and_premium_discount_filter`
+outranks plain `structure_tp` on BTC too (drawdown 1.14%->0.80%, Sharpe
+0.54->0.77, out-of-sample PF 5.77->12.05, despite lower raw profit).
+**Both BTC and SOL now share the SAME best candidate config** --
+independently derived, not assumed.
+
 See `docs/PROFITABILITY_EXPERIMENT_REPORT.md` section 13.
 
 ## [Unreleased] - Cross-asset validation: structure_tp promoted to candidate status for BTC/SOL, no candidate for ETH/XRP
