@@ -6,6 +6,10 @@ sub-detector -- nothing here is mocked.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
+import pytest
+
 from app.strategy.bias import detect_htf_bias
 from app.strategy.market_structure import find_previous_swing_high
 from app.strategy.premium_discount import calculate_premium_discount
@@ -88,6 +92,51 @@ def test_signal_engine_generates_long_signal_on_real_confluence():
     assert signal.status == "pending"
     assert signal.stop_loss < signal.entry_price < signal.take_profit
     assert signal.fvg_zone is not None
+
+
+def test_generate_signal_require_session_asian_allows_signal_inside_window():
+    """require_session="asian" (opt-in, default None -- 2026-07-14
+    continuous research mode, docs/CONTINUOUS_RESEARCH_LOG.md experiment
+    3) must NOT reject an otherwise-valid signal whose current candle
+    falls inside the Asian window (00:00-08:00 UTC, reused unmodified
+    from session_liquidity.py)."""
+    ltf_candles = _bullish_confluence_candles()
+    ltf_candles[-1] = {**ltf_candles[-1], "timestamp": datetime(2026, 1, 1, 3, 0, tzinfo=timezone.utc)}
+    signal = SignalEngine().generate_signal(
+        "BTCUSDT", ltf_candles, _bullish_confluence_candles(), require_session="asian"
+    )
+    assert signal is not None
+    assert signal.direction == "long"
+
+
+def test_generate_signal_require_session_asian_rejects_signal_outside_window():
+    """Same fixture, current candle moved to 12:00 UTC (London, not
+    Asian) -- must reject even though every other confluence condition
+    still holds."""
+    ltf_candles = _bullish_confluence_candles()
+    ltf_candles[-1] = {**ltf_candles[-1], "timestamp": datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)}
+    signal = SignalEngine().generate_signal(
+        "BTCUSDT", ltf_candles, _bullish_confluence_candles(), require_session="asian"
+    )
+    assert signal is None
+
+
+def test_generate_signal_require_session_gracefully_skipped_for_non_datetime_timestamp():
+    """Every hand-built fixture in this file uses plain string timestamps
+    (e.g. "t16") -- require_session must degrade to "not rejected" rather
+    than crash, same convention as session_liquidity.py's other
+    timestamp-aware code (ENGINEERING_DECISIONS.md #27)."""
+    signal = SignalEngine().generate_signal(
+        "BTCUSDT", _bullish_confluence_candles(), _bullish_confluence_candles(), require_session="asian"
+    )
+    assert signal is not None
+
+
+def test_generate_signal_require_session_invalid_value_raises():
+    with pytest.raises(ValueError):
+        SignalEngine().generate_signal(
+            "BTCUSDT", _bullish_confluence_candles(), _bullish_confluence_candles(), require_session="tokyo"
+        )
 
 
 def test_signal_engine_refuses_to_re_signal_a_zone_price_has_already_retested():

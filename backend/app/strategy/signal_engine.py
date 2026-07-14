@@ -21,7 +21,10 @@ from .market_structure import (
 )
 from .order_block import detect_breaker_block, detect_order_block
 from .premium_discount import calculate_premium_discount
+from .session_liquidity import _ASIAN_SESSION, _LONDON_SESSION
 from .utils import cf, is_zone_mitigated
+
+_SESSION_WINDOWS = {"asian": _ASIAN_SESSION, "london": _LONDON_SESSION}
 
 
 @dataclass
@@ -68,6 +71,7 @@ class SignalEngine:
         require_premium_discount_filter: bool = False,
         use_jade_engine: bool = False,
         structure_tp_max_r: float | None = None,
+        require_session: str | None = None,
     ) -> "TradeSignal | None":
         """Analyze market structure for `symbol` and produce a TradeSignal, or None.
 
@@ -194,6 +198,39 @@ class SignalEngine:
 
         if use_jade_engine:
             return self._generate_signal_via_jade_engine(symbol, ltf_candles, htf_candles)
+
+        # require_session (opt-in, default None -- 2026-07-14 continuous
+        # research mode, docs/CONTINUOUS_RESEARCH_LOG.md experiment 3):
+        # reuses session_liquidity.py's ALREADY-DISCLOSED Asian/London
+        # window constants (not a new indicator) as an ENTRY-TIMING gate --
+        # rejects a signal outright if the current (most recent) LTF
+        # candle's timestamp falls outside the named session, exactly the
+        # same "missing/failing structure never produces a signal" pattern
+        # every other detector in this pipeline already follows. Motivated
+        # directly by docs/ROBUSTNESS_REPORT.md test 6, which found the
+        # Asian session dominates both trade volume and quality for the
+        # production candidate (PF 4.65 vs London's 2.41). Gracefully
+        # skipped (no rejection) if the candle's timestamp isn't a real
+        # `datetime` -- same degradation this package's other session-aware
+        # code already uses (ENGINEERING_DECISIONS.md #27), since every
+        # hand-built test fixture elsewhere in this package uses plain
+        # string timestamps.
+        if require_session is not None:
+            window = _SESSION_WINDOWS.get(require_session)
+            if window is None:
+                raise ValueError(
+                    f"require_session must be one of {list(_SESSION_WINDOWS)}, got {require_session!r}"
+                )
+            ts = cf(ltf_candles[-1], "timestamp")
+            try:
+                current_time = ts.time()
+            except AttributeError:
+                current_time = None
+            if current_time is not None:
+                start, end = window
+                in_window = start <= current_time < end
+                if not in_window:
+                    return None
 
         bias = detect_htf_bias(htf_candles)
         sweep = detect_liquidity_sweep(ltf_candles)

@@ -161,6 +161,7 @@ def run_backtest(
     fee_percent: float = 0.05,
     slippage_percent: float = 0.02,
     account_balance: float = 10000.0,
+    require_session: str | None = None,
 ) -> Any:
     """Replay `ltf_candles`/`htf_candles` once through the real
     Strategy/Risk/Backtest engines.
@@ -191,6 +192,7 @@ def run_backtest(
         use_jade_engine=use_jade_engine,
         structure_tp_max_r=structure_tp_max_r,
         entry_delay_candles=entry_delay_candles,
+        require_session=require_session,
     )
 
 
