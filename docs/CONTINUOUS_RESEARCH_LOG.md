@@ -110,3 +110,52 @@ profitable across regimes" for this specific candidate. Continuing
 research into other dimensions (time filters, position sizing) rather
 than fine-grinding this one parameter further without a stronger signal
 that a viable point exists.
+
+## Experiment 3: Asian-session-only entry filter
+
+**Motivation**: `docs/ROBUSTNESS_REPORT.md` test 6 found the Asian
+session dominates both trade volume and quality for the production
+candidate (Profit Factor 4.65 vs London's 2.41). New opt-in
+`require_session` parameter on `SignalEngine.generate_signal` (reuses
+`session_liquidity.py`'s already-disclosed Asian/London window constants
+directly -- no new indicator, 4 new tests). Question: does restricting
+entries to the Asian window improve the candidate's profitability and/or
+robustness?
+
+**Method**: `scripts/research_session_filter.py` -- candidate vs.
+candidate+`require_session="asian"`, both 2026 and 2025 anchors tested up
+front (not sequentially gated), same fixed-anchor methodology.
+
+### Results
+
+| Anchor | Config | Net Profit | Profit Factor | Sharpe | Max DD | Trades | Profitable periods |
+|---|---|---|---|---|---|---|---|
+| 2026 | candidate | $1,547.64 | 5.24 | 0.90 | 0.80% | 42 | 6/6 |
+| 2026 | candidate + Asian only | $1,048.60 | 4.74 | 0.83 | 0.45% | 30 | 6/6 |
+| 2025 | candidate | $737.48 | 3.48 | 0.65 | 1.46% | 26 | 5/6 |
+| 2025 | candidate + Asian only | $281.74 | 2.53 | 0.47 | 1.12% | 13 | 4/6 |
+
+### Verdict: REJECTED -- worse on profit/PF/Sharpe in BOTH years, no compensating benefit
+
+Not a "looked good, failed the second year" case -- the Asian-only filter
+is UNIFORMLY worse on Net Profit, Profit Factor, and Sharpe in both
+independent years tested, with trade count roughly halving each time
+(2025's 13 trades is thin enough to also be a small-sample concern on top
+of the direction being wrong). The only upside is a modest drawdown
+improvement in both years -- real, but not large enough to justify giving
+up this much profit, and critically, this filter does nothing to address
+the actual material robustness failure (execution-delay fragility) that
+motivated this whole research thread. Per the operator's rule ("reject
+any improvement that fails cross-year... validation" -- this fails on
+direction, not just consistency), rejected outright.
+
+## Next experiment (queued)
+
+Pivoting to "entry confirmation" (explicitly in-scope): rather than
+widening stops (rejected) or filtering by session (rejected), test
+whether an entry-confirmation gate -- skip the fill entirely if the
+delayed price has moved too far from the originally-planned entry, rather
+than filling at a now-invalidated level -- can fix the execution-delay
+material failure without the profitability cost seen in experiments 1-3.
+This directly targets the root problem (identified in
+`docs/ROBUSTNESS_REPORT.md` test 2) rather than a proxy for it.
