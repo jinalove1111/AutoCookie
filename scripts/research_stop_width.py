@@ -42,16 +42,19 @@ SYMBOL = "BTCUSDT"
 TIMEFRAME = "5m"
 CANDLES_PER_PERIOD = 3000
 PERIODS = 6
-ANCHOR = "2025-07-12"
+ANCHOR = "2026-07-12"
 CANDIDATE_KWARGS: dict[str, Any] = {
     "use_structure_tp": True,
     "structure_tp_max_r": 3.0,
     "require_premium_discount_filter": True,
 }
-STOP_BUFFER_VALUES = [0.0015, 0.01]  # baseline (0.15%), 1% -- 2% dropped after the
-# first (2026) run showed it collapses to 2 trades, pure noise, not worth
-# repeating on a second year.
-OUTPUT_PATH = SCRIPT_DIR / "reports" / f"research_stop_width_{ANCHOR}.json"
+# Experiment 2: 1% (~7x baseline) was REJECTED after cross-year testing
+# (see docs/CONTINUOUS_RESEARCH_LOG.md experiment 1) -- unprofitable in
+# 2025 even with no delay. Testing more modest widths (2x/3x baseline)
+# to see if a smaller step avoids the trade-count collapse / profitability
+# reversal seen at 1%, while still meaningfully improving delay-robustness.
+STOP_BUFFER_VALUES = [0.0015, 0.003, 0.005]  # baseline, 0.3%, 0.5%
+OUTPUT_PATH = SCRIPT_DIR / "reports" / f"research_stop_width_exp2_{ANCHOR}.json"
 
 
 def _fetch() -> tuple[list, list]:

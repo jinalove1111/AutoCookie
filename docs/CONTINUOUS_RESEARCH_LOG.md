@@ -69,10 +69,44 @@ sample sizes got so thin (15, then 3, then 2 trades) -- not enough
 signals survive the concurrency guard's longer hold times to build a
 trustworthy sample at this window length.
 
-## Next experiment (queued)
+## Experiment 2: moderate `_STOP_BUFFER` widths (0.3%, 0.5%) -- 2026 window
 
-A more modest buffer widening (e.g. 0.3%-0.5%, roughly 2-3x baseline
-rather than 1%'s ~7x) might land in a zone that improves delay-robustness
-meaningfully without the trade-count collapse and profitability reversal
-seen at 1%. Testing next, same 2-year methodology, before considering
-this lever exhausted.
+**Motivation**: experiment 1's 1% buffer (~7x baseline) fixed delay-
+robustness in 2026 but failed cross-year (unprofitable in 2025 even
+without delay). Testing more modest widths (2-3x baseline) to see if a
+smaller step finds a zone that's delay-robust without the trade-count
+collapse/profitability reversal seen at 1%.
+
+### Results (2026-07-12 anchor)
+
+| Buffer | Avg stop % | No-delay PnL | No-delay PF | Delay-1 PnL | Delay-1 PF | Trades |
+|---|---|---|---|---|---|---|
+| 0.15% (baseline) | 0.238% | $1,547.64 | 5.24 | -$1,239.23 | 0.16 | 42 |
+| 0.30% | 0.391% | $1,941.93 | 10.45 | -$981.03 | 0.22 | 39 |
+| 0.50% | 0.592% | $1,488.39 | 7.91 | -$558.76 | 0.26 | 32 |
+| 1.00% (experiment 1) | 1.100% | $838.97 | 31.18 | +$137.85 | 3.22 | 15 |
+
+### Verdict: REJECTED at both widths -- monotonic improvement, but neither clears the bar
+
+Delay-1 losses shrink monotonically as the buffer widens (-$1,239 ->
+-$981 -> -$559 -> +$138), and 0.30% is even a genuine no-delay
+improvement over baseline (PF 10.45 vs 5.24) -- but at 0.30% and 0.50%,
+delay-1 PnL is STILL NET NEGATIVE. Neither clears the basic bar
+(profitable under delay) that would justify a cross-year check in the
+first place -- no need to spend a second year's compute confirming a
+result that already fails in the first window tested. Only 1% crossed
+into delay-profitability in 2026, and that one specifically failed
+cross-year (experiment 1).
+
+**Conclusion so far, stated plainly**: across the full range tested
+(0.30%, 0.50%, 1%, 2% -- baseline included), `_STOP_BUFFER` alone does
+NOT produce a variant that is BOTH delay-robust AND cross-year-profitable.
+The one width that achieved delay-robustness in-window (1%) is not a
+statistically validated improvement (fails a second, independent year).
+This lever is not fully exhausted (values between 0.5% and 1% remain
+untested) but the trend so far suggests a narrow, possibly nonexistent
+window between "wide enough to survive delay" and "narrow enough to stay
+profitable across regimes" for this specific candidate. Continuing
+research into other dimensions (time filters, position sizing) rather
+than fine-grinding this one parameter further without a stronger signal
+that a viable point exists.
