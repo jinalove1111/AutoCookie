@@ -181,6 +181,7 @@ class BacktestEngine:
         structure_tp_max_r: float | None = None,
         entry_delay_candles: int = 0,
         require_session: str | None = None,
+        max_entry_drift_pct: float | None = None,
     ) -> "BacktestResult":
         """Replays historical LTF candles (with a time-aligned, no-lookahead
         HTF slice at each step) through the Strategy Engine and Risk Engine
@@ -276,6 +277,17 @@ class BacktestEngine:
         of that. This can make a trade fill already past its own stop or
         target if price moved sharply during the delay window -- that is
         the realistic risk this test exists to surface, not a bug to hide.
+
+        `max_entry_drift_pct` (default `None`, opt-in, only has effect
+        when `entry_delay_candles > 0` -- 2026-07-14 continuous research
+        mode, docs/CONTINUOUS_RESEARCH_LOG.md experiment 4): an "entry
+        confirmation" gate. If the delayed fill price has drifted more
+        than this fraction away from the signal's ORIGINALLY PLANNED
+        `entry_price`, the trade is skipped entirely (treated exactly
+        like "no signal this step") instead of filling at a price the
+        strategy's own structure never confirmed. This does not change
+        `entry_delay_candles`'s existing behavior when unset -- a trade
+        that clears the drift check still fills exactly as before.
 
         Walk-forward, expanding window, one trade open at a time (no
         overlap): starts at index MIN_CANDLES - 1 so LTF signal generation
@@ -390,18 +402,36 @@ class BacktestEngine:
                 i += 1
                 continue
 
-            trades_today += 1
             fill_index = i
             fill_signal = signal
             if entry_delay_candles > 0:
                 fill_index = min(i + entry_delay_candles, len(ltf_candles) - 1)
                 delayed_price = _get(ltf_candles[fill_index], "close")
+                # max_entry_drift_pct (opt-in, default None -- 2026-07-14
+                # continuous research mode, docs/CONTINUOUS_RESEARCH_LOG.md
+                # experiment 4, "entry confirmation"): if the delayed fill
+                # price has moved more than this fraction away from the
+                # ORIGINALLY PLANNED entry_price, skip the trade entirely
+                # (same "treat like no signal" handling as the zero-size
+                # guard above) instead of filling at a price the strategy
+                # never actually confirmed against. Targets
+                # docs/ROBUSTNESS_REPORT.md test 2's material failure
+                # directly -- a delayed fill that has already drifted past
+                # its own tight stop/target math is exactly the scenario
+                # this rejects before it ever becomes a bad trade.
+                if max_entry_drift_pct is not None and signal.entry_price:
+                    drift = abs(delayed_price - signal.entry_price) / signal.entry_price
+                    if drift > max_entry_drift_pct:
+                        i += 1
+                        continue
                 # copy.copy (not dataclasses.replace) so this works against
                 # ANY signal-shaped object, not just a real dataclass --
                 # e.g. test fakes that duck-type TradeSignal's attributes
                 # without being a dataclass themselves.
                 fill_signal = copy.copy(signal)
                 fill_signal.entry_price = delayed_price
+
+            trades_today += 1
             trade, exit_index, account_balance = self._simulate_trade(
                 fill_signal,
                 ltf_candles,

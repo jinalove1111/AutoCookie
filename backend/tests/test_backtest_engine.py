@@ -753,6 +753,62 @@ def test_run_entry_delay_candles_zero_is_unchanged_behavior():
     assert result_default.trades == result_explicit_zero.trades
 
 
+def test_run_max_entry_drift_pct_skips_trade_when_delayed_price_drifts_too_far():
+    """max_entry_drift_pct (opt-in, only has effect when
+    entry_delay_candles > 0 -- 2026-07-14 continuous research mode,
+    docs/CONTINUOUS_RESEARCH_LOG.md experiment 4) must skip the trade
+    entirely (treated like "no signal") when the delayed fill price has
+    drifted more than the given fraction away from the signal's
+    originally-planned entry_price -- never fill at an unconfirmed price.
+    """
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=110.0, direction="long")
+    signal_engine = _FakeSignalEngineFixedSignal(signal)
+    ltf_candles = _flat_ltf_candles(MIN_CANDLES - 1)
+    ltf_candles.append(_c(100, 101, 99, 100, BASE_TS + (MIN_CANDLES - 1) * LTF_STEP))
+    # Delayed fill candle drifts 10% away from the planned entry (100 -> 110).
+    ltf_candles.append(_c(109, 111, 108, 110, BASE_TS + MIN_CANDLES * LTF_STEP))
+    ltf_candles.append(_c(110, 120, 109, 115, BASE_TS + (MIN_CANDLES + 1) * LTF_STEP))
+
+    result = BacktestEngine().run(
+        ltf_candles,
+        [],
+        signal_engine,
+        _FakeRiskManager(),
+        account_balance=10000.0,
+        entry_delay_candles=1,
+        max_entry_drift_pct=0.02,
+    )
+
+    assert result.total_trades == 0
+
+
+def test_run_max_entry_drift_pct_fills_normally_when_drift_is_within_tolerance():
+    """Same shape as the test above, but the delayed candle's close is
+    within the tolerance -- the trade must fill exactly as
+    entry_delay_candles alone would (this parameter never changes
+    behavior for a trade that clears the check)."""
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=110.0, direction="long")
+    signal_engine = _FakeSignalEngineFixedSignal(signal)
+    ltf_candles = _flat_ltf_candles(MIN_CANDLES - 1)
+    ltf_candles.append(_c(100, 101, 99, 100, BASE_TS + (MIN_CANDLES - 1) * LTF_STEP))
+    ltf_candles.append(_c(101, 103, 100, 102, BASE_TS + MIN_CANDLES * LTF_STEP))
+    ltf_candles.append(_c(102, 111, 101, 105, BASE_TS + (MIN_CANDLES + 1) * LTF_STEP))
+
+    result = BacktestEngine().run(
+        ltf_candles,
+        [],
+        signal_engine,
+        _FakeRiskManager(),
+        account_balance=10000.0,
+        slippage_percent=0.0,
+        entry_delay_candles=1,
+        max_entry_drift_pct=0.05,
+    )
+
+    assert result.total_trades == 1
+    assert result.trades[0]["entry_price"] == 102.0
+
+
 def test_run_skips_degenerate_zero_size_signal_without_recording_a_fake_trade():
     """When entry == stop_loss, `calculate_position_size` returns 0.0 (its
     own division-by-zero guard). `run()` must treat this exactly like a
