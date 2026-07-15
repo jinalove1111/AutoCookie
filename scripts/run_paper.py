@@ -134,7 +134,9 @@ from app.risk.circuit_breaker import CircuitBreaker, PersistentCircuitBreaker
 from app.risk.drawdown_guard import DrawdownGuard
 from app.risk.position_sizing import calculate_position_size
 from app.risk.risk_manager import RiskManager
+from app.strategy.selector import ConfigurableFallbackSelector
 from app.strategy.signal_engine import SignalEngine
+from app.strategy.strategy_interface import AVAILABLE_STRATEGIES
 
 def _pnl_to_percent(pnl: float) -> float:
     """Convert an absolute realized-PnL figure into a percent-of-account
@@ -687,15 +689,58 @@ def run_once(
     # use_jade_engine: opt-in via settings.USE_JADE_ENGINE (default False --
     # see app/config.py's docstring on that setting for why this was wired
     # in before A/B evidence exists, unlike ENABLE_BREAKEVEN above).
-    try:
-        signal = SignalEngine().generate_signal(
-            settings.SYMBOL, candles, htf_candles, use_jade_engine=settings.USE_JADE_ENGINE
+    #
+    # settings.USE_STRATEGY_SELECTOR (adaptive platform milestone 7b,
+    # operator directive 2026-07-16, ENGINEERING_DECISIONS.md #50): default
+    # False takes the EXACT branch below this comment always did, byte-for-
+    # byte -- USE_JADE_ENGINE is read and passed to SignalEngine directly,
+    # nothing new runs. True routes through the Strategy Selection Engine
+    # instead: `ConfigurableFallbackSelector` still honors USE_JADE_ENGINE
+    # as an explicit operator override (selects `jade` if True) and
+    # otherwise deterministically selects `legacy` -- no automatic
+    # regime-based switching. `selection_decision` stays `None` on the
+    # default path (nothing to log/persist); it's set below only when the
+    # selector path actually ran, and both `strategy_config` (step 5) and
+    # this pass's own print output read it conditionally.
+    selection_decision = None
+    if settings.USE_STRATEGY_SELECTOR:
+        try:
+            selection_regime = detect_market_regime(candles)
+        except Exception as exc:
+            print(
+                f"WARNING: could not compute market regime for strategy selection "
+                f"({exc}); defaulting to None."
+            )
+            selection_regime = None
+
+        selector = ConfigurableFallbackSelector(use_jade_engine=settings.USE_JADE_ENGINE)
+        selection_decision = selector.select_with_reason(selection_regime, AVAILABLE_STRATEGIES)
+        print(
+            "Strategy Selection Engine: regime="
+            f"{selection_regime.trend if selection_regime is not None else None}/"
+            f"{selection_regime.volatility if selection_regime is not None else None} "
+            f"selected={selection_decision.strategy.name} "
+            f"version={selection_decision.strategy_version} "
+            f"selection_reason={selection_decision.selection_reason} "
+            f"fallback_reason={selection_decision.fallback_reason}"
         )
-    except Exception as exc:
-        print(f"ERROR: signal generation failed: {exc}")
-        summary["error"] = str(exc)
-        summary["exit_code"] = 1
-        return summary
+        try:
+            signal = selection_decision.strategy.generate_signal(settings.SYMBOL, candles, htf_candles)
+        except Exception as exc:
+            print(f"ERROR: signal generation failed: {exc}")
+            summary["error"] = str(exc)
+            summary["exit_code"] = 1
+            return summary
+    else:
+        try:
+            signal = SignalEngine().generate_signal(
+                settings.SYMBOL, candles, htf_candles, use_jade_engine=settings.USE_JADE_ENGINE
+            )
+        except Exception as exc:
+            print(f"ERROR: signal generation failed: {exc}")
+            summary["error"] = str(exc)
+            summary["exit_code"] = 1
+            return summary
 
     if signal is None:
         print("No signal generated this pass.")
@@ -706,11 +751,15 @@ def run_once(
     # Which Strategy (app.strategy.strategy_interface.AVAILABLE_STRATEGIES
     # key) this signal came from -- computed once, reused below both for
     # the Risk Engine's disable check and for trade_data's strategy_name
-    # (adaptive platform milestones 6/7). Paper trading still calls
-    # SignalEngine directly rather than routing through the Strategy
-    # Selection Engine (milestone 4), so this is the same effective
-    # mapping LegacyStrategy/JadeStrategy already establish, just not yet
-    # routed through them.
+    # (adaptive platform milestones 6/7). This plain formula is used on
+    # BOTH the direct-SignalEngine path (settings.USE_STRATEGY_SELECTOR
+    # False, the default) and as the effective outcome of the Strategy
+    # Selection Engine path (True) -- `ConfigurableFallbackSelector` picks
+    # `jade` under the exact same `use_jade_engine` condition, by
+    # construction (milestone 7b, ENGINEERING_DECISIONS.md #50), so the two
+    # never disagree. Recomputed here rather than read off
+    # `selection_decision.strategy.name` to avoid a None-check for the
+    # (common, default) case where the selector path didn't run.
     active_strategy_name = "jade" if settings.USE_JADE_ENGINE else "legacy"
 
     # Persist the signal as soon as it's generated (Dashboard follow-up):
@@ -924,6 +973,16 @@ def run_once(
         "strategy_config": {
             "use_jade_engine": settings.USE_JADE_ENGINE,
             "enable_breakeven": settings.ENABLE_BREAKEVEN,
+            "use_strategy_selector": settings.USE_STRATEGY_SELECTOR,
+            "selection_reason": (
+                selection_decision.selection_reason if selection_decision is not None else None
+            ),
+            "fallback_reason": (
+                selection_decision.fallback_reason if selection_decision is not None else None
+            ),
+            "strategy_version": (
+                selection_decision.strategy_version if selection_decision is not None else None
+            ),
         },
     }
 

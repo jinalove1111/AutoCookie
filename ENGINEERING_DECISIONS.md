@@ -2452,3 +2452,151 @@ Python has no hot-reload) -- confirmed still running throughout,
 untouched; this changes production paper-trading sizing/rejection
 behavior only on a future restart, not performed as part of this
 milestone.
+
+## 50. Milestone 7b: Strategy Selection Engine wired into paper trading behind `USE_STRATEGY_SELECTOR`, preserving `USE_JADE_ENGINE` as an explicit override and leaving automatic regime-based switching off
+
+**Decision** (operator directive, 2026-07-16, following up on milestone 4):
+`scripts/run_paper.py`'s signal-generation step now branches on a new
+`settings.USE_STRATEGY_SELECTOR` flag (default `False`). `False` runs the
+EXACT prior code path -- `SignalEngine().generate_signal(..., use_jade_engine=
+settings.USE_JADE_ENGINE)` -- byte-for-byte unchanged. `True` routes
+through a new `ConfigurableFallbackSelector` (`app.strategy.selector`)
+instead. This closes a real gap flagged during a "continue autonomously"
+check: milestone 4 built `DefaultToLegacySelector` and the whole
+selection-engine machinery, but nothing in the live pipeline ever called
+it -- `run_paper.py` still called `SignalEngine` directly. The naive fix
+(swap in `DefaultToLegacySelector`) was rejected before being built: it
+always returns `legacy` regardless of `settings.USE_JADE_ENGINE`, so
+wiring it in would have silently made that documented, operator-facing
+toggle ("do not flip this to True without real backtest evidence first",
+`app/config.py`) permanently inert for paper trading -- a real regression
+in operator capability disguised as a no-op refactor. The operator's
+follow-up instruction specified 11 hard requirements resolving this;
+each is addressed below.
+
+**1-2. Legacy stays the default; `USE_JADE_ENGINE` stays meaningful.**
+`ConfigurableFallbackSelector.__init__(use_jade_engine: bool = False)`
+takes the flag as a CALLER-COMPUTED plain value (same "pass a pre-computed
+value, don't look it up" pattern decision #49 established for
+`app.risk`), read from `settings.USE_JADE_ENGINE` by `run_paper.py` and
+passed in. If `True`, the selector selects `jade` -- an explicit operator
+override, not automatic switching. Otherwise it ALWAYS selects `legacy`.
+Verified directly (`test_configurable_fallback_selector_ignores_regime_for_
+the_final_choice`): every trend/volatility combination, and a `None`
+regime, produce the identical selected strategy for a fixed
+`use_jade_engine` value.
+
+**3. Deterministic fallback to Legacy when no regime-specific strategy has
+validated evidence.** There is currently no such strategy AT ALL (no
+`RollingPerformanceSelector` exists yet -- section 4.3, still gated on
+real regime-tagged performance data), so the fallback path is exercised
+on every single call that isn't an explicit override. `fallback_reason`
+states this explicitly: `"automatic regime-based strategy switching is
+disabled in production (operator instruction, 2026-07-16); no
+regime-conditioned strategy has validated rolling-performance evidence
+yet even if switching were enabled"` -- both halves of the reason (policy
+AND evidence) are true independently, so the reason remains accurate even
+after switching is eventually enabled, until real evidence also exists.
+
+**4. Automatic regime-based switching stays OFF.** `regime` is accepted
+by `select_with_reason()` and recorded on the returned `SelectionDecision`
+(and, via `run_paper.py`'s print statement, in the console log) -- but it
+is never read anywhere in the selection logic itself. This is
+independently testable and tested
+(`test_configurable_fallback_selector_ignores_regime_for_the_final_choice`,
+`test_select_with_reason_records_regime_purely_for_observability`): the
+same `use_jade_engine` value always produces the same strategy across
+every regime, proving regime is observed, not consulted.
+
+**5-6. Observability: logs + performance database.** Every selector-path
+pass prints one line: `"Strategy Selection Engine: regime=<trend>/
+<volatility> selected=<name> version=<version> selection_reason=<...>
+fallback_reason=<...>"`. The same four fields (minus the raw regime,
+which is separately captured in full via `Trade.market_regime`, decision
+#49) are persisted into `Trade.strategy_config` (`use_strategy_selector`,
+`selection_reason`, `fallback_reason`, `strategy_version`) -- reusing the
+existing JSON snapshot column rather than a new migration, consistent
+with how `use_jade_engine`/`enable_breakeven` are already recorded there.
+`market_regime`, computed independently by milestone 7's volatility-scaled
+sizing block, already captures "detected regime" on every trade
+regardless of whether the selector path ran.
+
+**Why `strategy_version` is a new field on the `Strategy` Protocol, not
+computed elsewhere**: `LegacyStrategy.version`/`JadeStrategy.version`
+both start at `"1.0"` -- a plain string, disclosed as having no version
+history yet (same "the column exists so a real source has somewhere to
+write" reasoning as `latency_ms`, decision #47). Adding it as a REQUIRED
+Protocol field (not optional) was verified NOT to break
+`isinstance(x, Strategy)` runtime-checkable conformance for either
+existing adapter (both already define `name`; adding a second class
+attribute of the same kind carries the same guarantee) -- confirmed by
+the full suite staying green after the change, plus 2 new dedicated
+version-presence tests.
+
+**7. Feature flag**: `settings.USE_STRATEGY_SELECTOR: bool = False`
+(`app/config.py`), same disclosed-default-off pattern as
+`USE_JADE_ENGINE`/`ENABLE_BREAKEVEN`.
+
+**8-9. Default configuration reproduces Legacy exactly, with regression
+proof.** The `False` branch is the literal, untouched prior code -- no
+new call, no new object construction, nothing. The regression proof
+lives one layer up, at the level this codebase's actual test
+architecture supports (`scripts/run_paper.py` has no dedicated test file,
+true since before this milestone -- confirmed again this round, still
+exercised via real paper-trading runs, not pytest):
+`test_configurable_fallback_selector_default_config_matches_signal_engine_directly`
+proves `ConfigurableFallbackSelector`'s own default output
+(`use_jade_engine=False`, matching `Settings().USE_JADE_ENGINE`'s
+default, itself asserted by a dedicated test) is byte-identical
+(dataclass `==`) to calling `SignalEngine().generate_signal(...,
+use_jade_engine=False)` directly -- the same equivalence
+`test_strategy_interface.py` already established for `LegacyStrategy`
+itself, extended one layer out through the selector. Position sizing
+(`calculate_position_size`) and risk evaluation (`RiskManager.evaluate`)
+are untouched by this milestone -- neither is called anywhere in
+`app.strategy.selector` -- so milestone 7's existing sizing/risk-manager
+test coverage remains the regression guard for those, unchanged.
+
+**A real test-isolation bug found and fixed while writing test #9**: the
+first version of the regression test imported `SignalEngine` INSIDE the
+test function while `AVAILABLE_STRATEGIES` (used to build the selector's
+`decision.strategy`) was imported at module level -- per `conftest.py`'s
+own documented rule ("app.* modules must be imported inside the test
+function body... otherwise they would bind to whatever module instance
+happened to be cached first during collection"), this created a real
+possibility of the two references binding to DIFFERENT `app.strategy.
+signal_engine` module objects if an earlier DB-fixture test in the same
+pytest session had purged and reimported `app.*` (via `conftest.py`'s
+`_purge_app_modules`). This is exactly what happened: the test passed in
+isolation but failed intermittently in the full suite with two
+structurally-identical `TradeSignal` reprs comparing unequal (dataclass
+`__eq__` checks `other.__class__ is self.__class__` first; two separate
+module imports of the same source file produce two distinct classes).
+Fixed by moving `SignalEngine` to the same module-level import statement
+as `AVAILABLE_STRATEGIES`, matching this file's own established pattern.
+
+**10. Paper trader never interrupted.** All of the above -- the new
+`selector.py` additions, the `USE_STRATEGY_SELECTOR` flag, the
+`run_paper.py` branching, every test -- was written, tested, and verified
+via `py_compile` + the full 454/454 backend suite WITHOUT restarting the
+already-running paper-trading process (PID 24616) at any point; `ps -W`
+confirmed it running before and after every change in this milestone,
+matching the discipline every prior milestone in this pivot has followed.
+Since Python has no hot-reload, none of this code runs against the live
+process until its next restart (not performed here).
+
+**Status**: 21 new tests across `test_strategy_selector.py` (14: protocol
+conformance, override/fallback selection, regime-invariance including the
+`None` case, `SelectionDecision` field correctness, `select()`/
+`select_with_reason()` equivalence, the `USE_STRATEGY_SELECTOR` default,
+and the SignalEngine-equivalence regression proof) and
+`test_strategy_interface.py` (2: `version` field presence on both
+adapters), plus updates confirming no regressions in the existing 431.
+454/454 backend tests passing. `docs/ADAPTIVE_ARCHITECTURE.md` section 4
+updated to reflect the live wiring. **Enabling/disabling**: set
+`USE_STRATEGY_SELECTOR=True` in the environment (or `.env`) to route
+paper trading through the Strategy Selection Engine; unset it (or leave
+`False`) to keep the exact pre-existing direct-`SignalEngine` path.
+`USE_JADE_ENGINE` continues to control Legacy-vs-Jade under EITHER
+setting of `USE_STRATEGY_SELECTOR`. Requires a `scripts/run_paper.py`
+restart to take effect (not performed as part of this milestone).

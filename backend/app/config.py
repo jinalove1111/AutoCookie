@@ -109,6 +109,21 @@ class Settings(BaseSettings):
     # run; do not flip this to True without real backtest evidence first.
     USE_JADE_ENGINE: bool = False
 
+    # Strategy Selection Engine routing (opt-in, default off -- adaptive
+    # platform milestone 7b, operator directive 2026-07-16,
+    # ENGINEERING_DECISIONS.md #50). False (the default) preserves the
+    # EXACT prior scripts/run_paper.py call path (direct
+    # SignalEngine().generate_signal(..., use_jade_engine=USE_JADE_ENGINE)
+    # call), byte-for-byte -- flipping this flag does not, by itself,
+    # change USE_JADE_ENGINE's own meaning: ConfigurableFallbackSelector
+    # still honors USE_JADE_ENGINE as an explicit operator override and
+    # otherwise falls back to "legacy" deterministically. True routes
+    # signal generation through the Strategy Selection Engine instead
+    # (adds regime detection + selection-reason logging/persistence, no
+    # automatic regime-based switching). Read ENGINEERING_DECISIONS.md #50
+    # before flipping.
+    USE_STRATEGY_SELECTOR: bool = False
+
     @field_validator("TRADING_MODE")
     @classmethod
     def validate_trading_mode(cls, value: str) -> str:

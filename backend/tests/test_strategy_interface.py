@@ -94,3 +94,11 @@ def test_available_strategies_registry_contains_both_conforming_modules():
     for name, strategy in AVAILABLE_STRATEGIES.items():
         assert isinstance(strategy, Strategy)
         assert strategy.name == name
+
+
+def test_legacy_strategy_version():
+    assert LegacyStrategy().version == "1.0"
+
+
+def test_jade_strategy_version():
+    assert JadeStrategy().version == "1.0"

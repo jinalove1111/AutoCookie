@@ -81,7 +81,9 @@ roadmap). **Milestones 1-7 built**:
    StrategySelector` (Protocol) + `DefaultToLegacySelector`, which
    selects `legacy` unconditionally regardless of regime -- deliberately,
    since no regime-tagged trade history exists yet to justify anything
-   else. 4 tests. Not yet wired into any live path.
+   else. 4 tests. Wired live as of milestone 7b below (via a second
+   selector, `ConfigurableFallbackSelector`, not `DefaultToLegacySelector`
+   itself -- see that entry for why).
 5. **MAE/MFE/latency tracking**: `scripts/run_paper.py` now populates
    `max_adverse_excursion`/`max_favorable_excursion` (running maximums in
    R-multiples, updated every pass) and `holding_time_seconds`/
@@ -118,14 +120,33 @@ roadmap). **Milestones 1-7 built**:
    6's regime filter. Correlated exposure check (the 3rd, Low-priority
    extension) explicitly deferred -- still no scenario where multiple
    strategies are concurrently active. 12 tests.
+7b. **Strategy Selection Engine wired into paper trading** (operator
+    directive, 2026-07-16): `scripts/run_paper.py`'s signal-generation
+    step now branches on new flag `settings.USE_STRATEGY_SELECTOR`
+    (default `False`, reproduces the prior direct-`SignalEngine` call
+    path byte-for-byte -- proven by a regression test). `True` routes
+    through a new `ConfigurableFallbackSelector`, which honors
+    `USE_JADE_ENGINE` as an explicit operator override and otherwise
+    deterministically selects `legacy` -- regime is recorded (logs +
+    `Trade.strategy_config`: `selection_reason`, `fallback_reason`,
+    `strategy_version`) but never influences the choice; no automatic
+    regime-based switching yet. `Strategy` gains a `version` field
+    (`"1.0"` on both adapters). 21 new tests (16 selector, 2 interface,
+    plus the settings-default check and the SignalEngine-equivalence
+    proof); found and fixed a real test-isolation bug along the way
+    (module-level vs. function-level `app.*` imports binding to
+    different module instances after a DB-fixture test purge -- see
+    ENGINEERING_DECISIONS.md #50). 454/454 full suite passing.
 
 **Production-behavior note**: milestones 1-6 were purely additive/
-observational. Milestone 7 is the FIRST to change actual paper-trading
+observational. Milestone 7 was the FIRST to change actual paper-trading
 sizing/rejection math (more conservative sizing in high volatility;
-rejecting signals from an auto-disabled strategy) -- takes effect only
-on the paper trader's next restart (code changes do not affect the
-already-running process, PID 24616, confirmed still running throughout).
-Legacy's own signal/entry/exit logic remains completely untouched.
+rejecting signals from an auto-disabled strategy); milestone 7b adds an
+opt-in routing path that, in its default (off) configuration, changes
+nothing further. Both take effect only on the paper trader's next
+restart (code changes do not affect the already-running process, PID
+24616, confirmed still running throughout every milestone). Legacy's own
+signal/entry/exit logic remains completely untouched.
 
 ## Profitability sprint (2026-07-12, operator-directed autonomous session)
 

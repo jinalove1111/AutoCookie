@@ -30,16 +30,25 @@ class Strategy(Protocol):
     """Structural contract every strategy module must satisfy.
 
     `name` identifies the strategy for logging/persistence (e.g. the
-    `Trade.strategy_config`/future `strategy_used` DB fields -- see
+    `Trade.strategy_config`/`Trade.strategy_name` DB fields -- see
     docs/ADAPTIVE_ARCHITECTURE.md section 4 item #3, Performance Database
-    extensions, not yet built). `generate_signal` must never place
-    orders -- same "detection only" contract
+    extensions). `version` (adaptive platform milestone 7b, operator
+    directive 2026-07-16, ENGINEERING_DECISIONS.md #50): a plain string
+    identifying this strategy module's revision, recorded alongside
+    every Strategy Selection Engine decision for observability -- both
+    adapters start at `"1.0"` since neither has a version history yet;
+    this exists so a FUTURE change to either adapter's underlying
+    pipeline has somewhere real to record that fact from day one, same
+    "the column exists so a real source has somewhere to write" reasoning
+    already used for `latency_ms` (decision #47). `generate_signal` must
+    never place orders -- same "detection only" contract
     `SignalEngine.generate_signal` already documents; any resulting
     signal is validated by the Risk Engine before reaching Execution,
     unchanged.
     """
 
     name: str
+    version: str
 
     def generate_signal(
         self, symbol: str, ltf_candles: list, htf_candles: list
@@ -61,6 +70,7 @@ class LegacyStrategy:
     """
 
     name = "legacy"
+    version = "1.0"
 
     def generate_signal(
         self, symbol: str, ltf_candles: list, htf_candles: list
@@ -89,6 +99,7 @@ class JadeStrategy:
     """
 
     name = "jade"
+    version = "1.0"
 
     def generate_signal(
         self, symbol: str, ltf_candles: list, htf_candles: list

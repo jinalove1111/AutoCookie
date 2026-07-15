@@ -236,6 +236,24 @@ signature below: `select()`'s `regime` parameter is typed
 return `None` below its minimum candle-history floor -- a real case the
 selector's caller can hit.
 
+**Milestone 7b update (operator directive, 2026-07-16, ENGINEERING_DECISIONS.md
+#50): wired live into `scripts/run_paper.py`, behind `settings.
+USE_STRATEGY_SELECTOR` (default `False`)**. A second selector,
+`ConfigurableFallbackSelector`, was added specifically for this wiring --
+`DefaultToLegacySelector` was deliberately NOT used here, since routing
+through it would have silently made `settings.USE_JADE_ENGINE` (a
+documented operator override) permanently inert for paper trading.
+`ConfigurableFallbackSelector` honors `use_jade_engine` (a caller-computed
+value, read from `settings.USE_JADE_ENGINE`) as an explicit override,
+otherwise deterministically falls back to `legacy` -- regime is recorded
+via `select_with_reason()` -> `SelectionDecision` for observability
+(logs + `Trade.strategy_config`) but never influences the choice; no
+automatic regime-based switching exists yet. `False` (the default)
+reproduces the exact pre-existing direct-`SignalEngine` call path,
+byte-for-byte -- verified by a regression test proving the selector
+path's own default output is identical to calling `SignalEngine`
+directly. See decision #50 for the full design and how to enable/disable.
+
 ### 4.1 Interface
 
 ```python

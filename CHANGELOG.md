@@ -4,6 +4,41 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Adaptive platform milestone 7b: Strategy Selection Engine wired into paper trading
+
+`scripts/run_paper.py` now branches its signal-generation step on a new
+`settings.USE_STRATEGY_SELECTOR` flag (default `False`). `False` runs the
+exact prior code path -- `SignalEngine().generate_signal(...,
+use_jade_engine=settings.USE_JADE_ENGINE)` -- byte-for-byte unchanged and
+proven so by a regression test. `True` routes through a new
+`ConfigurableFallbackSelector` (`app.strategy.selector`) instead:
+`USE_JADE_ENGINE` remains a meaningful, explicit operator override
+(selects `jade` if `True`); otherwise the selector deterministically
+falls back to `legacy` -- no automatic regime-based switching exists yet.
+Regime is computed and recorded (console log + `Trade.strategy_config`:
+`selection_reason`, `fallback_reason`, `strategy_version`) purely for
+observability, verified to never influence the actual selection.
+
+`Strategy` (the Protocol from milestone 1) gains a `version` field --
+`"1.0"` on both `LegacyStrategy`/`JadeStrategy`, disclosed as having no
+version history yet.
+
+Found and fixed a real test-isolation bug while writing the regression
+proof: mixing a module-level `app.*` import with a function-level one in
+the same test file can silently bind to two different module instances
+(and therefore two different, structurally-identical-but-unequal
+dataclasses) if an earlier DB-fixture test in the same pytest session
+purged and re-imported `app.*` -- see `ENGINEERING_DECISIONS.md` #50 for
+the full mechanism and fix.
+
+21 new tests, 454/454 full suite passing. `DefaultToLegacySelector`
+(milestone 4) was deliberately NOT reused for this wiring -- it ignores
+`USE_JADE_ENGINE` entirely, which would have silently disabled that
+documented operator toggle. **To enable**: set `USE_STRATEGY_SELECTOR=True`
+(requires a `run_paper.py` restart, not performed here -- PID 24616 kept
+running, untouched, throughout). **To disable**: unset it or leave
+`False`. `USE_JADE_ENGINE` works identically either way.
+
 ## [Unreleased] - Adaptive platform milestone 7: Risk Engine extensions
 
 `RiskManager.evaluate()` gains `strategy_disabled: bool = False` (rejects
