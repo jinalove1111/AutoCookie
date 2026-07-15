@@ -226,7 +226,15 @@ class Strategy(Protocol):
 
 ---
 
-## 4. Strategy Selection Engine
+## 4. Strategy Selection Engine (BUILT)
+
+**Status**: `app.strategy.selector.StrategySelector` (Protocol) +
+`DefaultToLegacySelector`, implemented exactly as specified below. See
+`ENGINEERING_DECISIONS.md` #46. One deliberate refinement over the
+signature below: `select()`'s `regime` parameter is typed
+`MarketRegime | None`, since `detect_market_regime()` (section 2) can
+return `None` below its minimum candle-history floor -- a real case the
+selector's caller can hit.
 
 ### 4.1 Interface
 
@@ -394,7 +402,7 @@ does not depend on a LATER milestone to be safe/useful on its own.
 | 1 | **Strategy Interface** (`Protocol` + Legacy/Jade adapters + registry) | none | ✅ DONE (2026-07-15), 7/7 tests passing, not yet committed |
 | 2 | **Performance Database schema extensions** (section 6.2 columns + section 6.3 table, Alembic migration) | none (additive schema, same pattern as decision #40) | Next |
 | 3 | **Market Regime Detector** (section 2 design, implemented) | none new (reuses existing detectors; ADX/MA/VWAP are the only genuinely new calculations) | After #2 |
-| 4 | **Strategy Selection Engine** (`DefaultToLegacySelector`, section 4.2) | #1 | After #3 |
+| 4 | **Strategy Selection Engine** (`DefaultToLegacySelector`, section 4.2) — BUILT | #1 | After #3 |
 | 5 | **MAE/MFE/latency tracking wired into paper trading** | #2 | After #4 -- requires touching `scripts/run_paper.py`'s open-position-checking loop, more invasive than a schema change alone, sequenced after the lower-risk pieces |
 | 6 | **Rolling metrics computation + auto-disable mechanism** | #2, #5 (needs real MAE/MFE/latency-tagged data to be meaningful, not just PnL) | After #5 |
 | 7 | **Risk Engine extensions** (per-strategy disable hook, volatility-scaled sizing) | #3 (volatility scaling needs regime output), #6 (disable hook needs something to disable strategies) | After #6 |

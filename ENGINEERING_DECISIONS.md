@@ -2105,3 +2105,54 @@ path or into the Strategy Selection Engine (`docs/ADAPTIVE_ARCHITECTURE.md`
 section 4, milestone 4, not yet built) -- same "detection-only until a
 wiring decision is made deliberately" status this project has used for
 every new detector since decision #19.
+
+## 46. Strategy Selection Engine ships as `DefaultToLegacySelector` -- selects `legacy` unconditionally, on principle, not as a placeholder to revisit soon
+
+**Decision** (operator directive, 2026-07-15, adaptive-platform pivot --
+`docs/ADAPTIVE_ARCHITECTURE.md` section 4): `app.strategy.selector.
+StrategySelector` is a `@runtime_checkable Protocol` with one method,
+`select(regime, available) -> Strategy`. Its only implementation,
+`DefaultToLegacySelector`, ignores `regime` entirely and always returns
+`available["legacy"]`.
+
+**Why this is deliberately the least interesting possible
+implementation, not an oversight**: no regime-tagged trade history exists
+yet -- the Performance Database extensions (decision #44) added the
+columns/table to start COLLECTING that evidence, but zero rows have been
+written by any producer yet. Inventing a `"strong_trend" -> jade`-style
+rule table now would be exactly the "evidence over assumption" violation
+this project's entire discipline (decisions #10, #14, #15, #17-#18, #20)
+exists to prevent, applied at the architecture level instead of the
+parameter level. `docs/ADAPTIVE_ARCHITECTURE.md` section 4.3 explicitly
+names the evolution path (a `RollingPerformanceSelector` choosing argmax
+strategy by rolling expectancy per regime, gated on this project's
+established 20+ trade confidence floor, `experiment_runner.
+MIN_TRADES_FOR_CONFIDENCE`) as future work sequenced AFTER real data
+exists, not built speculatively now.
+
+**Why `regime` is typed `MarketRegime | None`, not `MarketRegime`, unlike
+the doc's section 4.1 signature**: `detect_market_regime()` (decision
+#45) returns `None` below its minimum candle-history floor -- a real,
+already-existing case the selector's caller will hit (e.g. early in a
+freshly-started paper session before enough candles have accumulated).
+Typing `select()` to accept `None` and handling it identically to any
+other regime (still returns `legacy`) is more honest than a signature
+that implies a regime is always available when the upstream detector's
+own contract says otherwise.
+
+**Practical consequence**: turning this system on changes NOTHING about
+production behavior today -- every call still resolves to `legacy`,
+satisfying "keep Legacy unchanged as the production baseline" literally.
+Its value is structural: every downstream stage (Risk Engine, Execution,
+Performance Evaluation, Continuous Learning) now has a real Strategy
+Selection stage to integrate against once milestone 5's MAE/MFE/latency
+tracking and milestone 6's rolling metrics start producing the evidence
+`RollingPerformanceSelector` will need.
+
+**Status**: 4 tests (`tests/test_strategy_selector.py`) -- protocol
+conformance, regime-invariance across all 3 trend states, `None`-regime
+handling, and confirming the selector ignores which strategies happen to
+be available (still picks by key, not by inspecting the registry).
+411/411 backend tests passing. Not yet wired into any live/paper trading
+path -- `scripts/run_paper.py` still calls `SignalEngine` directly, same
+as before this milestone.

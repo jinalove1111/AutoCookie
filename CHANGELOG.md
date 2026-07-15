@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Adaptive platform milestone 4: Strategy Selection Engine
+
+`app.strategy.selector.StrategySelector` (a `@runtime_checkable
+Protocol`, `select(regime, available) -> Strategy`) + its only
+implementation, `DefaultToLegacySelector`, which selects `legacy`
+unconditionally regardless of regime. Deliberately the least interesting
+possible selector: no regime-tagged trade history exists yet, so a real
+rule table has nothing to be evidenced against. Gives every downstream
+stage a real Strategy Selection stage to integrate with ahead of the
+evolution path (`RollingPerformanceSelector`, section 4.3) that depends
+on data milestones 5-6 will start producing. 4 new tests. Not yet wired
+into any live/paper trading path. Full rationale:
+`ENGINEERING_DECISIONS.md` #46.
+
+411/411 backend tests passing. Paper trading (Legacy engine only)
+continuously running, untouched.
+
 ## [Unreleased] - Adaptive platform milestone 3: Market Regime Detector
 
 `app.regime.regime_detector.detect_market_regime()`: composite

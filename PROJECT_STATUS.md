@@ -59,7 +59,7 @@ see `ROADMAP.md`'s "Objective change" section and the full design in
 `docs/ADAPTIVE_ARCHITECTURE.md` (architecture diagram, Market Regime
 Detector design, Strategy Interface spec, Strategy Selection Engine,
 Risk Engine extensions, Performance Database schema, 8-milestone
-roadmap). **Milestones 1-3 built**:
+roadmap). **Milestones 1-4 built**:
 
 1. **Strategy Interface**: `app.strategy.strategy_interface.Strategy` (a
    `Protocol`), with `LegacyStrategy`/`JadeStrategy` adapters wrapping the
@@ -77,6 +77,11 @@ roadmap). **Milestones 1-3 built**:
    built from objective metrics (ADX, percentile-relative realized
    volatility, swing structure, VWAP, distance-from-MA, liquidity sweep
    frequency). 20 tests. Not yet wired into any live path.
+4. **Strategy Selection Engine**: `app.strategy.selector.
+   StrategySelector` (Protocol) + `DefaultToLegacySelector`, which
+   selects `legacy` unconditionally regardless of regime -- deliberately,
+   since no regime-tagged trade history exists yet to justify anything
+   else. 4 tests. Not yet wired into any live path.
 
 **Unchanged**: Legacy remains the only strategy live in paper trading
 (still running continuously, untouched); nothing about this pivot has
