@@ -29,8 +29,15 @@ if config.config_file_name is not None:
 
 # Inject the real database URL at runtime from app.config.settings instead
 # of relying on a value committed to alembic.ini (keeps secrets/connection
-# strings out of the ini file).
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+# strings out of the ini file). Guarded (adaptive platform milestone 8.1,
+# ENGINEERING_DECISIONS.md #51): if the CALLER already set sqlalchemy.url
+# programmatically (app.database.migrate_existing targeting an arbitrary
+# DB file, e.g. the live paper-trading DB), respect it instead of
+# overwriting from settings -- alembic.ini commits an EMPTY sqlalchemy.url,
+# so every pre-existing path (app.main.run_migrations, conftest fixtures,
+# CLI alembic) still falls through to settings exactly as before.
+if not config.get_main_option("sqlalchemy.url"):
+    config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 
 # add your model's MetaData object here
 # for 'autogenerate' support

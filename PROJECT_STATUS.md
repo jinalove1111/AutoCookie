@@ -137,6 +137,23 @@ roadmap). **Milestones 1-7 built**:
     (module-level vs. function-level `app.*` imports binding to
     different module instances after a DB-fixture test purge -- see
     ENGINEERING_DECISIONS.md #50). 454/454 full suite passing.
+8.1. **Live paper-DB migrated to schema head** (operator directive,
+    2026-07-16): the live `backend/paper_validation.db` predated this
+    project's alembic discipline (no `alembic_version` table at all), and
+    `scripts/run_paper.py` never runs migrations -- every milestone since
+    #2 had added columns/tables this DB never received, so a restart on
+    current code would have crashed on its first trade INSERT. New
+    `app.database.migrate_existing.migrate_database()` fingerprints which
+    of 4 historical schema generations an un-stamped DB matches, stamps
+    that revision, and upgrades to head (refuses unrecognized schemas
+    rather than guessing); `scripts/migrate_paper_db.py` is a thin CLI
+    over it. 11 new tests. Applied to the live DB this session: backed up
+    to `backend/paper_validation.db.backup-20260715T174615Z`, stamped
+    `4b8a822a475b` (its detected generation), upgraded to head
+    (`e3110e6a6b59`), verified -- the existing `bot_state` row survived
+    intact, and `trades`/`signals`/`strategy_performance_snapshots` were
+    empty both before and after (nothing was at risk). 465/465 full suite
+    passing. Full rationale: `ENGINEERING_DECISIONS.md` #51.
 
 **Production-behavior note**: milestones 1-6 were purely additive/
 observational. Milestone 7 was the FIRST to change actual paper-trading
@@ -240,7 +257,7 @@ approval — this is by design, not an oversight.
 | Strategy Engine | ✅ Core rule MVP complete | Bias/sweep/CHOCH/FVG/OB/zone-mitigation/entry-model all real, all tested. Breaker Block detection wired in (opt-in, `use_breaker_block`, A/B tested — see findings below). Confluence-strength spec ambiguity RESOLVED — the existing looser rule (sweep OR CHOCH) is confirmed correct with A/B evidence; `require_full_confluence`/`--strict-confluence` available as an opt-in but not recommended. Core-rule constants TUNED via controlled parameter sweep (`entry_model._RR`=2.5, `_STOP_BUFFER`=0.0015, `order_block._LOOKBACK`=15, `_IMPULSE_MULT`=1.8 — all previously untuned defaults) — see `docs/parameter_sweep_report.md`. **All 5 MVP core rules now shipped** (Premium/Discount, previous swing high/low, OB+FVG confluence, structure-based TP, Equal High/Equal Low) — see "Core rule completion (MVP)" above. The two newest, `require_ob_fvg_confluence`/`use_structure_tp`, ship opt-in and default OFF pending A/B backtest evaluation, same discipline as `use_breaker_block` |
 | Risk Engine | ✅ Complete | RR floor, daily/weekly loss limits, trades/day cap, position sizing, DB-persisted circuit breaker — all enforced in both paper AND backtest. Circuit breaker now auto-resets once a fresh daily/weekly check clears (previously a documented gap — see `ENGINEERING_DECISIONS.md` #16). Sizing/loss-limit math still keys off `PLACEHOLDER_ACCOUNT_BALANCE`, intentionally, until Phase 1 gate #4 |
 | Backtest Engine | ✅ Complete, actively used for research | Real fee/slippage/PnL, no-lookahead HTF cursor, multi-period out-of-sample splitting (`--periods`, HTF fetch now correctly sized to the LTF request's real time span), time-anchored fetching (`--end-date`), walk-forward validation (`--walk-forward`, explicit PASS/FAIL criteria — PASSED for BTCUSDT baseline), opt-in break-even (`--breakeven`, A/B **no reliable direction across 4 assets OR across 2 years on the same asset — even flips sign on BTCUSDT alone**), opt-in Breaker Block entries (`--breaker-block`, A/B **mostly negative across assets, zero effect in the 2025 BTCUSDT window**), opt-in partial take-profit (`--partial-tp`, A/B **negative on all 4 tested assets AND both tested years on BTCUSDT — the most robust finding in the project**) |
-| Paper Trading | ✅ Complete | Real open/close/PnL against live OKX data, no real capital. Break-even stop management is wired here too (`settings.ENABLE_BREAKEVEN`, off by default, PERMANENTLY -- see research findings below) — no reliable direction exists across assets OR across time (it flips sign on BTCUSDT alone between 2025 and 2026), so there is no direction to ever default toward. Breaker Block and partial-TP remain backtest-only (no positive evidence justifying paper trading) |
+| Paper Trading | ✅ Complete | Real open/close/PnL against live OKX data, no real capital. Break-even stop management is wired here too (`settings.ENABLE_BREAKEVEN`, off by default, PERMANENTLY -- see research findings below) — no reliable direction exists across assets OR across time (it flips sign on BTCUSDT alone between 2025 and 2026), so there is no direction to ever default toward. Breaker Block and partial-TP remain backtest-only (no positive evidence justifying paper trading). Live DB (`backend/paper_validation.db`) is now alembic-stamped at head `e3110e6a6b59` (milestone 8.1, 2026-07-16, `app.database.migrate_existing`) -- previously un-stamped since an early pre-alembic bootstrap, meaning a restart on current code would have crashed on the first trade INSERT; a restart is now safe |
 | Portfolio/Journal | ✅ Complete | Real trade/signal persistence, daily/weekly/all-time reports |
 | Dashboard | ✅ Complete | All 5 endpoints (`status`, `positions`, `logs`, `risk-status`, `bias`, `signals`) real, DB/live-computed |
 | Live Trading | ❌ Not implemented, intentionally gated | `LiveBroker`, `exchange/okx_client.py`, `exchange/orangex_client.py` are all `NotImplementedError` stubs. Requires operator-approved API keys + staged approval before ANY code is written here |

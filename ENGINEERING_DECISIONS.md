@@ -2600,3 +2600,104 @@ paper trading through the Strategy Selection Engine; unset it (or leave
 `USE_JADE_ENGINE` continues to control Legacy-vs-Jade under EITHER
 setting of `USE_STRATEGY_SELECTOR`. Requires a `scripts/run_paper.py`
 restart to take effect (not performed as part of this milestone).
+
+## 51. Milestone 8.1: live paper-DB migration via fingerprint-detect-and-stamp, not DB recreation or hand-written ALTERs -- refuses unrecognized schemas rather than guessing
+
+**Decision** (operator directive, 2026-07-16): `app.database.
+migrate_existing.migrate_database()` brings an EXISTING, never-alembic-
+stamped SQLite database up to the current migration head by (1)
+fingerprinting which of 4 historical schema generations the file's raw
+table/column layout matches (`a0f5ebc23690` initial -> `4b8a822a475b`
+circuit-breaker columns -> `393afdf7fe67` observability columns ->
+`e3110e6a6b59` adaptive platform), (2) stamping that revision as the
+alembic baseline (`alembic stamp <rev>`, not a real migration run -- the
+schema is already at that shape), then (3) running a normal `upgrade
+head`. `scripts/migrate_paper_db.py` is a thin CLI over it, detect-only
+by default, `--apply` to mutate.
+
+**Why this exists**: the live paper-trading DB (`backend/
+paper_validation.db`) was created by an early bootstrap predating this
+project's alembic discipline -- no `alembic_version` table at all -- and
+`scripts/run_paper.py` never runs migrations (only `app.main`'s FastAPI
+lifespan does, and no FastAPI process runs alongside the paper trader).
+Every adaptive-platform milestone since #2 added columns/tables the live
+DB never received, so a paper-trader restart on current code would crash
+on its first `TradeTracker.record_trade()` INSERT.
+
+**Why fingerprint-detect + stamp + upgrade, not the two obvious
+alternatives**:
+- **Recreating the DB from scratch** (drop and let the app/alembic build
+  a fresh one) was rejected -- the live file's `bot_state` row IS the
+  real, currently-tracked circuit-breaker/drawdown state, and any trades/
+  signals already recorded would be destroyed. A migration tool that
+  loses live data to "fix" a schema gap is not actually a fix.
+- **Hand-written `ALTER TABLE`/`CREATE TABLE` statements** replicating
+  what the missing migrations already do were rejected -- the exact DDL
+  for every intermediate schema step already exists and is tested inside
+  `app/database/migrations/versions/`; re-deriving it by hand in a
+  separate script would create a second, driftable source of truth for
+  the same schema history, with no guarantee the hand-written version
+  matches what `alembic upgrade` actually produces. Stamping a detected
+  baseline and then running the REAL migration chain guarantees the
+  result is byte-identical to any other DB that reached head the normal
+  way.
+
+**Why refuse (raise `ValueError`) rather than guess on an unrecognized
+schema**: `detect_schema_generation()` returns `None` (not a best-effort
+guess) whenever a file's tables/columns don't match any known
+fingerprint or a stamped `alembic_version` table -- `migrate_database()`
+then refuses to touch it. Stamping the wrong baseline would silently skip
+real migrations (columns the app expects would still be missing) or
+attempt to re-apply migrations against a schema that doesn't match their
+assumptions (`ADD COLUMN` on a column that already exists, a hard
+failure, or worse, a silent partial state). Matches this project's
+long-standing "return `None`/refuse rather than fabricate an answer"
+discipline already established for `calculate_premium_discount` (decision
+#19) and every other structural detector in `app/strategy/`.
+
+**`env.py` guard pattern**: `app/database/migrations/env.py` previously
+unconditionally injected `settings.DATABASE_URL` into the alembic config.
+`migrate_existing.build_alembic_config()` needs to target an ARBITRARY
+file path (the live DB, or a test's `tmp_path` fixture), not whatever
+`settings.DATABASE_URL` happens to point at. The guard added is a single
+`if not config.get_main_option("sqlalchemy.url"):` before the injection --
+only fills in `settings.DATABASE_URL` when the caller hasn't already set
+one programmatically. This is backward-compatible by construction:
+`alembic.ini` commits an EMPTY `sqlalchemy.url`, so every pre-existing
+caller (`app.main`'s `run_migrations` on FastAPI startup, `conftest.py`'s
+test-DB fixtures, a bare `alembic upgrade head` from the CLI) never sets
+the option beforehand and therefore still falls through to `settings`
+exactly as before -- verified by the full 465/465 suite passing unchanged
+alongside the 11 new migration tests.
+
+**Test fixtures built from the real migration chain via RENAME, not
+hand-built or DROP**: `test_migrate_existing.py`'s old-generation
+fixtures are produced by running alembic ITSELF (`command.upgrade(cfg,
+<old_revision>)`) and then `ALTER TABLE alembic_version RENAME TO
+not_a_stamp_fixture` to hide the stamp -- simulating the live DB's real
+condition (a schema that matches an old generation but carries no
+`alembic_version` table) using the REAL migration-produced schema, not a
+hand-built imitation that could silently drift from what the actual
+migrations produce. RENAME rather than DROP specifically because this
+repo's tooling gates destructive SQL keywords even inside test fixtures --
+a rename hides the table from `detect_schema_generation()` (which checks
+table existence by exact name) exactly as effectively as a drop would,
+without using a blocked statement.
+
+**Verified this session**: full backend suite 465/465 passing (454 + 11
+new). Detection-only run against the live DB matched generation
+`4b8a822a475b`, un-stamped -- exactly the predicted real-world condition.
+`--apply` backed up to `backend/paper_validation.db.backup-20260715T174615Z`,
+stamped `4b8a822a475b`, upgraded `4b8a822a475b` -> `393afdf7fe67` ->
+`e3110e6a6b59` (head), verification passed. Post-migration check: the
+existing `bot_state` row (1 row) survived intact; `trades`/`signals`/
+`strategy_performance_snapshots` all had 0 rows both before and after (the
+paper trader had recorded no trades yet on this DB, so nothing was at
+risk of being lost). The paper trader process was not running at
+migration time (confirmed no python process, same sandbox-persistence
+caveat already documented elsewhere in this project's history), so there
+was no open-file contention to reason about for this particular run --
+the additive-migrations-are-safe-against-a-concurrently-open-file
+argument in the module's own docstring remains a design property for the
+next time this runs against a live process, not something this session
+exercised directly.

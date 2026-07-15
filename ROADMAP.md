@@ -62,6 +62,14 @@ Concretely, this means:
   paper trading keeps running exactly as before. Nothing about this
   pivot touches what's currently live.
 
+**Milestone 8.1 (2026-07-16)**: the live-DB schema gap that would have
+blocked a safe paper-trader restart on current code is now closed --
+`backend/paper_validation.db` predated this project's alembic discipline
+(no `alembic_version` table) and was missing every column/table added by
+milestones 2-7. `app.database.migrate_existing.migrate_database()`
+fingerprinted, stamped, and upgraded it to head (`e3110e6a6b59`), with a
+backup taken first. See `ENGINEERING_DECISIONS.md` #51.
+
 Full architecture review, gap analysis, and prioritized build order:
 `docs/ADAPTIVE_ARCHITECTURE.md`.
 

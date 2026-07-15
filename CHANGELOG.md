@@ -4,6 +4,47 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Adaptive platform milestone 8.1: live paper-DB migrated to schema head
+
+`app.database.migrate_existing.migrate_database()` (new): brings a
+never-alembic-stamped SQLite DB up to the current migration head by
+fingerprinting which of 4 historical schema generations the file matches
+(`a0f5ebc23690` initial -> `4b8a822a475b` circuit-breaker columns ->
+`393afdf7fe67` observability columns -> `e3110e6a6b59` adaptive platform),
+stamping that revision, then running a normal `upgrade head`. Refuses
+(`ValueError`) rather than guesses on an unrecognized schema; detects an
+already-stamped DB and runs a plain, idempotent upgrade instead of
+re-stamping; takes an optional timestamped file backup before mutating.
+`scripts/migrate_paper_db.py` is a thin CLI over it -- detect-only by
+default, `--apply` to migrate, `--no-backup` to opt out of the backup.
+
+**Why**: the live paper-trading DB (`backend/paper_validation.db`) was
+created by an early bootstrap predating this project's alembic
+discipline -- no `alembic_version` table -- and `scripts/run_paper.py`
+never runs migrations (only `app.main`'s FastAPI lifespan does, and no
+FastAPI process runs alongside the paper trader). Every adaptive-platform
+milestone since #2 added columns/tables the live DB never received, so a
+paper-trader restart on current code would have crashed on its first
+trade INSERT. `app/database/migrations/env.py` gained a guard so
+`migrate_existing`'s arbitrary-file targeting doesn't disturb any
+pre-existing caller: it only injects `settings.DATABASE_URL` when the
+caller hasn't already set `sqlalchemy.url` programmatically (`alembic.ini`
+commits an empty url, so every existing path -- `app.main`, `conftest.py`,
+bare CLI alembic -- still falls through to `settings` exactly as before).
+11 new tests, built against the real migration chain (old-generation
+fixtures are produced by running alembic itself, then hiding the stamp
+via a table RENAME) rather than hand-built imitations. Full rationale:
+`ENGINEERING_DECISIONS.md` #51.
+
+465/465 full suite passing (454 + 11 new). Ran the live migration this
+session: detection matched generation `4b8a822a475b`, un-stamped --
+exactly the predicted real-world condition. `--apply` backed up to
+`backend/paper_validation.db.backup-20260715T174615Z`, stamped, upgraded
+to head (`e3110e6a6b59`), verification passed. The existing `bot_state`
+row survived intact; `trades`/`signals`/`strategy_performance_snapshots`
+were all empty before and after (no trades recorded yet, so nothing was
+at risk). The paper trader process was not running at migration time.
+
 ## [Unreleased] - Adaptive platform milestone 7b: Strategy Selection Engine wired into paper trading
 
 `scripts/run_paper.py` now branches its signal-generation step on a new
