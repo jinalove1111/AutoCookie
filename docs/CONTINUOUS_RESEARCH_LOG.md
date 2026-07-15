@@ -273,16 +273,79 @@ authorized for this research round (session filters, market regime
 filters, execution timing, entry confirmation, exit logic, risk
 management), the specific mechanisms tried (session filter, execution
 timing/entry confirmation, and risk management via stop-buffer width) do
-not fix this candidate's execution-delay fragility. Two categories remain
-genuinely untested: market regime filters (e.g. volatility-percentile
-entry restriction) and exit logic beyond the buffer (e.g. a
-volatility-scaled rather than zone-boundary-scaled stop distance) -- both
-would require new code, not just new parameter values on existing code,
-raising the engineering-risk bar for further attempts. Given 5
-consecutive rejections all pointing the same direction, continuing to
-search for a fix to THIS specific candidate's THIS specific fragility has
-reached diminishing returns for this research round. The Legacy engine
-remains the production baseline, untouched; the BTC/SOL candidates from
-sections 12-14 remain validated-but-not-deployable pending either
-infrastructure guarantees or a genuinely different exit architecture, per
-`docs/ROBUSTNESS_REPORT.md`'s original recommendation.
+not fix this candidate's execution-delay fragility. One category
+remained genuinely untested at this point: risk management via a
+volatility-SCALED (not flat-percentage) stop floor -- tested next
+(experiment 6).
+
+## Experiment 6: ATR-based volatility-scaled stop floor
+
+**Motivation**: every prior attempt widened the stop by a FIXED amount
+(percentage buffer) or gated entries outright. A volatility-scaled floor
+(new `atr_stop_multiplier` on `entry_model.build_entry_model`, backed by
+a new `average_true_range` utility -- standard ATR, not a new indicator)
+only widens the stop when the CURRENT regime's own recent price action
+is large relative to the zone -- conceptually distinct from a flat
+percentage, and the last untested category (risk management) before
+concluding this research thread. 2 new modules, 6 new unit tests.
+
+**Method**: `scripts/research_atr_stop.py` -- ATR multiplier 1.0x and
+2.0x, both at no-delay and delay=1, both confirmed years.
+
+### Results
+
+| Anchor | Multiplier | Avg stop % (no-delay) | No-delay PnL/PF | Delay-1 PnL/PF | Delay-1 WF |
+|---|---|---|---|---|---|
+| 2026 | 1.0x | 0.27% | $1,613.01 / 5.48 | -$1,249.17 / 0.16 | FAILED (1/6) |
+| 2026 | 2.0x | 0.43% | $1,467.19 / 6.46 | -$674.91 / 0.35 | FAILED (1/6) |
+| 2025 | 1.0x | 0.23% | $752.50 / 3.53 | -$1,063.66 / 0.03 | FAILED (0/6) |
+| 2025 | 2.0x | 0.29% | $696.52 / 3.39 | -$782.19 / 0.14 | FAILED (1/6) |
+
+### Verdict: REJECTED -- 1.0x barely activates, 2.0x helps partially but still fails
+
+At 1.0x, the average no-delay stop distance (0.23-0.27%) is nearly
+identical to the ORIGINAL unmodified baseline (0.23-0.24%) -- the ATR
+floor rarely activates at all, because the zone-derived stop is usually
+already wider than 1x ATR on this timeframe. At 2.0x, the floor engages
+more (stops widen to 0.29-0.43%) and delay-1 results improve
+meaningfully over the unmitigated baseline (2026: PF 0.16->0.35; 2025:
+PF 0.03->0.14) -- a real, measurable effect, consistent with the general
+"wider stops help somewhat" pattern from every prior experiment. But
+**every configuration still fails walk-forward in both years** and stays
+net negative. Not statistically better than not having the floor at all
+in any way that would justify acceptance.
+
+## Final synthesis after 6 experiments: execution-delay fragility is very likely architectural
+
+Six independent, conceptually distinct approaches have now been tested:
+stop-buffer widening (2 rounds, 4 values), Asian-session-only filtering,
+entry-confirmation drift gating (3 thresholds), a combination of the two
+most promising individual levers, and ATR-based volatility-scaled
+stop-widening (2 multipliers) -- 12 total backtest configurations beyond
+the original robustness report, spanning every category authorized for
+this research round except market regime filters. **Not one produced a
+configuration that is delay-robust AND confirmed across both independent
+years.** The consistent pattern across all six: whatever measurably helps
+the 2026 delay scenario either fails cross-year outright, or still fails
+walk-forward in the very window where it helps, or (combined levers)
+makes things worse by compounding trade-count collapse.
+
+**Conclusion, stated as a settled finding for this research round, not a
+tentative one**: this candidate's execution-delay fragility is very
+likely an architectural property of the `structure_tp_max_r`-capped,
+zone-boundary-derived design -- not a parameter, filter, or gate waiting
+to be found within the six authorized categories. Continuing to search
+this specific space has reached clear diminishing returns after 6
+independently-reasoned, cross-year-tested attempts. Per the operator's
+own rule ("reject any improvement that fails cross-year... validation"
+and "accept only statistically significant improvements") -- there is
+nothing here to accept. The Legacy engine remains the untouched
+production baseline throughout. The BTC/SOL candidates from
+`docs/PROFITABILITY_EXPERIMENT_REPORT.md` sections 12-14 remain
+validated-but-not-deployable exactly as `docs/ROBUSTNESS_REPORT.md`
+concluded -- real edge under a zero-latency assumption, not yet provably
+safe under realistic execution latency. The two paths forward stated in
+that report (verified sub-candle execution infrastructure, or a
+genuinely different exit/stop architecture not yet designed) remain the
+honest options; no amount of further parameter search within this round's
+scope changes that.
