@@ -1969,3 +1969,56 @@ provably unaffected (same delegation-equivalence tests above).
 conformance for both adapters, `.name` values, delegation-equivalence for
 both, and registry completeness/conformance. 387/387 backend tests
 passing.
+
+## 44. Performance Database extended for the adaptive platform: 6 new `Trade` columns + a new snapshot table, additive and unpopulated until their producers exist
+
+**Decision** (operator directive, 2026-07-15, adaptive-platform pivot --
+`docs/ADAPTIVE_ARCHITECTURE.md` section 6): `Trade` gains 6 nullable
+columns (`market_regime` JSON, `strategy_name` indexed String,
+`holding_time_seconds`, `max_adverse_excursion`, `max_favorable_excursion`,
+`latency_ms`) and a new `strategy_performance_snapshots` table (rolling
+win-rate/profit-factor/expectancy/max-drawdown/Sharpe/Sortino/recovery-
+factor per strategy, optionally per regime, plus an `is_disabled`/
+`disabled_reason` pair). Migration `e3110e6a6b59`, chained after
+`393afdf7fe67`.
+
+**Why these columns now, before the components that populate them
+exist**: same reasoning as decision #40's observability columns --
+adding the schema is cheap and safe (nullable, no behavior change,
+verified via a throwaway-DB smoke test, same discipline as #40), and
+every day this is delayed is a day of lost future backfill potential
+once the Regime Detector (section 2, not yet built) and MAE/MFE/latency
+tracking (section 6.2, requires touching `run_paper.py`'s open-position
+loop, milestone 5) actually exist. The columns exist now; they will
+simply stay NULL until their producers are built, exactly like
+`exit_reason`/`r_multiple`/`strategy_config` did between their own
+schema-addition (#40) and `run_paper.py` actually being updated to
+populate them.
+
+**Why a snapshot table instead of computing rolling metrics live on every
+read**: rolling metrics need a consistent, replayable definition of "the
+window" (e.g. last 30 trades, or last 30 days). Computing them fresh on
+every read risks two call sites (e.g. the Strategy Selector vs. a
+dashboard) disagreeing about what "current" means at slightly different
+moments. A snapshot table makes each evaluation a discrete, timestamped,
+auditable event -- the same "don't fabricate an answer, show your work"
+principle this project's detectors already follow (every existing
+detector returns its reasoning, not just a label), applied to
+performance evaluation instead of signal detection.
+
+**Why `market_regime` on `StrategyPerformanceSnapshot` is a plain String,
+while `market_regime` on `Trade` is the full JSON classification**:
+`Trade.market_regime` needs to preserve the COMPLETE audit trail (trend +
+volatility + event flags + raw metrics, section 2.4's design) for a
+single trade's own record. `StrategyPerformanceSnapshot.market_regime` is
+a GROUPING KEY (which regime bucket this rollup covers, or NULL for an
+all-regime aggregate) -- a simple indexed string is the right shape for
+"group by," not the full classification object.
+
+**Status**: schema-only this round -- no code yet populates any of the 6
+new `Trade` columns or writes to the new table in production paths
+(`scripts/run_paper.py` unchanged). Smoke-tested end-to-end (write/read
+all 6 columns + insert a snapshot row) against a throwaway DB, same
+verification method as decision #40. `tests/test_db_bootstrap.py`
+updated: pinned migration head (`e3110e6a6b59`) and `EXPECTED_TABLES`
+(added `strategy_performance_snapshots`). 387/387 backend tests passing.

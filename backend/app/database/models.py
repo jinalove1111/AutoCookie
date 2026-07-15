@@ -121,6 +121,25 @@ class Trade(Base):
     exit_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)  # stop_loss/take_profit/breakeven/manual
     r_multiple: Mapped[float | None] = mapped_column(Float, nullable=True)
     strategy_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Adaptive-platform follow-up (2026-07-15, docs/ADAPTIVE_ARCHITECTURE.md
+    # section 6.2, ENGINEERING_DECISIONS.md #44): six more fields, all
+    # nullable/additive, same discipline as the three above. `market_regime`
+    # stores the FULL MarketRegime classification (not just a label) at
+    # signal time, once a Regime Detector exists to populate it.
+    # `strategy_name` promotes the existing `strategy_config` JSON's
+    # implicit info into a real, indexed column for fast per-strategy
+    # rollups. `holding_time_seconds` is derivable from opened_at/closed_at
+    # but stored explicitly so rolling-metrics queries don't recompute it
+    # per row. `max_adverse_excursion`/`max_favorable_excursion`/
+    # `latency_ms` require NEW tracking (not just a schema change) in
+    # whichever loop checks open positions -- columns exist now so that
+    # tracking has somewhere real to write to when it's built.
+    market_regime: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    strategy_name: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    holding_time_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_adverse_excursion: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_favorable_excursion: Mapped[float | None] = mapped_column(Float, nullable=True)
+    latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -181,3 +200,35 @@ class StrategyLog(Base):
     signal_id: Mapped[int | None] = mapped_column(
         ForeignKey("signals.id"), nullable=True, index=True
     )
+
+
+# --------------------------------------------------------------------------
+# strategy_performance_snapshots — rolling per-strategy/per-regime
+# performance metrics, computed periodically (not per-trade). Adaptive-
+# platform milestone 2 (2026-07-15, docs/ADAPTIVE_ARCHITECTURE.md section
+# 6.3, ENGINEERING_DECISIONS.md #44): a discrete, timestamped, auditable
+# evaluation event, not a live-recomputed-on-every-read query -- keeps
+# "what did rolling win rate look like as of this snapshot" answerable
+# consistently regardless of how much trade history has accumulated
+# since. `market_regime` nullable = an all-regime aggregate row;
+# non-null = a per-regime rollup for that strategy.
+# --------------------------------------------------------------------------
+class StrategyPerformanceSnapshot(Base):
+    __tablename__ = "strategy_performance_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    strategy_name: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    market_regime: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    window_trades: Mapped[int] = mapped_column(Integer, nullable=False)
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True, server_default=func.now()
+    )
+    win_rate: Mapped[float] = mapped_column(Float, nullable=False)
+    profit_factor: Mapped[float] = mapped_column(Float, nullable=False)
+    expectancy: Mapped[float] = mapped_column(Float, nullable=False)
+    max_drawdown: Mapped[float] = mapped_column(Float, nullable=False)
+    sharpe: Mapped[float] = mapped_column(Float, nullable=False)
+    sortino: Mapped[float] = mapped_column(Float, nullable=False)
+    recovery_factor: Mapped[float] = mapped_column(Float, nullable=False)
+    is_disabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    disabled_reason: Mapped[str | None] = mapped_column(String(1024), nullable=True)

@@ -23,6 +23,7 @@ EXPECTED_TABLES = {
     "signals",
     "trades",
     "strategy_logs",
+    "strategy_performance_snapshots",
 }
 
 
@@ -45,9 +46,10 @@ def test_fresh_sqlite_boots_via_real_alembic_migration(app_main):
     with engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
     # Pinned to the current migration head. Update this alongside adding any
-    # new migration (was "4b8a822a475b" prior to the observability columns
-    # migration "393afdf7fe67", added for ENGINEERING_DECISIONS.md #40).
-    assert version == "393afdf7fe67"
+    # new migration (was "393afdf7fe67" prior to the adaptive-platform
+    # performance-tracking migration "e3110e6a6b59", added for
+    # ENGINEERING_DECISIONS.md #44).
+    assert version == "e3110e6a6b59"
     engine.dispose()
 
 
