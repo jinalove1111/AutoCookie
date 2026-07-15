@@ -229,11 +229,60 @@ different exit/stop architecture not yet tried within this research
 round's scope (session filters / market regime filters / execution
 timing / entry confirmation / exit logic / risk management).
 
-## Next experiment (queued)
+## Experiment 5: combined defense (moderate stop buffer + entry-confirmation gate)
 
-Remaining untried categories from the operator's explicit list: market
-regime filters (e.g. restricting entries by realized-volatility
-percentile) and risk management (e.g. a volatility-scaled rather than
-zone-boundary-scaled stop distance, which could plausibly be wide enough
-for delay-robustness without the profitability collapse seen when
-`_STOP_BUFFER` was widened directly). Testing next.
+**Motivation**: neither lever fixed the problem alone (experiments 2 and
+4). Testing whether they compound favorably in combination -- 0.3% stop
+buffer (experiment 2's best no-delay result, PF 10.45) + 0.05% drift gate
+(experiment 4's best 2026 result). No new code -- reuses both
+already-built mechanisms together.
+
+### Results
+
+| Anchor | Config | Net Profit | PF | Sharpe | Max DD | Win Rate | Trades | Walk-Forward |
+|---|---|---|---|---|---|---|---|---|
+| 2026 | no-delay | $1,941.93 | 10.45 | 1.37 | 0.34% | 84.6% | 39 | PASSED |
+| 2026 | delay=1, combined | -$58.98 | 0.41 | -0.45 | 0.36% | 25.0% | 4 | FAILED |
+| 2025 | no-delay | $718.27 | 4.67 | 0.80 | 0.66% | 71.4% | 21 | PASSED |
+| 2025 | delay=1, combined | -$69.33 | 0.00 | -12.83 | 0.37% | 0.0% | 2 | FAILED |
+
+### Verdict: REJECTED -- the combination compounds the DOWNSIDES, not the benefits
+
+Trade count collapses to 4 (2026) and 2 (2025) -- both individually
+already reduce trade count (wider buffer lengthens average trade
+duration via the concurrency guard; the drift gate skips trades outright),
+and stacking them compounds that reduction past the point of any
+meaningful sample. Both years net negative, both fail walk-forward, 2025
+shows a 0% win rate on only 2 trades. Worse than either lever tested
+alone.
+
+## Synthesis after 5 experiments: execution-delay fragility not fixable within the tested parameter space
+
+Five independent approaches now tested against
+`docs/ROBUSTNESS_REPORT.md` test 2's material failure: stop-buffer
+widening (2 rounds: 1%/2%, then 0.3%/0.5%), Asian-session-only filtering,
+entry-confirmation drift gating (3 thresholds), and the combination of
+the two most promising individual levers. **None produced a
+configuration that is delay-robust AND confirmed across both independent
+years.** Every approach that measurably helped in the 2026 window either
+failed cross-year outright or still failed walk-forward in the SAME
+window where it helped. Combining levers made results worse, not better.
+
+**This round's conclusion, stated plainly**: within the six categories
+authorized for this research round (session filters, market regime
+filters, execution timing, entry confirmation, exit logic, risk
+management), the specific mechanisms tried (session filter, execution
+timing/entry confirmation, and risk management via stop-buffer width) do
+not fix this candidate's execution-delay fragility. Two categories remain
+genuinely untested: market regime filters (e.g. volatility-percentile
+entry restriction) and exit logic beyond the buffer (e.g. a
+volatility-scaled rather than zone-boundary-scaled stop distance) -- both
+would require new code, not just new parameter values on existing code,
+raising the engineering-risk bar for further attempts. Given 5
+consecutive rejections all pointing the same direction, continuing to
+search for a fix to THIS specific candidate's THIS specific fragility has
+reached diminishing returns for this research round. The Legacy engine
+remains the production baseline, untouched; the BTC/SOL candidates from
+sections 12-14 remain validated-but-not-deployable pending either
+infrastructure guarantees or a genuinely different exit architecture, per
+`docs/ROBUSTNESS_REPORT.md`'s original recommendation.
