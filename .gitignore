@@ -25,3 +25,7 @@ scripts/reports/
 # Local runtime databases (e.g. the paper-trading sqlite DB) -- never
 # commit live/moving trading state as a binary blob.
 *.db
+
+# Paper-DB backup files created by scripts/migrate_paper_db.py -- same
+# "never commit trading state as a binary blob" reasoning as *.db above.
+backend/*.db.backup-*
