@@ -149,13 +149,91 @@ motivated this whole research thread. Per the operator's rule ("reject
 any improvement that fails cross-year... validation" -- this fails on
 direction, not just consistency), rejected outright.
 
+## Experiment 4: entry-confirmation gate (`max_entry_drift_pct`)
+
+**Motivation**: experiments 1-3 (stop-buffer widening, session filtering)
+were proxies that didn't fix `docs/ROBUSTNESS_REPORT.md` test 2's
+material execution-delay failure. New opt-in `max_entry_drift_pct`
+parameter on `BacktestEngine.run()` (only has effect when
+`entry_delay_candles > 0`): skips the trade entirely if the delayed fill
+price has drifted more than the given fraction from the signal's
+originally-planned `entry_price`, instead of filling at an unconfirmed
+price. Targets the root mechanism directly (2 new unit tests).
+
+**Method**: `scripts/research_entry_confirmation.py` -- no-delay
+reference, delay=1 with no gate (the known-bad baseline), and delay=1
+with the gate at 0.05%/0.10%/0.15% (fractions of the ~0.23% average stop
+distance). Both confirmed years tested up front.
+
+### Results
+
+**2026-07-12:**
+
+| Config | Net Profit | PF | Sharpe | Max DD | Win Rate | Trades | Walk-Forward |
+|---|---|---|---|---|---|---|---|
+| No-delay (reference) | $1,547.64 | 5.24 | 0.90 | 0.80% | 78.6% | 42 | PASSED |
+| Delay=1, no gate | -$1,239.23 | 0.16 | -0.55 | 4.28% | 31.4% | 35 | FAILED |
+| Delay=1, gate 0.05% | $108.15 | 1.29 | 0.13 | 1.29% | 50.0% | 18 | FAILED |
+| Delay=1, gate 0.10% | -$135.09 | 0.79 | -0.12 | 1.77% | 40.0% | 25 | FAILED |
+| Delay=1, gate 0.15% | -$43.89 | 0.94 | -0.03 | 2.92% | 48.4% | 31 | FAILED |
+
+**2025-07-12:**
+
+| Config | Net Profit | PF | Sharpe | Max DD | Win Rate | Trades | Walk-Forward |
+|---|---|---|---|---|---|---|---|
+| No-delay (reference) | $737.48 | 3.48 | 0.65 | 1.46% | 69.2% | 26 | PASSED |
+| Delay=1, no gate | -$1,161.54 | 0.03 | -1.24 | 4.98% | 12.0% | 25 | FAILED |
+| Delay=1, gate 0.05% | -$279.76 | 0.13 | -1.17 | 1.71% | 11.1% | 9 | FAILED |
+| Delay=1, gate 0.10% | -$351.19 | 0.11 | -1.31 | 2.22% | 10.0% | 10 | FAILED |
+| Delay=1, gate 0.15% | -$334.96 | 0.22 | -0.78 | 2.58% | 25.0% | 12 | FAILED |
+
+### Verdict: REJECTED -- helps partially in one year, provides no benefit in the other
+
+In 2026, the tightest gate (0.05%) meaningfully improves the delay
+scenario (PnL -$1,239 -> +$108, PF 0.16 -> 1.29) -- a real, non-trivial
+effect. But it still falls far short of the no-delay reference, and
+**every gated variant in both years still fails walk-forward**. In 2025,
+the gate provides essentially no benefit at all -- every threshold stays
+deeply unprofitable (PF 0.11-0.22, 0 of 6 profitable periods each time),
+not meaningfully different from the ungated delay scenario's own 0.03 PF.
+Per "commit only if statistically better" / "reject any improvement that
+fails cross-year validation" -- this is rejected outright, not a partial
+accept.
+
+## Synthesis after 4 experiments: the execution-delay fragility appears architectural, not parameter-fixable
+
+Four independent approaches have now been tested against
+`docs/ROBUSTNESS_REPORT.md` test 2's material failure: widening the stop
+buffer (2 rounds), an Asian-session-only entry filter, and an
+entry-confirmation drift gate (3 threshold levels). **None produced a
+configuration that is both delay-robust AND confirmed across both tested
+years.** The pattern common to all four: any change that measurably
+improves the 2026 delay scenario either (a) fails cross-year validation
+outright (1% stop buffer, experiment 1) or (b) still fails walk-forward
+even in the year where it helps (entry-confirmation gate, experiment 4).
+2025 in particular is consistently harder to fix than 2026 across every
+lever tried.
+
+**Working hypothesis, not yet proven**: this candidate's core mechanism
+-- R-multiple-capped structural targets (`structure_tp_max_r=3.0`)
+combined with tight, zone-boundary-derived stops -- may be fundamentally
+incompatible with any realistic execution latency, rather than having a
+fixable parameter setting hiding somewhere in the space tested so far.
+This does not mean the underlying `structure_tp`/`premium_discount_filter`
+edge is fake (sections 12-14 of `docs/PROFITABILITY_EXPERIMENT_REPORT.md`
+stand on their own -- the edge is real under the zero-latency assumption
+every backtest before this research round made). It means realizing that
+edge in live/paper execution may require infrastructure guarantees
+(sub-candle execution) rather than a strategy-side fix, OR a genuinely
+different exit/stop architecture not yet tried within this research
+round's scope (session filters / market regime filters / execution
+timing / entry confirmation / exit logic / risk management).
+
 ## Next experiment (queued)
 
-Pivoting to "entry confirmation" (explicitly in-scope): rather than
-widening stops (rejected) or filtering by session (rejected), test
-whether an entry-confirmation gate -- skip the fill entirely if the
-delayed price has moved too far from the originally-planned entry, rather
-than filling at a now-invalidated level -- can fix the execution-delay
-material failure without the profitability cost seen in experiments 1-3.
-This directly targets the root problem (identified in
-`docs/ROBUSTNESS_REPORT.md` test 2) rather than a proxy for it.
+Remaining untried categories from the operator's explicit list: market
+regime filters (e.g. restricting entries by realized-volatility
+percentile) and risk management (e.g. a volatility-scaled rather than
+zone-boundary-scaled stop distance, which could plausibly be wide enough
+for delay-robustness without the profitability collapse seen when
+`_STOP_BUFFER` was widened directly). Testing next.
