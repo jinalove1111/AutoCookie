@@ -59,7 +59,7 @@ see `ROADMAP.md`'s "Objective change" section and the full design in
 `docs/ADAPTIVE_ARCHITECTURE.md` (architecture diagram, Market Regime
 Detector design, Strategy Interface spec, Strategy Selection Engine,
 Risk Engine extensions, Performance Database schema, 8-milestone
-roadmap). **Milestones 1-6 built**:
+roadmap). **Milestones 1-7 built**:
 
 1. **Strategy Interface**: `app.strategy.strategy_interface.Strategy` (a
    `Protocol`), with `LegacyStrategy`/`JadeStrategy` adapters wrapping the
@@ -105,10 +105,27 @@ roadmap). **Milestones 1-6 built**:
    run, and a same-second snapshot-ordering tie in `latest_snapshot()`.
    14 tests. `is_disabled` is computed but not yet consulted by the
    Strategy Selection Engine.
+7. **Risk Engine extensions**: `RiskManager.evaluate()` gains
+   `strategy_disabled: bool` (rejects if the originating strategy's
+   latest snapshot is auto-disabled); `calculate_position_size` gains
+   `volatility: str | None` (scales risk-percent to 0.5x in
+   `high_volatility` regimes, disclosed-not-tuned). Both are
+   caller-computed plain values, not lookups inside `app.risk` --
+   preserves that package's existing DB/regime-import-free layering.
+   Wired live in `scripts/run_paper.py` (fails open to pre-milestone-7
+   behavior on any error); `Trade.market_regime` now populated too as a
+   byproduct, which surfaced and fixed a real scoping bug in milestone
+   6's regime filter. Correlated exposure check (the 3rd, Low-priority
+   extension) explicitly deferred -- still no scenario where multiple
+   strategies are concurrently active. 12 tests.
 
-**Unchanged**: Legacy remains the only strategy live in paper trading
-(still running continuously, untouched); nothing about this pivot has
-altered production behavior yet.
+**Production-behavior note**: milestones 1-6 were purely additive/
+observational. Milestone 7 is the FIRST to change actual paper-trading
+sizing/rejection math (more conservative sizing in high volatility;
+rejecting signals from an auto-disabled strategy) -- takes effect only
+on the paper trader's next restart (code changes do not affect the
+already-running process, PID 24616, confirmed still running throughout).
+Legacy's own signal/entry/exit logic remains completely untouched.
 
 ## Profitability sprint (2026-07-12, operator-directed autonomous session)
 

@@ -4,6 +4,37 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Adaptive platform milestone 7: Risk Engine extensions
+
+`RiskManager.evaluate()` gains `strategy_disabled: bool = False` (rejects
+with a clear reason when the originating strategy's latest rolling
+snapshot has `is_disabled=True`). `calculate_position_size` gains
+`volatility: str | None = None`, scaling risk-percent by
+`volatility_risk_scalar()` -- 0.5x in `high_volatility` regimes,
+unchanged (1.0x) otherwise, disclosed-not-tuned. Both new parameters are
+plain caller-computed values, not lookups performed inside `app.risk`
+(verified: no file in `app/risk/` imports `app.database`/`app.portfolio`
+anywhere -- this preserves that existing layering, matching how
+`circuit_breaker`/`daily_pnl_percent`/etc. are already caller-computed).
+
+Wired live in `scripts/run_paper.py`: `strategy_disabled` via
+`StrategyPerformanceEvaluator.is_strategy_disabled()`, `volatility` via
+`detect_market_regime()` on the same LTF candles already fetched that
+pass -- both fail open (pre-milestone-7-identical behavior) on any error.
+`Trade.market_regime` (previously unpopulated) is now set as a direct
+byproduct of computing the regime for sizing, which surfaced a real bug
+in milestone 6's `market_regime` filter (it compared a string against a
+dict; fixed to match the dict's `trend` key). Correlated exposure check
+(the 3rd, Low-priority extension named in the architecture doc)
+explicitly deferred -- no scenario where multiple strategies are
+concurrently active yet. Full rationale: `ENGINEERING_DECISIONS.md` #49.
+
+12 new tests, 441/441 full suite passing. This is the first adaptive-
+platform milestone to change actual paper-trading behavior (sizing/
+rejection math) rather than being purely additive/observational -- takes
+effect only on the paper trader's next restart; Legacy's own signal/
+entry/exit logic is untouched, and PID 24616 stayed running throughout.
+
 ## [Unreleased] - Adaptive platform milestone 6: rolling performance snapshots + auto-disable
 
 `app.portfolio.performance_snapshots`: `compute_rolling_metrics()` (pure

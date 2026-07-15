@@ -2342,3 +2342,113 @@ staging this project has used for every new detector/evaluator since
 decision #19. Editing `scripts/run_paper.py`/the migration file has no
 effect on the already-running paper-trading process (PID 24616) --
 confirmed still running throughout, untouched.
+
+## 49. Risk Engine extensions: per-strategy disable hook and volatility-scaled sizing built as caller-computed plain values, keeping `app.risk` free of DB/regime imports; correlated exposure check explicitly deferred
+
+**Decision** (operator directive, 2026-07-15, adaptive-platform pivot --
+`docs/ADAPTIVE_ARCHITECTURE.md` section 5.2, milestone 7): of the 3
+extensions section 5.2 named, 2 are built this milestone (High and Medium
+priority) and 1 is deliberately deferred (Low priority, unchanged from
+the doc's own assessment):
+
+1. **Per-strategy disable hook** (High): `RiskManager.evaluate()` gains
+   `strategy_disabled: bool = False`. When `True`, rejects with reason
+   `"originating strategy is currently auto-disabled..."`.
+2. **Volatility-scaled position sizing** (Medium): `calculate_position_size`
+   gains `volatility: str | None = None`; `risk_amount` is multiplied by
+   `volatility_risk_scalar(volatility)` (`app.risk.position_sizing`),
+   0.5 in `high_volatility`, 1.0 otherwise/unset/unrecognized.
+3. **Correlated exposure check** (Low): NOT built. Unchanged from the
+   architecture doc's own reasoning -- it "only matters once MULTIPLE
+   strategies can be concurrently active," which remains untrue today
+   (`DefaultToLegacySelector` always returns `legacy`, and
+   `scripts/run_paper.py`'s one-trade-open-at-a-time concurrency guard
+   already prevents any overlap regardless). Building it now would be
+   the exact "speculative machinery for a scenario that doesn't exist
+   yet" decision #18 already rejected once for this project.
+
+**Why both new parameters are CALLER-COMPUTED plain values (`bool`/`str
+| None`), not lookups performed inside `app.risk`**: verified directly
+that no file in `app/risk/` (`risk_manager.py`, `drawdown_guard.py`,
+`circuit_breaker.py`) imports anything from `app.database`/`app.portfolio`
+-- a deliberate existing layering this project already follows (every
+other input to `RiskManager.evaluate()` -- `daily_pnl_percent`,
+`weekly_pnl_percent`, `trades_today`, even the duck-typed
+`circuit_breaker` object -- is computed/constructed by the CALLER,
+`scripts/run_paper.py`, from `TradeJournal`/`TradeTracker`, never queried
+inside `risk_manager.py` itself). Adding a real import from `app.risk` to
+`app.portfolio.performance_snapshots` (even deferred/inside-the-method)
+would have been the first crack in that layering; passing a
+pre-computed `bool` instead preserves it exactly. Same reasoning applied
+to sizing: `volatility_risk_scalar` accepts a plain string label (a
+`MarketRegime.volatility` value), not the `MarketRegime` dataclass
+itself, keeping `app.risk` decoupled from `app.regime`'s types the same
+way `RiskManager`'s existing `SignalLike` Protocol avoids importing
+`TradeSignal` directly.
+
+**Why the 0.5 high-volatility scalar is disclosed-not-tuned**: same
+status as `_STOP_BUFFER`/`_RR` before their 2026-07-11 sweep (decision
+#18) -- a reasonable, conservative starting value, not backtest-derived.
+`low_volatility` intentionally does NOT scale UP (stays 1.0): the
+operator's spec calls for scaling risk DOWN as a safety measure only: a
+calm reading can precede a breakout, so treating "low volatility" as
+license to risk MORE would invert the safety intent.
+
+**Both extensions wired as real producers in `scripts/run_paper.py`,
+not left computation-only**: unlike most of this pivot's earlier
+milestones (regime detector, selector, snapshots were all built before
+being consumed), this milestone's two extensions are consumed the SAME
+commit they're built, because their entire purpose is to be consulted
+inline in the existing risk-evaluation/sizing call sites that already
+run every pass -- there is no meaningful "build it, wire it up later"
+staging for a gate that sits directly in the pipeline `run_once()`
+already executes. `strategy_disabled` is computed via
+`StrategyPerformanceEvaluator.is_strategy_disabled(active_strategy_name)`
+(fails open to `False` on error, matching that method's own "no evidence
+yet -> not disabled" contract). `current_volatility` is computed via
+`detect_market_regime(candles)` reusing the SAME LTF `candles` already
+fetched earlier in the same pass (best-effort, fails open to `None` ->
+unchanged 1.0 scalar on any error or insufficient history). Both fail
+OPEN, never closed -- a broken evidence lookup must degrade to
+pre-milestone-7 behavior, never silently block trading or under-size a
+position on a data-availability problem, not carry any new risk.
+
+**`market_regime` (Trade's JSON audit column) also gets populated as a
+direct byproduct**: since `detect_market_regime(candles)` is now computed
+anyway (for sizing), persisting the FULL result as `Trade.market_regime`
+(`dataclasses.asdict(regime)`) is nearly free and directly serves this
+column's originally-stated purpose (section 6.2: "NOT just a label, the
+whole audit-able classification"). This surfaced a real design gap in
+milestone 6's `StrategyPerformanceEvaluator.evaluate_and_snapshot`: its
+`market_regime` filter previously compared the filter string directly
+against `Trade.market_regime` (a dict) -- a comparison that could never
+match. Fixed to match against the dict's `trend` key specifically
+(`t["market_regime"].get("trend") == market_regime`), since
+`StrategyPerformanceSnapshot.market_regime` is a single `String(32)`
+grouping key by schema design (section 6.3) and `trend` is the primary
+partition among the composite classification's dimensions -- the same
+kind of genuinely-ambiguous-prose judgment call decision #21 already
+made once for this project, resolved and documented rather than left
+implicit. This bug was latent (untested against real dict data) because
+nothing had populated `Trade.market_regime` before this milestone.
+
+**Status**: 12 new tests across 3 files (`test_risk_manager.py`:
+`strategy_disabled` reject/omit; `test_risk_drawdown_and_sizing.py`:
+`volatility_risk_scalar` mapping + `calculate_position_size`'s
+volatility-aware scaling, including the "identical when omitted"
+backward-compatibility case; `test_performance_snapshots.py`:
+`is_strategy_disabled`'s no-snapshot-yet/reflects-latest-snapshot cases
+and the trend-label market_regime scoping fix). 441/441 backend tests
+passing. `docs/ADAPTIVE_ARCHITECTURE.md` section 5.2's table and the
+roadmap table (section 7) both marked BUILT for items 1-2; item 3
+explicitly left un-built with its original "Low today" reasoning
+preserved verbatim. Legacy signal/exit logic remains completely
+untouched -- these extensions changed the RISK ENGINE's sizing/approval
+math only, and both default to pre-milestone-7-identical behavior
+(`strategy_disabled=False`, `volatility=None` -> scalar 1.0) for any
+caller that doesn't pass the new arguments. Editing `scripts/run_paper.py`
+has no effect on the already-running paper-trading process (PID 24616,
+Python has no hot-reload) -- confirmed still running throughout,
+untouched; this changes production paper-trading sizing/rejection
+behavior only on a future restart, not performed as part of this
+milestone.

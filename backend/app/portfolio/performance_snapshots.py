@@ -184,11 +184,27 @@ class StrategyPerformanceEvaluator:
     ) -> int | None:
         """Returns the new snapshot's id, or `None` if there were no
         matching closed trades to evaluate (no-op, not an error -- a
-        strategy/regime combination simply hasn't traded yet)."""
+        strategy/regime combination simply hasn't traded yet).
+
+        `market_regime`, when supplied, matches against the `trend`
+        dimension of `Trade.market_regime` (the full `MarketRegime`
+        audit dict persisted per-trade, decision #44/#49) -- NOT the
+        whole composite classification. `StrategyPerformanceSnapshot.
+        market_regime` is a single `String(32)` grouping key by schema
+        design (section 6.3), and `trend` (strong_trend/weak_trend/range)
+        is the primary partition among the composite's dimensions, same
+        judgment call this project has made before for genuinely
+        ambiguous prose (decision #21).
+        """
         trades = TradeTracker().get_closed_trades()
         trades = [t for t in trades if t.get("strategy_name") == strategy_name]
         if market_regime is not None:
-            trades = [t for t in trades if t.get("market_regime") == market_regime]
+            trades = [
+                t
+                for t in trades
+                if isinstance(t.get("market_regime"), dict)
+                and t["market_regime"].get("trend") == market_regime
+            ]
         trades.sort(key=lambda t: t["closed_at"])
         recent = trades[-window_trades:] if window_trades > 0 else trades
 
@@ -233,9 +249,9 @@ class StrategyPerformanceEvaluator:
     ) -> dict[str, Any] | None:
         """Returns the most recently computed snapshot for `strategy_name`
         (optionally scoped to `market_regime`) as a plain dict, or `None`
-        if none exists yet. This is the read path a future `StrategySelector`
-        (section 4.3's `RollingPerformanceSelector`, not yet built) would
-        consult to check `is_disabled` before routing to a strategy."""
+        if none exists yet. Read path used by `is_strategy_disabled` below
+        (milestone 7's Risk Engine disable hook) and, in future, by
+        section 4.3's `RollingPerformanceSelector` (not yet built)."""
         with session_scope() as db:
             from sqlalchemy import select
 
@@ -258,3 +274,16 @@ class StrategyPerformanceEvaluator:
             if row is None:
                 return None
             return {column.name: getattr(row, column.name) for column in row.__table__.columns}
+
+    def is_strategy_disabled(self, strategy_name: str, market_regime: str | None = None) -> bool:
+        """Convenience wrapper around `latest_snapshot` for the Risk Engine's
+        per-strategy disable hook (`docs/ADAPTIVE_ARCHITECTURE.md` section
+        5.2, milestone 7). Fails OPEN, not closed: returns `False` (not
+        disabled) when no snapshot exists yet for this strategy -- the
+        absence of evidence is not evidence of a problem, same "no data yet
+        -> safe default" reasoning `DefaultToLegacySelector` (decision #46)
+        already established at the selection layer."""
+        snapshot = self.latest_snapshot(strategy_name, market_regime)
+        if snapshot is None:
+            return False
+        return bool(snapshot["is_disabled"])

@@ -46,19 +46,35 @@ class RiskManager:
         weekly_pnl_percent: float = 0.0,
         trades_today: int = 0,
         circuit_breaker: object | None = None,
+        strategy_disabled: bool = False,
     ) -> RiskDecision:
         """Evaluate a trade signal and return an approval decision with reasons.
 
         All trade signals must pass through here before execution. Approval
         requires all of: SL exists, TP exists, RR >= MIN_RR, daily/weekly
-        loss limits not breached, max trades/day not breached, and (if a
-        `circuit_breaker` is supplied) the breaker not tripped. All failing
-        checks are collected (no short-circuiting) so callers get the full
-        list of reasons.
+        loss limits not breached, max trades/day not breached, (if a
+        `circuit_breaker` is supplied) the breaker not tripped, and the
+        originating strategy not auto-disabled. All failing checks are
+        collected (no short-circuiting) so callers get the full list of
+        reasons.
 
         `circuit_breaker` is optional and duck-typed: any object exposing
         `.is_tripped()` (and `.reason`) works. Defaults to `None`, which
         skips this check entirely — existing callers are unaffected.
+
+        `strategy_disabled` (optional, default `False` -- adaptive platform
+        milestone 7's Risk Engine disable hook, `docs/ADAPTIVE_ARCHITECTURE.md`
+        section 5.2, ENGINEERING_DECISIONS.md #49): a plain, CALLER-computed
+        boolean, not a lookup performed here -- `app.risk` has no import
+        dependency on `app.portfolio`/`app.database` anywhere in this
+        package (verified: `drawdown_guard.py`/`circuit_breaker.py` have
+        none either), and this keeps that layering intact. The caller
+        (`scripts/run_paper.py`) computes it via `StrategyPerformanceEvaluator.
+        is_strategy_disabled(strategy_name)` and passes the result in,
+        exactly the same "pre-computed value, not looked up here" pattern
+        `daily_pnl_percent`/`weekly_pnl_percent`/`trades_today` already use
+        (those are computed from `TradeJournal`/`TradeTracker` by the
+        caller too, never queried inside this method).
         """
         reasons: list[str] = []
         guard = DrawdownGuard()
@@ -95,6 +111,12 @@ class RiskManager:
         if circuit_breaker is not None and circuit_breaker.is_tripped():
             reasons.append(
                 f"circuit breaker tripped: {circuit_breaker.reason}"
+            )
+
+        if strategy_disabled:
+            reasons.append(
+                "originating strategy is currently auto-disabled "
+                "(rolling profit factor at or below threshold)"
             )
 
         return RiskDecision(approved=len(reasons) == 0, reasons=reasons)

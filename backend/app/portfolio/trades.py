@@ -75,6 +75,15 @@ class TradeTracker:
         "legacy"/"jade") produced this trade's signal. Needed for
         `app.portfolio.performance_snapshots` to group closed trades by
         strategy at all.
+
+        `market_regime` (optional, default `None` -- adaptive platform
+        milestone 7, ENGINEERING_DECISIONS.md #49): the full
+        `dataclasses.asdict(app.regime.regime_detector.MarketRegime)`
+        classification at signal time, as a plain dict -- the complete
+        audit trail (trend/volatility/event flags/raw metrics), not just
+        a label. `app.portfolio.performance_snapshots.
+        StrategyPerformanceEvaluator.evaluate_and_snapshot`'s
+        `market_regime` filter reads this dict's `trend` key.
         """
         with session_scope() as db:
             trade = Trade(
@@ -93,6 +102,7 @@ class TradeTracker:
                 strategy_config=trade_data.get("strategy_config"),
                 latency_ms=trade_data.get("latency_ms"),
                 strategy_name=trade_data.get("strategy_name"),
+                market_regime=trade_data.get("market_regime"),
             )
             db.add(trade)
             db.flush()  # populate trade.id (autoincrement PK) before commit

@@ -313,11 +313,11 @@ entry/stop/rr).
 
 ### 5.2 Extensions needed for a multi-strategy system
 
-| Extension | Why | Priority |
-|---|---|---|
-| **Per-strategy disable hook** | Section 6/Continuous Learning needs a way to tell the Risk Engine "strategy X is disabled, reject its signals" -- currently `RiskManager` has no concept of a signal's originating strategy at all. Minimal addition: `TradeSignal` (or the Strategy interface) carries a `strategy_name`, `RiskManager.evaluate()` gains an `is_strategy_disabled(name) -> bool` check. | High -- required before section 6's auto-disable is meaningful |
-| **Correlated exposure check** | Only matters once MULTIPLE strategies can be concurrently active (not true today -- only `legacy` is ever selected per section 4.2). Prevents two strategies both opening a same-direction position on the same symbol simultaneously, double-risking the account on one correlated bet. | Low today, rises once section 4's selector becomes regime-conditioned across multiple live strategies |
-| **Volatility-scaled position sizing** | `calculate_position_size` currently sizes purely off the signal's own entry/stop distance -- a `MarketRegime.volatility` input could scale the risk-percent DOWN in `high_volatility` regimes as an account-level safety measure, independent of any one strategy's own stop placement. | Medium -- genuinely useful, not blocking on anything else, can be built once the Regime Detector (section 2) exists |
+| Extension | Why | Priority | Status |
+|---|---|---|---|
+| **Per-strategy disable hook** | Section 6/Continuous Learning needs a way to tell the Risk Engine "strategy X is disabled, reject its signals" -- currently `RiskManager` has no concept of a signal's originating strategy at all. Minimal addition: `TradeSignal` (or the Strategy interface) carries a `strategy_name`, `RiskManager.evaluate()` gains an `is_strategy_disabled(name) -> bool` check. | High -- required before section 6's auto-disable is meaningful | **BUILT** -- `evaluate()` gains `strategy_disabled: bool` (a caller-computed value, not a lookup inside `app.risk` -- see ENGINEERING_DECISIONS.md #49 for why) |
+| **Correlated exposure check** | Only matters once MULTIPLE strategies can be concurrently active (not true today -- only `legacy` is ever selected per section 4.2). Prevents two strategies both opening a same-direction position on the same symbol simultaneously, double-risking the account on one correlated bet. | Low today, rises once section 4's selector becomes regime-conditioned across multiple live strategies | Not built -- still not true today, deliberately deferred (decision #49) |
+| **Volatility-scaled position sizing** | `calculate_position_size` currently sizes purely off the signal's own entry/stop distance -- a `MarketRegime.volatility` input could scale the risk-percent DOWN in `high_volatility` regimes as an account-level safety measure, independent of any one strategy's own stop placement. | Medium -- genuinely useful, not blocking on anything else, can be built once the Regime Detector (section 2) exists | **BUILT** -- `calculate_position_size(..., volatility: str \| None)`, 0.5x scalar in `high_volatility`, disclosed-not-tuned |
 
 None of these are blocking for the Strategy Interface milestone (section
 3, already done) or the Regime Detector milestone (section 2, next) --
@@ -405,7 +405,7 @@ does not depend on a LATER milestone to be safe/useful on its own.
 | 4 | **Strategy Selection Engine** (`DefaultToLegacySelector`, section 4.2) — BUILT | #1 | After #3 |
 | 5 | **MAE/MFE/latency tracking wired into paper trading** — BUILT | #2 | After #4 -- requires touching `scripts/run_paper.py`'s open-position-checking loop, more invasive than a schema change alone, sequenced after the lower-risk pieces |
 | 6 | **Rolling metrics computation + auto-disable mechanism** — BUILT | #2, #5 (needs real MAE/MFE/latency-tagged data to be meaningful, not just PnL) | After #5 |
-| 7 | **Risk Engine extensions** (per-strategy disable hook, volatility-scaled sizing) | #3 (volatility scaling needs regime output), #6 (disable hook needs something to disable strategies) | After #6 |
+| 7 | **Risk Engine extensions** (per-strategy disable hook, volatility-scaled sizing) — BUILT | #3 (volatility scaling needs regime output), #6 (disable hook needs something to disable strategies) | After #6 |
 | 8 | **New strategy modules** (Trend Following, Range Trading, Breakout, Volatility Expansion) | #1 | Explicitly LAST -- per operator's "prefer structural improvements over parameter optimization" and "do not search for another trading strategy," building new strategy CONTENT is secondary to finishing the system that can host, select, evaluate, and retire strategies. Not started this round. |
 
 **This session's scope**: milestones 1-3 (Strategy Interface, DB schema,

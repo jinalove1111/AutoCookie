@@ -142,3 +142,22 @@ def test_collects_all_failing_reasons_without_short_circuiting(risk_manager: Ris
 
     assert decision.approved is False
     assert len(decision.reasons) == 5
+
+
+def test_rejects_when_strategy_disabled(risk_manager: RiskManager):
+    signal = FakeSignal(stop_loss=95, take_profit=110, rr=2.5)
+
+    decision = risk_manager.evaluate(signal, strategy_disabled=True)
+
+    assert decision.approved is False
+    assert any("auto-disabled" in reason for reason in decision.reasons)
+
+
+def test_strategy_disabled_not_checked_when_omitted(risk_manager: RiskManager):
+    """strategy_disabled defaults to False, which must skip the rejection
+    entirely (existing callers unaffected)."""
+    signal = FakeSignal(stop_loss=95, take_profit=110, rr=2.5)
+
+    decision = risk_manager.evaluate(signal)
+
+    assert decision.approved is True

@@ -246,6 +246,80 @@ def test_evaluator_scopes_to_market_regime_when_given(migrated_db):
     assert isinstance(result, int)
 
 
+def test_evaluator_scopes_by_trend_label_within_the_full_market_regime_dict(migrated_db):
+    """Trade.market_regime stores the FULL MarketRegime audit dict
+    (adaptive platform milestone 7) -- scoping must match against its
+    `trend` key, not compare the dict itself to the filter string."""
+    from app.portfolio.performance_snapshots import StrategyPerformanceEvaluator
+    from app.portfolio.trades import TradeTracker
+
+    tracker = TradeTracker()
+    trending_id = tracker.record_trade(
+        {
+            "symbol": "BTCUSDT",
+            "direction": "long",
+            "entry_price": 100.0,
+            "stop_loss": 95.0,
+            "take_profit": 110.0,
+            "size": 1.0,
+            "mode": "paper",
+            "strategy_name": "legacy",
+            "market_regime": {"trend": "strong_trend", "volatility": "normal_volatility"},
+        }
+    )
+    tracker.close_trade(trending_id, exit_price=110.0, pnl=10.0, r_multiple=2.0)
+
+    ranging_id = tracker.record_trade(
+        {
+            "symbol": "BTCUSDT",
+            "direction": "long",
+            "entry_price": 100.0,
+            "stop_loss": 95.0,
+            "take_profit": 110.0,
+            "size": 1.0,
+            "mode": "paper",
+            "strategy_name": "legacy",
+            "market_regime": {"trend": "range", "volatility": "normal_volatility"},
+        }
+    )
+    tracker.close_trade(ranging_id, exit_price=95.0, pnl=-5.0, r_multiple=-1.0)
+
+    result = StrategyPerformanceEvaluator().evaluate_and_snapshot(
+        "legacy", account_balance=1000.0, market_regime="strong_trend"
+    )
+    assert isinstance(result, int)
+    snapshot = StrategyPerformanceEvaluator().latest_snapshot("legacy", market_regime="strong_trend")
+    assert snapshot["window_trades"] == 1
+    assert snapshot["win_rate"] == 1.0  # only the strong_trend trade (a winner) counted
+
+
+# --- StrategyPerformanceEvaluator.is_strategy_disabled ----------------------
+
+
+def test_is_strategy_disabled_false_when_no_snapshot_exists_yet(migrated_db):
+    from app.portfolio.performance_snapshots import StrategyPerformanceEvaluator
+
+    assert StrategyPerformanceEvaluator().is_strategy_disabled("legacy") is False
+
+
+def test_is_strategy_disabled_reflects_latest_snapshot(migrated_db):
+    from app.portfolio.performance_snapshots import (
+        MIN_TRADES_FOR_CONFIDENCE,
+        StrategyPerformanceEvaluator,
+    )
+    from app.portfolio.trades import TradeTracker
+
+    tracker = TradeTracker()
+    for i in range(MIN_TRADES_FOR_CONFIDENCE):
+        _seed_closed_trade(tracker, strategy_name="legacy", pnl=-10.0, r_multiple=-2.0, idx=i)
+
+    evaluator = StrategyPerformanceEvaluator()
+    assert evaluator.is_strategy_disabled("legacy") is False  # no snapshot computed yet
+
+    evaluator.evaluate_and_snapshot("legacy", account_balance=1000.0)
+    assert evaluator.is_strategy_disabled("legacy") is True
+
+
 def test_evaluator_window_trades_caps_at_window_size_using_most_recent(migrated_db):
     from app.portfolio.performance_snapshots import StrategyPerformanceEvaluator
     from app.portfolio.trades import TradeTracker

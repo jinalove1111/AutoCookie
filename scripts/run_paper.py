@@ -88,6 +88,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
 
@@ -128,6 +129,7 @@ from app.portfolio.positions import (
 )
 from app.portfolio.signals import SignalTracker
 from app.portfolio.trades import TradeTracker
+from app.regime.regime_detector import detect_market_regime
 from app.risk.circuit_breaker import CircuitBreaker, PersistentCircuitBreaker
 from app.risk.drawdown_guard import DrawdownGuard
 from app.risk.position_sizing import calculate_position_size
@@ -701,6 +703,16 @@ def run_once(
 
     summary["signal_found"] = True
 
+    # Which Strategy (app.strategy.strategy_interface.AVAILABLE_STRATEGIES
+    # key) this signal came from -- computed once, reused below both for
+    # the Risk Engine's disable check and for trade_data's strategy_name
+    # (adaptive platform milestones 6/7). Paper trading still calls
+    # SignalEngine directly rather than routing through the Strategy
+    # Selection Engine (milestone 4), so this is the same effective
+    # mapping LegacyStrategy/JadeStrategy already establish, just not yet
+    # routed through them.
+    active_strategy_name = "jade" if settings.USE_JADE_ENGINE else "legacy"
+
     # Persist the signal as soon as it's generated (Dashboard follow-up):
     # `app.database.models.Signal`'s status column has always documented a
     # pending/approved/rejected/executed convention, and TradeSignal's own
@@ -753,6 +765,20 @@ def run_once(
         print(f"WARNING: could not compute weekly_pnl_percent ({exc}); defaulting to 0.0.")
         weekly_pnl_percent = 0.0
 
+    # Per-strategy disable check (adaptive platform milestone 7,
+    # ENGINEERING_DECISIONS.md #49): best-effort, same fallback-to-safe
+    # pattern as trades_today/daily_pnl_percent above -- a broken snapshot
+    # query must not block the pipeline, and fails OPEN (not disabled) on
+    # error, matching `is_strategy_disabled`'s own "no evidence yet ->
+    # not disabled" contract.
+    try:
+        strategy_disabled = StrategyPerformanceEvaluator().is_strategy_disabled(
+            active_strategy_name
+        )
+    except Exception as exc:
+        print(f"WARNING: could not check strategy disabled status ({exc}); defaulting to False.")
+        strategy_disabled = False
+
     try:
         risk_decision = RiskManager().evaluate(
             signal,
@@ -760,6 +786,7 @@ def run_once(
             weekly_pnl_percent=weekly_pnl_percent,
             trades_today=trades_today,
             circuit_breaker=circuit_breaker,
+            strategy_disabled=strategy_disabled,
         )
     except Exception as exc:
         print(f"ERROR: risk evaluation failed: {exc}")
@@ -850,11 +877,27 @@ def run_once(
     # column's other float values. "How many price units did the fill move
     # against us" is the simplest, most directly inspectable definition
     # given no prior convention exists for this column.
+    # volatility (adaptive platform milestone 7, ENGINEERING_DECISIONS.md
+    # #49): best-effort regime classification over the same LTF `candles`
+    # already fetched this pass, scaling risk-percent down in
+    # high_volatility regimes (see `calculate_position_size`'s docstring).
+    # Fails open to `None` (unchanged 1.0 scalar) on any error or below
+    # `detect_market_regime`'s minimum candle-history floor, matching
+    # every other best-effort observability step in this function.
+    try:
+        regime = detect_market_regime(candles)
+        current_volatility = regime.volatility if regime is not None else None
+    except Exception as exc:
+        print(f"WARNING: could not compute market regime for sizing ({exc}); defaulting to None.")
+        regime = None
+        current_volatility = None
+
     size = calculate_position_size(
         account_balance=settings.PLACEHOLDER_ACCOUNT_BALANCE,
         risk_percent=settings.RISK_PER_TRADE_PERCENT,
         entry=signal.entry_price,
         stop_loss=signal.stop_loss,
+        volatility=current_volatility,
     )
 
     entry_price = result.fill_price if result.fill_price is not None else signal.entry_price
@@ -876,7 +919,8 @@ def run_once(
         "mode": "paper",
         "opened_at": datetime.now(timezone.utc),
         "latency_ms": latency_ms,
-        "strategy_name": "jade" if settings.USE_JADE_ENGINE else "legacy",
+        "strategy_name": active_strategy_name,
+        "market_regime": asdict(regime) if regime is not None else None,
         "strategy_config": {
             "use_jade_engine": settings.USE_JADE_ENGINE,
             "enable_breakeven": settings.ENABLE_BREAKEVEN,
