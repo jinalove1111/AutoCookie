@@ -2022,3 +2022,86 @@ all 6 columns + insert a snapshot row) against a throwaway DB, same
 verification method as decision #40. `tests/test_db_bootstrap.py`
 updated: pinned migration head (`e3110e6a6b59`) and `EXPECTED_TABLES`
 (added `strategy_performance_snapshots`). 387/387 backend tests passing.
+
+## 45. Market Regime Detector: composite output (trend x volatility x independent event flags), percentile-relative volatility, disclosed-not-tuned thresholds
+
+**Decision** (operator directive, 2026-07-15, adaptive-platform pivot --
+`docs/ADAPTIVE_ARCHITECTURE.md` section 2): `app.regime.regime_detector.
+detect_market_regime(candles) -> MarketRegime | None` classifies market
+state as a COMPOSITE (`trend`: one of `strong_trend`/`weak_trend`/`range`;
+`volatility`: one of `high_volatility`/`normal_volatility`/`low_volatility`;
+plus 3 independent boolean event flags: `breakout`, `mean_reversion`,
+`liquidity_sweep_environment`) rather than one flat label, with every
+classification carrying its own `metrics` dict of raw values for audit.
+
+**Why composite, not one flat label**: the operator's own list (Strong
+Trend / Weak Trend / Range / High Volatility / Low Volatility / Breakout
+/ Mean Reversion / Liquidity Sweep Environment) mixes states that are
+naturally mutually exclusive (a market can't be both "Strong Trend" and
+"Range") with states that genuinely co-occur (a "Strong Trend" can also
+be "High Volatility"; a "Breakout" is a moment-in-time event that can
+happen inside either a trend or a range). Forcing all eight into one flat
+label would either lose real information or require an arbitrary,
+unevidenced priority order.
+
+**Why volatility classification is PERCENTILE-relative, not an absolute
+threshold**: `volatility_percentile()` ranks the CURRENT realized
+volatility against its own rolling history (default 100-reading window),
+not against a fixed number -- the same classification logic then works
+identically across BTC, a lower-volatility asset, or a genuinely
+different regime for the SAME asset, without per-asset hardcoded
+constants. Same reasoning `entry_model.py`'s R-multiple-based sizing
+already uses (relative to the trade's own risk, not an absolute dollar
+figure) applied to a new problem.
+
+**Why `strong_trend` requires BOTH high ADX AND coherent swing
+structure**: ADX alone can be driven by one violent, structurally
+incoherent move. `swing_trend_direction()` (reusing `find_swing_highs`/
+`find_swing_lows` unmodified) independently confirms the last 2 swing
+highs AND the last 2 swing lows are both moving the same direction (a
+real HH+HL or LH+LL pattern) before ADX >= 25 is allowed to classify as
+`strong_trend` -- ADX >= 25 with incoherent structure degrades to
+`weak_trend` instead.
+
+**Why `mean_reversion` and `strong_trend` are mutually exclusive by
+construction** (`detect_market_regime`'s `mean_reversion = is_mean_reversion(...)
+and trend != "strong_trend"`): an extreme distance-from-MA reading during
+a genuine strong trend is a continuation signal, not a reversion setup --
+conflating the two would misclassify trend continuation as a reversal
+opportunity.
+
+**Why ADX/moving-average/VWAP are new code but not "new indicators" in
+the sense the operator's "do not invent new indicators" instruction
+means**: all three are standard, textbook technical-analysis measures
+explicitly NAMED in the operator's own feature list -- the instruction's
+intent (read in context of the whole adaptive-platform directive) is "do
+not invent new PATTERN-RECOGNITION/trading concepts," not "do not write
+any new calculation at all." Every existing detector this project has
+ever shipped (FVG, order block, CHOCH, premium/discount) was also "new
+code" the first time it was written; ADX/MA/VWAP are held to the exact
+same standard (standard, disclosed, tested), not a stricter one.
+
+**Disclosed limitation**: OKX's public candle endpoint returns TOTAL
+volume per candle, not a buy/sell split -- a true "Volume Delta" (named
+in the operator's feature list) would need tick-level trade data, a
+genuinely different, currently-unused market-data source. Not silently
+assumed available; deferred until/unless tick data is added as a new
+Market Data source (section 1 of the architecture doc).
+
+**Disclosed simplification**: `average_directional_index`'s final
+DX->ADX step is a plain trailing average of the last `lookback` DX
+values, not Wilder's own exact recursive smoothing formula for that
+specific step -- a reasonable, standard approximation, not textbook-exact
+Wilder smoothing end to end. Flagged in the function's own docstring, not
+hidden.
+
+**Status**: 20 new tests (`tests/test_regime_detector.py`) covering every
+helper function (SMA, distance-from-MA, VWAP, realized volatility, swing
+trend direction, breakout with/without volume confirmation, liquidity
+sweep counting, ADX minimum-history and relative-magnitude checks, mean
+reversion) plus integration tests for `detect_market_regime` itself.
+407/407 backend tests passing. Not yet wired into any live/paper trading
+path or into the Strategy Selection Engine (`docs/ADAPTIVE_ARCHITECTURE.md`
+section 4, milestone 4, not yet built) -- same "detection-only until a
+wiring decision is made deliberately" status this project has used for
+every new detector since decision #19.

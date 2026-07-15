@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Adaptive platform milestone 3: Market Regime Detector
+
+`app.regime.regime_detector.detect_market_regime()`: composite
+classification (trend: strong_trend/weak_trend/range; volatility:
+high/normal/low, percentile-relative not absolute; plus independent
+breakout/mean_reversion/liquidity_sweep_environment flags). Built from
+objective metrics -- ADX (Wilder's smoothing, new), realized volatility
+percentile (new ranking logic over the existing formula), swing
+structure via `find_swing_highs`/`find_swing_lows` (reused unmodified),
+VWAP and distance-from-MA (new), liquidity sweep frequency via
+`detect_liquidity_sweep`/`detect_equal_highs`/`detect_equal_lows`
+(reused unmodified). Every classification carries its own raw `metrics`
+dict for audit. Disclosed limitations: no true volume-delta (OKX candles
+only carry total volume), ADX's DX->ADX step uses a plain trailing
+average not exact Wilder smoothing. 20 new tests. Not yet wired into any
+live/paper trading path. Full rationale: `ENGINEERING_DECISIONS.md` #45.
+
+407/407 backend tests passing. Paper trading (Legacy engine only)
+continuously running, untouched.
+
 ## [Unreleased] - Adaptive platform pivot: objective change, design document, Strategy Interface (milestone 1)
 
 ### Objective change (operator directive)

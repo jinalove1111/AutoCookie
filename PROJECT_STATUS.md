@@ -59,14 +59,28 @@ see `ROADMAP.md`'s "Objective change" section and the full design in
 `docs/ADAPTIVE_ARCHITECTURE.md` (architecture diagram, Market Regime
 Detector design, Strategy Interface spec, Strategy Selection Engine,
 Risk Engine extensions, Performance Database schema, 8-milestone
-roadmap). **Milestone 1 (Strategy Interface) is built**:
-`app.strategy.strategy_interface.Strategy` (a `Protocol`), with
-`LegacyStrategy`/`JadeStrategy` adapters wrapping the existing, unchanged
-`SignalEngine` integration points -- Legacy is now "Strategy A," Jade is
-"Strategy B," both conforming to one interface, neither's underlying
-behavior touched. 7 new tests. **Unchanged**: Legacy remains the only
-strategy live in paper trading (still running continuously, untouched);
-nothing about this pivot has altered production behavior yet.
+roadmap). **Milestones 1-3 built**:
+
+1. **Strategy Interface**: `app.strategy.strategy_interface.Strategy` (a
+   `Protocol`), with `LegacyStrategy`/`JadeStrategy` adapters wrapping the
+   existing, unchanged `SignalEngine` integration points -- Legacy is now
+   "Strategy A," Jade is "Strategy B," both conforming to one interface,
+   neither's underlying behavior touched. 7 tests.
+2. **Performance Database schema**: `Trade` gains 6 nullable columns
+   (`market_regime`, `strategy_name`, `holding_time_seconds`,
+   `max_adverse_excursion`, `max_favorable_excursion`, `latency_ms`); new
+   `strategy_performance_snapshots` table for rolling per-strategy/
+   per-regime metrics. Schema-only -- nothing populates these yet.
+3. **Market Regime Detector**: `app.regime.regime_detector.
+   detect_market_regime()` -- composite trend/volatility classification
+   plus breakout/mean-reversion/liquidity-sweep-environment event flags,
+   built from objective metrics (ADX, percentile-relative realized
+   volatility, swing structure, VWAP, distance-from-MA, liquidity sweep
+   frequency). 20 tests. Not yet wired into any live path.
+
+**Unchanged**: Legacy remains the only strategy live in paper trading
+(still running continuously, untouched); nothing about this pivot has
+altered production behavior yet.
 
 ## Profitability sprint (2026-07-12, operator-directed autonomous session)
 
