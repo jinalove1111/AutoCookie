@@ -425,12 +425,18 @@ does not depend on a LATER milestone to be safe/useful on its own.
 | 6 | **Rolling metrics computation + auto-disable mechanism** | #2, #5 (needs real MAE/MFE/latency-tagged data to be meaningful, not just PnL) | ✅ DONE (commit 7b0b868) |
 | 7 | **Risk Engine extensions** (per-strategy disable hook, volatility-scaled sizing) | #3 (volatility scaling needs regime output), #6 (disable hook needs something to disable strategies) | ✅ DONE (commits b015785, 6ff2f6f) |
 | 8.1 | **Live paper-DB migration to schema head** (`app.database.migrate_existing`, fingerprint-detect + stamp + upgrade) | #2 | ✅ DONE (2026-07-16) -- see `ENGINEERING_DECISIONS.md` #51 |
-| 8 | **New strategy modules** (Trend Following, Range Trading, Breakout, Volatility Expansion) | #1 | Explicitly LAST -- per operator's "prefer structural improvements over parameter optimization" and "do not search for another trading strategy," building new strategy CONTENT is secondary to finishing the system that can host, select, evaluate, and retire strategies. Not started this round. |
+| 8 | **New strategy modules** (Trend Following, Range Trading, Breakout, Volatility Expansion) | #1 | ✅ DONE 2026-07-16 -- implemented AND quarantined in `EXPERIMENTAL_STRATEGIES` (`app.strategy.experimental`), zero backtest evidence yet, **NOT production candidates**. See `ENGINEERING_DECISIONS.md` #52. |
 
-**This session's scope**: milestones 1-7 (Strategy Interface through Risk
-Engine extensions) and 8.1 (live paper-DB migration) are now built and
-committed. Milestone 8 (new strategy modules) remains the last item on
-this roadmap and has not been started.
+**This session's scope**: all 9 milestones on this roadmap (1 through 8,
+plus 8.1) are now built and committed. Milestone 8 (new strategy modules)
+shipped as four disclosed-not-tuned, detection-only modules living in a
+separate quarantine registry (`EXPERIMENTAL_STRATEGIES`) -- reachable only
+via `scripts/run_backtest.py --strategy NAME` for backtest evaluation, not
+consulted by either configured selector (`DefaultToLegacySelector`,
+`ConfigurableFallbackSelector`) and therefore invisible to paper/live
+trading. Promotion of any of the four into `AVAILABLE_STRATEGIES` requires
+real backtest/walk-forward evidence first -- the natural next step, not
+yet performed (see `ROADMAP.md`).
 
 **Commit discipline for every milestone**: full backend test suite run
 and passing, paper trader health verified (still running, still

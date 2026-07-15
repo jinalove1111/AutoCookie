@@ -6,11 +6,21 @@ BACKTEST_MODE only. Never places live orders, never imports execution/.
 import copy
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.backtesting.performance import calculate_max_drawdown, calculate_win_rate
 from app.config import settings
 from app.risk.position_sizing import calculate_position_size
+
+if TYPE_CHECKING:
+    # Import guarded behind TYPE_CHECKING (not a runtime import) so this
+    # module never actually depends on app.strategy.strategy_interface at
+    # import time -- BacktestEngine has always been driven by whatever
+    # `signal_engine` object a caller passes in (structural, not a real
+    # dependency on that module), and the new `strategy` parameter below
+    # follows the exact same pattern: any object with a matching
+    # `generate_signal` method works, this is purely a type-hint aid.
+    from app.strategy.strategy_interface import Strategy
 
 MIN_CANDLES = 31  # need index 30 available (30 candles of prior LTF history)
 
@@ -183,6 +193,7 @@ class BacktestEngine:
         require_session: str | None = None,
         max_entry_drift_pct: float | None = None,
         atr_stop_multiplier: float | None = None,
+        strategy: "Strategy | None" = None,
     ) -> "BacktestResult":
         """Replays historical LTF candles (with a time-aligned, no-lookahead
         HTF slice at each step) through the Strategy Engine and Risk Engine
@@ -290,6 +301,35 @@ class BacktestEngine:
         `entry_delay_candles`'s existing behavior when unset -- a trade
         that clears the drift check still fills exactly as before.
 
+        `strategy` (default `None`, opt-in -- Milestone 9, 2026-07-16, the
+        adaptive platform's "evidence pipeline": ANY module conforming to
+        `app.strategy.strategy_interface.Strategy` -- production
+        (`AVAILABLE_STRATEGIES`) or experimental
+        (`app.strategy.experimental.EXPERIMENTAL_STRATEGIES`) -- must be
+        able to be backtested through this SAME engine, fees/slippage/
+        walk-forward included, before it is ever considered for
+        production). When `None` (the default), behavior is EXACTLY as
+        before this parameter existed: every step calls
+        `signal_engine.generate_signal(...)` with the full set of
+        SignalEngine-configuration flags above. When given a `Strategy`
+        instance, every step instead calls
+        `strategy.generate_signal(symbol=..., ltf_candles=..., htf_candles=...)`
+        -- `signal_engine` and every SignalEngine-configuration flag
+        (`use_breaker_block`, `require_full_confluence`,
+        `require_ob_fvg_confluence`, `use_structure_tp`,
+        `require_premium_discount_filter`, `use_jade_engine`,
+        `structure_tp_max_r`, `require_session`, `atr_stop_multiplier`) are
+        then ignored -- those only configure the SignalEngine path this
+        bypasses, the same "every OTHER flag is ignored" precedent
+        `use_jade_engine` already established above. Everything
+        DOWNSTREAM of signal generation (risk gating via `risk_manager`,
+        position sizing, fill simulation, fees, slippage, break-even,
+        partial take-profit, PnL, reporting) is completely unchanged and
+        applies identically regardless of which path produced the signal
+        -- this is the whole point: a strategy module gets evaluated
+        through the exact same execution simulation as the production
+        SignalEngine path, not a separate/looser one.
+
         Walk-forward, expanding window, one trade open at a time (no
         overlap): starts at index MIN_CANDLES - 1 so LTF signal generation
         always has history. At each LTF step `i`, the HTF slice passed to
@@ -342,20 +382,33 @@ class BacktestEngine:
             htf_cursor = _advance_htf_cursor(htf_candles, htf_cursor, ltf_timestamp)
             htf_slice = htf_candles[: htf_cursor + 1]
 
-            signal = signal_engine.generate_signal(
-                symbol=symbol,
-                ltf_candles=ltf_candles[: i + 1],
-                htf_candles=htf_slice,
-                use_breaker_block=use_breaker_block,
-                require_full_confluence=require_full_confluence,
-                require_ob_fvg_confluence=require_ob_fvg_confluence,
-                use_structure_tp=use_structure_tp,
-                require_premium_discount_filter=require_premium_discount_filter,
-                use_jade_engine=use_jade_engine,
-                structure_tp_max_r=structure_tp_max_r,
-                require_session=require_session,
-                atr_stop_multiplier=atr_stop_multiplier,
-            )
+            if strategy is not None:
+                # Strategy-injection path (Milestone 9, see `strategy`'s
+                # docstring above): bypasses signal_engine and every
+                # SignalEngine-configuration flag entirely -- everything
+                # downstream (risk gating, fills, fees, slippage, PnL) is
+                # unchanged from here on regardless of which path produced
+                # `signal`.
+                signal = strategy.generate_signal(
+                    symbol=symbol,
+                    ltf_candles=ltf_candles[: i + 1],
+                    htf_candles=htf_slice,
+                )
+            else:
+                signal = signal_engine.generate_signal(
+                    symbol=symbol,
+                    ltf_candles=ltf_candles[: i + 1],
+                    htf_candles=htf_slice,
+                    use_breaker_block=use_breaker_block,
+                    require_full_confluence=require_full_confluence,
+                    require_ob_fvg_confluence=require_ob_fvg_confluence,
+                    use_structure_tp=use_structure_tp,
+                    require_premium_discount_filter=require_premium_discount_filter,
+                    use_jade_engine=use_jade_engine,
+                    structure_tp_max_r=structure_tp_max_r,
+                    require_session=require_session,
+                    atr_stop_multiplier=atr_stop_multiplier,
+                )
             if signal is None:
                 i += 1
                 continue

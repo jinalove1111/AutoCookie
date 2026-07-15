@@ -972,3 +972,103 @@ def test_run_small_daily_loss_within_limit_does_not_block_further_trades(monkeyp
     # the end of the series (no more candles to scan for an exit), so
     # _simulate_trade closes it out at that final candle's close price.
     assert result.total_trades == 2
+
+
+# --- Strategy injection (Milestone 9, 2026-07-16 -- "evidence pipeline": any
+# Strategy-Protocol-conforming module can be backtested through this SAME
+# engine, bypassing signal_engine entirely, so future strategy modules can
+# be evidenced through fees/slippage/walk-forward before ever being
+# considered for production) ------------------------------------------------
+
+
+class _FakeStrategy:
+    """Minimal stand-in for a real Strategy-Protocol module (see
+    app.strategy.strategy_interface.Strategy) -- returns the same fixed
+    TradeSignal-shaped object on every call, driving `BacktestEngine.run()`'s
+    walk-forward loop deterministically without depending on any real
+    strategy module. Records every call's (symbol, ltf_len, htf_len) so
+    tests can prove the engine actually reached this path with real
+    arguments, not just that SOME signal came from somewhere.
+    """
+
+    name = "fake-strategy"
+    version = "1.0"
+
+    def __init__(self, signal):
+        self._signal = signal
+        self.calls: list[tuple] = []
+
+    def generate_signal(self, symbol, ltf_candles, htf_candles):
+        self.calls.append((symbol, len(ltf_candles), len(htf_candles)))
+        return self._signal
+
+
+class _ExplodingSignalEngine:
+    """A `signal_engine` stand-in that raises if ever called -- proves the
+    `strategy`-injection path truly bypasses `signal_engine` entirely
+    (never even invoked), not merely that its result gets overridden."""
+
+    def generate_signal(self, *args, **kwargs):
+        raise AssertionError(
+            "signal_engine.generate_signal must not be called when strategy is provided"
+        )
+
+
+def test_run_with_injected_strategy_produces_trades_through_normal_fill_pnl_path():
+    """A fake Strategy (not SignalEngine) drives run()'s walk-forward loop:
+    its TradeSignal must flow through the exact same risk/fill/fee/slippage/
+    PnL machinery as the SignalEngine path -- proven via an independent
+    calculate_position_size check, same pattern as
+    test_run_wires_real_settings_risk_per_trade_percent_into_trade_size.
+    An `_ExplodingSignalEngine` (raises if called) is passed as
+    `signal_engine` to prove the SignalEngine path is truly bypassed, not
+    just overridden.
+    """
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=110.0, direction="long")
+    strategy = _FakeStrategy(signal)
+    ltf_candles = _flat_ltf_candles(MIN_CANDLES + 1)
+
+    result = BacktestEngine().run(
+        ltf_candles,
+        [],
+        _ExplodingSignalEngine(),
+        _FakeRiskManager(),
+        account_balance=10000.0,
+        strategy=strategy,
+    )
+
+    assert result.total_trades == 1
+    expected_size = calculate_position_size(
+        10000.0, settings.RISK_PER_TRADE_PERCENT, 100.0, 95.0
+    )
+    assert expected_size > 0.0
+    assert result.trades[0]["size"] == expected_size
+    assert result.trades[0]["direction"] == "long"
+
+    # The engine really did call the strategy, with real (non-empty,
+    # non-placeholder) arguments.
+    assert len(strategy.calls) >= 1
+    symbol, ltf_len, htf_len = strategy.calls[0]
+    assert symbol == "UNKNOWN"  # these flat candles carry no "symbol" key
+    assert ltf_len == MIN_CANDLES
+    assert htf_len == 0
+
+
+def test_run_strategy_none_default_matches_omitting_the_parameter():
+    """strategy=None (the default) must be byte-for-byte identical to not
+    passing the parameter at all -- backward compatibility for every
+    existing caller, same pattern as entry_delay_candles=0's own test.
+    """
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=110.0, direction="long")
+    ltf_candles = _flat_ltf_candles(MIN_CANDLES + 1)
+
+    result_default = BacktestEngine().run(
+        ltf_candles, [], _FakeSignalEngineFixedSignal(signal), _FakeRiskManager(),
+        account_balance=10000.0,
+    )
+    result_explicit_none = BacktestEngine().run(
+        ltf_candles, [], _FakeSignalEngineFixedSignal(signal), _FakeRiskManager(),
+        account_balance=10000.0, strategy=None,
+    )
+
+    assert result_default.trades == result_explicit_none.trades

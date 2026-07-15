@@ -4,6 +4,82 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Adaptive platform milestone 9: four new strategy-content modules, quarantined and evidence-pipeline-ready
+
+Four new `Strategy`-Protocol modules (`app/strategy/`) -- the platform's
+first strategies that are NOT `SignalEngine` wrappers, closing out the
+last item on `docs/ADAPTIVE_ARCHITECTURE.md` section 7's milestone
+roadmap:
+
+- `trend_following.py` (`TrendFollowingStrategy`, `"trend_following"`,
+  160 LoC): HTF swing-trend + LTF SMA(20) agreement + ADX(14) >= 20
+  filter, pullback-to-MA-then-resumption entry, swing-based stop with a
+  0.25*ATR buffer (1.5*ATR fallback when no swing point exists), fixed
+  2.5R target.
+- `range_trading.py` (`RangeTradingStrategy`, `"range_trading"`,
+  154 LoC): ADX < 20 + a 40-candle range at least 2*ATR wide, fades the
+  bottom/top 15% edge of that range, stop 0.5*ATR beyond the extreme, TP
+  at the opposite extreme, emits only when the honest rr clears 2.0 (this
+  platform's `RiskManager.MIN_RR`). An algebraic check of the module's own
+  formulas shows this rr floor is effectively ~2.125 whenever the width/
+  edge gates already pass -- the guard is defensive, not independently
+  reachable; see `ENGINEERING_DECISIONS.md` #52(d).
+- `breakout.py` (`BreakoutStrategy`, `"breakout"`, 143 LoC): 20-candle
+  Donchian-channel close-through with confirmation (candle body >= 1x
+  ATR OR volume > 1.5x its 20-candle average), stop at the broken channel
+  edge +/- 0.5*ATR, 2.5R target.
+- `volatility_expansion.py` (`VolatilityExpansionStrategy`,
+  `"volatility_expansion"`, 156 LoC): squeeze precondition via
+  `regime_detector.volatility_percentile <= 0.25` on the candles before
+  the current one, trigger = current candle true range >= 2*ATR(14),
+  direction = the expansion candle's own direction, stop = its opposite
+  extreme, 2.5R target.
+
+All four reuse existing indicator helpers (`regime_detector`/
+`market_structure`/`utils`) -- zero reimplemented indicators -- are
+detection-only, return `None` generously on ambiguous/insufficient input,
+and disclose in their own docstrings that every threshold is a standard
+textbook value, not backtest-tuned.
+
+`app/strategy/experimental.py` (new): `EXPERIMENTAL_STRATEGIES`, a
+quarantine registry holding these four, plus `all_strategies()` merging
+it with `AVAILABLE_STRATEGIES`. The PRODUCTION registry
+`AVAILABLE_STRATEGIES` is untouched -- still exactly `{legacy, jade}` --
+and no real selector (`DefaultToLegacySelector`,
+`ConfigurableFallbackSelector`) ever consults the experimental registry.
+Promotion into `AVAILABLE_STRATEGIES` requires backtest/walk-forward
+evidence first.
+
+`BacktestEngine.run()` gained an additive `strategy: Strategy | None =
+None` parameter (`app/backtesting/backtest_engine.py`, import guarded
+behind `TYPE_CHECKING`): default `None` is byte-identical to every
+existing caller's prior behavior (proven with a `SignalEngine` fake that
+raises if called); when given, ONLY the signal source changes -- risk
+gating, sizing, fills, fees, slippage, break-even/partial-TP, PnL, and
+reporting are all unchanged. `scripts/run_backtest.py --strategy NAME`
+resolves the name via `all_strategies()` before any candle fetch (an
+unknown name errors immediately, listing the available names) and prints
+a `NOTE` when any SignalEngine-only flag is set alongside it (ignored,
+since `--strategy` bypasses the SignalEngine pipeline entirely).
+
+**Why a separate quarantine registry, not registering into
+`AVAILABLE_STRATEGIES`**: "registered somewhere in the codebase" must
+never silently become "selectable by production/paper trading" --
+promotion is a deliberate, evidence-gated act. **Why inject at the
+signal source only**: it puts experimental strategies through the exact
+same fee/slippage/walk-forward pipeline every existing finding in this
+project was validated against, so their eventual backtest numbers are
+directly comparable to Legacy's own history. Full rationale:
+`ENGINEERING_DECISIONS.md` #52.
+
+38 new strategy/registry tests (7 + 9 + 6 + 8 + 8) + 2 new
+`BacktestEngine` injection tests = 40 new tests. **505/505 full suite
+passing** (was 465 after milestone 8.1). Production behavior unchanged:
+`AVAILABLE_STRATEGIES` still exactly `{legacy, jade}`; the paper trader
+(Legacy engine) untouched and running throughout. Smoke check:
+`all_strategies()` -> `['breakout', 'jade', 'legacy', 'range_trading',
+'trend_following', 'volatility_expansion']`.
+
 ## [Unreleased] - Adaptive platform milestone 8.1: live paper-DB migrated to schema head
 
 `app.database.migrate_existing.migrate_database()` (new): brings a

@@ -70,6 +70,47 @@ milestones 2-7. `app.database.migrate_existing.migrate_database()`
 fingerprinted, stamped, and upgraded it to head (`e3110e6a6b59`), with a
 backup taken first. See `ENGINEERING_DECISIONS.md` #51.
 
+**Milestone 9 (2026-07-16)**: the last item on `docs/ADAPTIVE_ARCHITECTURE.md`
+section 7's roadmap -- four new strategy-content modules (Trend Following,
+Range Trading, Breakout, Volatility Expansion) -- is now implemented AND
+quarantined in `app.strategy.experimental.EXPERIMENTAL_STRATEGIES`, with
+zero backtest evidence yet. `AVAILABLE_STRATEGIES` (the only registry
+either configured selector consults) is untouched, still exactly
+`{legacy, jade}`. `BacktestEngine.run(strategy=...)` and
+`scripts/run_backtest.py --strategy NAME` now exist specifically so these
+(and any future) experimental modules can be evidenced through the same
+fee/slippage/walk-forward pipeline as production, before any promotion
+decision. See `ENGINEERING_DECISIONS.md` #52.
+
+**Natural next steps this unlocks** (not yet started, not commitments --
+the evidence-gated work milestone 9's tooling exists to enable):
+- **Backtest evaluation of the four experimental strategies**, via
+  `run_backtest.py --strategy trend_following|range_trading|breakout|
+  volatility_expansion`, across this project's standard methodology (the
+  4-asset -- BTC/ETH/SOL/XRP -- multi-period walk-forward scale already
+  used for every prior finding in this project). None of the four has
+  been run through the backtester even once as of this writing.
+  Promotion into `AVAILABLE_STRATEGIES` requires clearing the same bar
+  every other feature in this project has: in-sample selection,
+  held-out out-of-sample confirmation, and cross-asset validation before
+  being treated as a real candidate.
+- **Accumulate regime-tagged live paper data.** The Strategy Selection
+  Engine's evolution path (section 4.3 of `docs/ADAPTIVE_ARCHITECTURE.md`)
+  -- a `RollingPerformanceSelector` that picks a strategy by rolling,
+  per-regime performance evidence instead of always falling back to
+  Legacy -- remains blocked on real data: `market_regime`/`strategy_name`
+  are populated on new trades (milestones 6-7), but no strategy other than
+  Legacy has ever been live, so there is no regime-tagged history for any
+  other strategy to compare against. This accumulates naturally as paper
+  trading continues to run; no new code is required to start collecting
+  it, only time and continued operation.
+- **`RollingPerformanceSelector` stays explicitly blocked** until both of
+  the above exist -- real backtest evidence for at least one experimental
+  strategy, AND enough regime-tagged live/paper trade history (this
+  project's own established floor for trusting a result is 20+ trades,
+  `experiment_runner.MIN_TRADES_FOR_CONFIDENCE`) to make a per-regime
+  comparison meaningful rather than invented.
+
 Full architecture review, gap analysis, and prioritized build order:
 `docs/ADAPTIVE_ARCHITECTURE.md`.
 

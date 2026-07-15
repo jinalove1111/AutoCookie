@@ -154,16 +154,40 @@ roadmap). **Milestones 1-7 built**:
     intact, and `trades`/`signals`/`strategy_performance_snapshots` were
     empty both before and after (nothing was at risk). 465/465 full suite
     passing. Full rationale: `ENGINEERING_DECISIONS.md` #51.
+9. **New strategy-content modules, quarantined** (2026-07-16): four new
+    `Strategy`-Protocol modules -- `trend_following.TrendFollowingStrategy`,
+    `range_trading.RangeTradingStrategy`, `breakout.BreakoutStrategy`,
+    `volatility_expansion.VolatilityExpansionStrategy` -- the platform's
+    first strategies that are NOT `SignalEngine` wrappers, closing out the
+    last item on `docs/ADAPTIVE_ARCHITECTURE.md` section 7's roadmap. Each
+    is detection-only, reuses existing indicator helpers (zero
+    reimplemented indicators), and discloses every threshold as a
+    standard textbook value, not backtest-tuned. New
+    `app.strategy.experimental.EXPERIMENTAL_STRATEGIES` quarantines all
+    four -- `AVAILABLE_STRATEGIES` (the ONLY registry either configured
+    selector consults) stays exactly `{legacy, jade}`, untouched;
+    promotion requires real backtest/walk-forward evidence first.
+    `BacktestEngine.run()` gained an additive `strategy: Strategy | None`
+    injection point (signal source only -- risk gating, sizing, fills,
+    fees, slippage, PnL all unchanged) so experimental strategies can be
+    evidenced through the exact same fee/slippage/walk-forward pipeline as
+    production; `scripts/run_backtest.py --strategy NAME` exposes it. 38
+    new strategy/registry tests + 2 new injection tests = 40 new tests.
+    505/505 full suite passing. Full rationale:
+    `ENGINEERING_DECISIONS.md` #52.
 
 **Production-behavior note**: milestones 1-6 were purely additive/
 observational. Milestone 7 was the FIRST to change actual paper-trading
 sizing/rejection math (more conservative sizing in high volatility;
 rejecting signals from an auto-disabled strategy); milestone 7b adds an
 opt-in routing path that, in its default (off) configuration, changes
-nothing further. Both take effect only on the paper trader's next
-restart (code changes do not affect the already-running process, PID
-24616, confirmed still running throughout every milestone). Legacy's own
-signal/entry/exit logic remains completely untouched.
+nothing further. Milestone 9's four new strategy modules are quarantined
+and reachable only via `run_backtest.py --strategy`, so they change
+NOTHING about paper/live trading. All take effect only on the paper
+trader's next restart where applicable (code changes do not affect the
+already-running process, PID 24616, confirmed still running throughout
+every milestone). Legacy's own signal/entry/exit logic remains completely
+untouched.
 
 ## Profitability sprint (2026-07-12, operator-directed autonomous session)
 

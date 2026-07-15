@@ -2701,3 +2701,116 @@ the additive-migrations-are-safe-against-a-concurrently-open-file
 argument in the module's own docstring remains a design property for the
 next time this runs against a live process, not something this session
 exercised directly.
+
+## 52. Milestone 9: four new strategy-CONTENT modules ship quarantined in a separate `EXPERIMENTAL_STRATEGIES` registry, evidenced through `BacktestEngine` via signal-source-only injection
+
+**Decision** (2026-07-16): `app.strategy.trend_following.TrendFollowingStrategy`,
+`range_trading.RangeTradingStrategy`, `breakout.BreakoutStrategy`, and
+`volatility_expansion.VolatilityExpansionStrategy` are the platform's
+first `Strategy`-Protocol modules that are NOT `SignalEngine` wrappers --
+each implements its own detection ruleset directly (HTF/LTF trend
+agreement + pullback resumption; ADX-gated range fade; Donchian-channel
+breakout with body/volume confirmation; volatility-squeeze-then-expansion
+entry), reusing existing indicator helpers
+(`regime_detector`/`market_structure`/`utils`) rather than reimplementing
+any of them. All four are detection-only (never place orders) and return
+`None` generously on insufficient/ambiguous input, matching every
+existing detector's discipline in this package. This is Milestone 8 on
+`docs/ADAPTIVE_ARCHITECTURE.md`'s section 7 roadmap -- deliberately the
+LAST item, since strategy CONTENT was always secondary to finishing the
+system that can host/select/evaluate/retire strategies (milestones 1-8.1,
+all already built).
+
+**(a) A separate quarantine registry, not registration into
+`AVAILABLE_STRATEGIES`**: `app.strategy.experimental.EXPERIMENTAL_STRATEGIES`
+holds all four new modules; `all_strategies()` returns a FRESH merged dict
+(`{**AVAILABLE_STRATEGIES, **EXPERIMENTAL_STRATEGIES}`) for tooling that
+needs to see everything. `AVAILABLE_STRATEGIES` itself
+(`app.strategy.strategy_interface`) is untouched -- still exactly
+`{legacy, jade}`. This matters because every real selector in this
+codebase (`DefaultToLegacySelector`, `ConfigurableFallbackSelector`)
+consults `AVAILABLE_STRATEGIES` directly, never `all_strategies()` -- so
+"registered somewhere in the codebase" must never be allowed to creep
+into "selectable by production/paper trading" without a deliberate,
+evidence-gated promotion step. Verified directly: `test_experimental_
+registry.py` asserts both selectors return only `legacy`/`jade` even when
+handed the full 6-strategy merged registry as their `available` argument.
+Promotion into `AVAILABLE_STRATEGIES` requires real backtest/walk-forward
+evidence, the same "implemented != evidenced" discipline this project has
+applied to every opt-in flag since decision #10.
+
+**(b) `Strategy` injection into `BacktestEngine` at the signal source
+only, so experimental strategies are evidenced through the SAME pipeline
+as production**: `BacktestEngine.run()` gained an additive `strategy:
+Strategy | None = None` parameter (import guarded behind `TYPE_CHECKING`
+-- the engine has never had a real dependency on `strategy_interface`,
+matching how it has always accepted any object with a matching
+`generate_signal` method). `None` (the default) is byte-identical to
+every existing caller's behavior -- proven by a test using a
+`SignalEngine` fake that raises if called, confirming the bypass is
+total. When a `Strategy` is given, ONLY the signal source changes (each
+step calls `strategy.generate_signal(symbol, ltf_candles, htf_candles)`
+instead of `signal_engine.generate_signal(...)`); every downstream stage
+-- risk gating, position sizing, fills, fees, slippage, break-even/
+partial-TP management, PnL, reporting -- is unchanged. `scripts/
+run_backtest.py --strategy NAME` resolves the name via `all_strategies()`
+BEFORE any candle fetch (fails fast on an unknown name, listing the
+available names, rather than after a slow network round-trip), and
+prints a `NOTE` listing any SignalEngine-only flags (`--breaker-block`,
+`--strict-confluence`, etc.) that were set alongside `--strategy` and are
+therefore ignored -- the same "warn, don't silently drop" precedent
+`--jade-engine` already established for its own flag interactions.
+
+**Why this is the correct "evidence pipeline" design**: this repo's
+entire evidentiary standard (decisions #8, #14, #15, #18) rests on
+`BacktestEngine`'s fee/slippage/walk-forward/out-of-sample machinery
+being the thing that turns a claim into evidence. Injecting a new
+strategy at any OTHER layer (e.g. a parallel mini-backtester, or
+hand-rolled PnL math specific to the new modules) would produce numbers
+that are not directly comparable to every existing finding in this
+project's history. Signal-source-only injection guarantees an
+experimental strategy's eventual backtest numbers are apples-to-apples
+with Legacy's own historical results, computed by literally the same
+code.
+
+**(c) Shipping four disclosed-not-tuned textbook rulesets does NOT
+violate this project's evidence-over-assumption discipline**: each
+module's docstring explicitly states its thresholds (ADX floors, ATR
+multipliers, fixed 2.5R targets, percentile ceilings) are standard
+textbook values, "disclosed, not tuned... ZERO backtest evidence yet" --
+the same posture `entry_model._RR`/`_STOP_BUFFER` held before their
+2026-07-11 sweep (decision #18) and `regime_detector.py`'s own ADX/
+volatility thresholds still hold today. The discipline this project
+enforces is never "don't ship untuned code" -- untested textbook rules
+have shipped before, always behind a flag or a registry that keeps them
+inert (decision #10). It is "don't let an untuned/unevidenced ruleset
+influence real trading." These four modules satisfy that: they are
+quarantined test subjects sitting in `EXPERIMENTAL_STRATEGIES`, reachable
+only via `--strategy` on `run_backtest.py`'s research tooling, invisible
+to both configured selectors and therefore to paper/live trading
+entirely.
+
+**(d) `range_trading`'s rr-floor finding**: `RangeTradingStrategy` only
+emits a signal when its own computed `rr >= 2.0` (this platform's
+`RiskManager.MIN_RR`), guarding against emitting a signal the Risk Engine
+would reject anyway. Working through the module's own formulas
+algebraically (given the range-width gate `width >= 2.0 * atr` and the
+edge-fade zone `_EDGE_PERCENTILE = 0.15`) shows the achievable rr floor
+is approximately 2.125 whenever the width and edge gates already pass --
+i.e. the `rr < 2.0` guard in the code is, for this exact parameter
+combination, defensive rather than independently reachable in practice.
+Documented rather than silently removed: the guard costs nothing, keeps
+the invariant explicit and self-checking if any of the surrounding
+constants (`_MIN_RANGE_WIDTH_ATR_MULTIPLE`, `_STOP_ATR_MULTIPLE`,
+`_EDGE_PERCENTILE`) ever change independently, and matches this
+project's "return None generously rather than trust an upstream
+invariant silently" discipline used throughout `app/strategy/`.
+
+**Status**: 38 new strategy/registry tests (7 trend_following + 9
+range_trading + 6 breakout + 8 volatility_expansion + 8 experimental
+registry) + 2 new `BacktestEngine` injection tests = 40 new tests. Full
+suite 505/505 passing (was 465 after milestone 8.1). Production behavior
+unchanged: `AVAILABLE_STRATEGIES` still exactly `{legacy, jade}`, the
+paper trader (Legacy engine) untouched and running throughout. Smoke
+check: `all_strategies()` -> `['breakout', 'jade', 'legacy',
+'range_trading', 'trend_following', 'volatility_expansion']`.

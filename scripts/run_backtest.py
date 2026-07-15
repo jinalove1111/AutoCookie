@@ -91,6 +91,7 @@ from app.backtesting.backtest_engine import MIN_CANDLES, BacktestEngine
 from app.backtesting.report_generator import ReportGenerator
 from app.data.candle_fetcher import CandleFetcher, timeframe_to_timedelta
 from app.risk.risk_manager import RiskManager
+from app.strategy.experimental import all_strategies
 from app.strategy.signal_engine import SignalEngine
 
 
@@ -164,6 +165,7 @@ def run_backtest(
     require_session: str | None = None,
     max_entry_drift_pct: float | None = None,
     atr_stop_multiplier: float | None = None,
+    strategy: Any = None,
 ) -> Any:
     """Replay `ltf_candles`/`htf_candles` once through the real
     Strategy/Risk/Backtest engines.
@@ -175,6 +177,14 @@ def run_backtest(
     2026-07-14 robustness validation's fee/slippage stress tests, which
     need to re-run the SAME candidate under deliberately worse cost
     assumptions.
+
+    `strategy` (default `None`, Milestone 9, 2026-07-16): when given a
+    `Strategy`-conforming instance (resolved via `--strategy` /
+    `app.strategy.experimental.all_strategies()`, see `main()`), threaded
+    straight through to `BacktestEngine.run(..., strategy=...)` -- every
+    SignalEngine-configuration flag above is then ignored, see that
+    parameter's own docstring. Default `None` preserves the exact prior
+    SignalEngine-driven behavior for every existing caller.
     """
     return BacktestEngine().run(
         ltf_candles,
@@ -197,6 +207,7 @@ def run_backtest(
         require_session=require_session,
         max_entry_drift_pct=max_entry_drift_pct,
         atr_stop_multiplier=atr_stop_multiplier,
+        strategy=strategy,
     )
 
 
@@ -490,6 +501,31 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--strategy",
+        default=None,
+        help=(
+            "Evaluate a specific Strategy-Protocol module (Milestone 9, "
+            "2026-07-16 -- the adaptive platform's 'evidence pipeline': "
+            "any module conforming to app.strategy.strategy_interface."
+            "Strategy can be backtested through this SAME engine -- fees, "
+            "slippage, walk-forward -- before ever being considered for "
+            "production) instead of the default SignalEngine pipeline. "
+            "Resolved by name from app.strategy.experimental.all_strategies() "
+            "(production AVAILABLE_STRATEGIES + any registered experimental "
+            "strategies); an unknown name exits with an error listing the "
+            "available names. Default: None (today's SignalEngine-driven "
+            "behavior, unchanged). Composing with other flags: when set, "
+            "every SignalEngine-configuration flag above (--breaker-block, "
+            "--strict-confluence, --ob-fvg-confluence, --structure-tp, "
+            "--premium-discount-filter, --jade-engine) is ignored with a "
+            "printed NOTE if set -- they only configure the legacy "
+            "SignalEngine path this bypasses entirely. --breakeven/"
+            "--partial-tp still apply normally -- those are trade-"
+            "management features applied by BacktestEngine AFTER a signal "
+            "fires, independent of which path produced it."
+        ),
+    )
+    parser.add_argument(
         "--walk-forward",
         action="store_true",
         default=False,
@@ -557,6 +593,42 @@ def main() -> int:
     if not candles:
         print(f"No candles returned for {args.symbol}/{args.timeframe}.")
         return 1
+
+    # --- 0. Resolve --strategy (Milestone 9, opt-in, default None =
+    # unchanged SignalEngine-driven behavior). Done before any candle fetch
+    # so an unknown name fails fast rather than after a slow network call. ---
+    strategy_obj: Any = None
+    if args.strategy is not None:
+        available = all_strategies()
+        strategy_obj = available.get(args.strategy)
+        if strategy_obj is None:
+            print(
+                f"ERROR: unknown --strategy {args.strategy!r}. Available: "
+                f"{', '.join(sorted(available.keys()))}."
+            )
+            return 1
+        # SignalEngine-configuration flags only configure the SignalEngine
+        # path, which --strategy bypasses entirely -- warn (not error, same
+        # spirit as --jade-engine's existing "every other flag is ignored"
+        # precedent) if any were set to a non-default value alongside it.
+        signal_engine_only_flags = {
+            "--breaker-block": args.breaker_block,
+            "--strict-confluence": args.strict_confluence,
+            "--ob-fvg-confluence": args.ob_fvg_confluence,
+            "--structure-tp": args.structure_tp,
+            "--premium-discount-filter": args.premium_discount_filter,
+            "--jade-engine": args.jade_engine,
+        }
+        ignored = [name for name, is_set in signal_engine_only_flags.items() if is_set]
+        if ignored:
+            print(
+                f"NOTE: --strategy {args.strategy!r} bypasses the SignalEngine "
+                f"pipeline entirely, so these flag(s) have no effect: "
+                f"{', '.join(ignored)}."
+            )
+        print(f"Strategy module: {args.strategy!r} (bypasses SignalEngine)")
+    else:
+        print("Strategy module: SignalEngine (default)")
 
     print(f"Break-even stop management: {'ENABLED' if args.breakeven else 'disabled'}")
     print(f"Breaker Block entries: {'ENABLED' if args.breaker_block else 'disabled'}")
@@ -634,6 +706,7 @@ def main() -> int:
                 use_structure_tp=args.structure_tp,
                 require_premium_discount_filter=args.premium_discount_filter,
                 use_jade_engine=args.jade_engine,
+                strategy=strategy_obj,
             )
         except Exception as exc:  # unexpected engine failure is a genuine failure
             print(f"ERROR: backtest engine raised an exception on period {period_num}: {exc}")
