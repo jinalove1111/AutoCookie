@@ -64,6 +64,10 @@ class TradeTracker:
         configuration produced which trade, since a config can change
         between one paper-trading run and the next (observability follow-up,
         2026-07-12 profitability sprint Phase E).
+
+        `latency_ms` (optional, default `None` -- adaptive platform
+        milestone 5, ENGINEERING_DECISIONS.md #47): wall-clock milliseconds
+        the caller's execution step took, when supplied.
         """
         with session_scope() as db:
             trade = Trade(
@@ -80,6 +84,7 @@ class TradeTracker:
                 mode=trade_data.get("mode", "paper"),
                 opened_at=trade_data.get("opened_at") or datetime.now(timezone.utc),
                 strategy_config=trade_data.get("strategy_config"),
+                latency_ms=trade_data.get("latency_ms"),
             )
             db.add(trade)
             db.flush()  # populate trade.id (autoincrement PK) before commit
@@ -94,6 +99,7 @@ class TradeTracker:
         closed_at: datetime | None = None,
         exit_reason: str | None = None,
         r_multiple: float | None = None,
+        holding_time_seconds: float | None = None,
     ) -> None:
         """
         Mark an existing Trade as closed: sets exit_price, pnl, status, and
@@ -106,6 +112,12 @@ class TradeTracker:
         trade's WHY (stop_loss/take_profit/breakeven/manual) and realized
         R multiple are queryable later, not just visible in that process's
         own stdout/alert at the moment of closing.
+
+        `holding_time_seconds` (optional, default `None` -- adaptive
+        platform milestone 5, ENGINEERING_DECISIONS.md #47): wall-clock
+        seconds between `opened_at` and this close, when the caller
+        supplies it (e.g. `scripts/run_paper.py`'s real
+        `(closed_at - position["opened_at"]).total_seconds()`).
         """
         with session_scope() as db:
             trade = db.get(Trade, trade_id)
@@ -119,6 +131,8 @@ class TradeTracker:
                 trade.exit_reason = exit_reason
             if r_multiple is not None:
                 trade.r_multiple = r_multiple
+            if holding_time_seconds is not None:
+                trade.holding_time_seconds = holding_time_seconds
 
     def update_stop_loss(self, trade_id: int, new_stop_loss: float) -> None:
         """
@@ -140,6 +154,46 @@ class TradeTracker:
                     "cannot update stop_loss on a closed trade"
                 )
             trade.stop_loss = new_stop_loss
+
+    def update_excursion(self, trade_id: int, current_price: float) -> None:
+        """
+        Update an OPEN trade's `max_adverse_excursion`/`max_favorable_excursion`
+        given `current_price` observed THIS pass -- adaptive platform
+        milestone 5 (ENGINEERING_DECISIONS.md #47). Both are RUNNING
+        MAXIMUMS in R-multiples of the trade's ORIGINAL risk distance
+        (`abs(entry_price - stop_loss)`, the same convention `r_multiple`
+        already uses at close) -- they only ever grow, never shrink, over
+        a position's lifetime, matching the standard MAE/MFE definition
+        (the worst/best unrealized excursion seen at any point while the
+        trade was open).
+
+        Best-effort, same "observability step, not a risk-relevant
+        guarantee" contract as the caller's other per-pass bookkeeping:
+        no-ops (does not raise) if `trade_id` is not open or has zero
+        risk distance, rather than raising like `close_trade`/
+        `update_stop_loss` (which failing loudly protects real capital
+        actions; this is metadata).
+        """
+        with session_scope() as db:
+            trade = db.get(Trade, trade_id)
+            if trade is None or trade.status != "open":
+                return
+            risk_per_unit = abs(trade.entry_price - trade.stop_loss)
+            if risk_per_unit <= 0:
+                return
+
+            if trade.direction == "long":
+                excursion_r = (current_price - trade.entry_price) / risk_per_unit
+            else:
+                excursion_r = (trade.entry_price - current_price) / risk_per_unit
+
+            if excursion_r > 0:
+                if trade.max_favorable_excursion is None or excursion_r > trade.max_favorable_excursion:
+                    trade.max_favorable_excursion = excursion_r
+            elif excursion_r < 0:
+                adverse = abs(excursion_r)
+                if trade.max_adverse_excursion is None or adverse > trade.max_adverse_excursion:
+                    trade.max_adverse_excursion = adverse
 
     def get_open_positions(self) -> list[dict]:
         """Return all Trade rows with status == 'open' as plain dicts."""

@@ -64,6 +64,140 @@ def test_trade_tracker_close_trade_moves_between_lists(migrated_db):
     assert closed[0]["closed_at"] is not None
 
 
+def test_trade_tracker_close_trade_persists_holding_time_seconds(migrated_db):
+    from app.portfolio.trades import TradeTracker
+
+    tracker = TradeTracker()
+    opened_at = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    closed_at = opened_at + timedelta(minutes=30)
+    trade_id = tracker.record_trade(
+        {
+            "symbol": "BTCUSDT",
+            "direction": "long",
+            "entry_price": 100.0,
+            "stop_loss": 95.0,
+            "take_profit": 110.0,
+            "size": 1.0,
+            "mode": "paper",
+            "opened_at": opened_at,
+        }
+    )
+
+    tracker.close_trade(
+        trade_id, exit_price=105.0, pnl=5.0, closed_at=closed_at, holding_time_seconds=1800.0
+    )
+
+    closed = tracker.get_closed_trades()
+    assert closed[0]["holding_time_seconds"] == 1800.0
+
+
+def test_trade_tracker_record_trade_persists_latency_ms(migrated_db):
+    from app.portfolio.trades import TradeTracker
+
+    tracker = TradeTracker()
+    trade_id = tracker.record_trade(
+        {
+            "symbol": "BTCUSDT",
+            "direction": "long",
+            "entry_price": 100.0,
+            "stop_loss": 95.0,
+            "take_profit": 110.0,
+            "size": 1.0,
+            "mode": "paper",
+            "latency_ms": 12.5,
+        }
+    )
+
+    open_positions = tracker.get_open_positions()
+    assert open_positions[0]["id"] == trade_id
+    assert open_positions[0]["latency_ms"] == 12.5
+
+
+def test_trade_tracker_update_excursion_tracks_running_max_favorable_and_adverse(migrated_db):
+    from app.portfolio.trades import TradeTracker
+
+    tracker = TradeTracker()
+    trade_id = tracker.record_trade(
+        {
+            "symbol": "BTCUSDT",
+            "direction": "long",
+            "entry_price": 100.0,
+            "stop_loss": 95.0,  # risk_per_unit == 5.0
+            "take_profit": 120.0,
+            "size": 1.0,
+            "mode": "paper",
+        }
+    )
+
+    tracker.update_excursion(trade_id, current_price=105.0)  # +1R favorable
+    position = tracker.get_open_positions()[0]
+    assert position["max_favorable_excursion"] == 1.0
+    assert position["max_adverse_excursion"] is None
+
+    tracker.update_excursion(trade_id, current_price=110.0)  # +2R favorable, new max
+    position = tracker.get_open_positions()[0]
+    assert position["max_favorable_excursion"] == 2.0
+
+    tracker.update_excursion(trade_id, current_price=102.0)  # +0.4R -- must NOT lower the max
+    position = tracker.get_open_positions()[0]
+    assert position["max_favorable_excursion"] == 2.0
+
+    tracker.update_excursion(trade_id, current_price=97.0)  # -0.6R adverse
+    position = tracker.get_open_positions()[0]
+    assert position["max_adverse_excursion"] == 0.6
+    assert position["max_favorable_excursion"] == 2.0  # unaffected
+
+
+def test_trade_tracker_update_excursion_computes_short_direction_correctly(migrated_db):
+    from app.portfolio.trades import TradeTracker
+
+    tracker = TradeTracker()
+    trade_id = tracker.record_trade(
+        {
+            "symbol": "ETHUSDT",
+            "direction": "short",
+            "entry_price": 100.0,
+            "stop_loss": 105.0,  # risk_per_unit == 5.0
+            "take_profit": 80.0,
+            "size": 1.0,
+            "mode": "paper",
+        }
+    )
+
+    tracker.update_excursion(trade_id, current_price=90.0)  # price down 10 -> +2R favorable for short
+    position = tracker.get_open_positions()[0]
+    assert position["max_favorable_excursion"] == 2.0
+
+    tracker.update_excursion(trade_id, current_price=103.0)  # price up 3 -> -0.6R adverse for short
+    position = tracker.get_open_positions()[0]
+    assert position["max_adverse_excursion"] == 0.6
+
+
+def test_trade_tracker_update_excursion_is_a_safe_noop_for_closed_or_unknown_trade(migrated_db):
+    from app.portfolio.trades import TradeTracker
+
+    tracker = TradeTracker()
+    trade_id = tracker.record_trade(
+        {
+            "symbol": "BTCUSDT",
+            "direction": "long",
+            "entry_price": 100.0,
+            "stop_loss": 95.0,
+            "take_profit": 110.0,
+            "size": 1.0,
+            "mode": "paper",
+        }
+    )
+    tracker.close_trade(trade_id, exit_price=110.0, pnl=10.0)
+
+    # Must not raise for a closed trade or a nonexistent id.
+    tracker.update_excursion(trade_id, current_price=200.0)
+    tracker.update_excursion(999999, current_price=200.0)
+
+    closed = tracker.get_closed_trades()
+    assert closed[0]["max_favorable_excursion"] is None
+
+
 def test_trade_tracker_count_trades_opened_today_counts_open_and_closed(migrated_db):
     """Moved here (was a private `_count_trades_opened_today` helper in
     scripts/run_paper.py) so /dashboard/risk-status can share the same

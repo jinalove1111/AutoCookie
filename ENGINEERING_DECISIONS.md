@@ -2156,3 +2156,85 @@ be available (still picks by key, not by inspecting the registry).
 411/411 backend tests passing. Not yet wired into any live/paper trading
 path -- `scripts/run_paper.py` still calls `SignalEngine` directly, same
 as before this milestone.
+
+## 47. MAE/MFE/latency tracking wired into paper trading as running maximums in R-multiples and per-pass wall-clock measurement, scoped narrowly to milestone 5's own title
+
+**Decision** (operator directive, 2026-07-15, adaptive-platform pivot --
+`docs/ADAPTIVE_ARCHITECTURE.md` section 7, milestone 5): `scripts/
+run_paper.py` now populates 3 of the 6 Trade columns milestone 2 added
+(decision #44) -- `max_adverse_excursion`, `max_favorable_excursion`,
+`holding_time_seconds`, plus `latency_ms` -- via two new `TradeTracker`
+methods (`app.portfolio.trades`): `update_excursion(trade_id,
+current_price)` and `close_trade`'s new optional `holding_time_seconds`
+param.
+
+**Why MAE/MFE are R-multiples of the trade's ORIGINAL risk distance, not
+raw price units**: matches the convention `r_multiple` already uses at
+close (`_check_and_close_open_positions`) -- a price-unit excursion is
+meaningless across different assets/price scales, but an R-multiple is
+directly comparable trade-to-trade and asset-to-asset, which is exactly
+what milestone 6's rolling per-strategy/per-regime metrics (the reason
+this data is being collected at all) will need to aggregate over.
+
+**Why running maximums, updated every pass, rather than computed once at
+close**: this is the standard MAE/MFE definition -- the worst/best
+unrealized excursion seen AT ANY POINT while the trade was open, which
+by construction cannot be reconstructed after the fact from only
+entry/exit prices. Paper trading's own poll-loop structure (one pass per
+interval, already fetching a fresh price every pass for the exit-check
+step) is the only place in this codebase this can be measured honestly;
+`BacktestEngine` does not currently compute it at all (no equivalent
+per-candle running-max instrumentation exists there yet -- out of scope
+here, since the operator's milestone list scoped this to "paper
+trading").
+
+**Why `update_excursion` no-ops instead of raising** (unlike
+`close_trade`/`update_stop_loss`): this is pure observability metadata,
+not a capital-affecting action -- a stale/missing trade id or an
+already-closed trade encountered mid-pass (e.g. closed by the exit-check
+step earlier in the SAME pass) should not abort the rest of `run_once`'s
+pipeline the way a broken stop-loss update legitimately should.
+
+**Why `latency_ms` measures the paper-execution ENGINE's own call
+duration, not real exchange order latency**: `PaperBroker.execute()`
+never makes a real exchange API round-trip (it's a local fill
+simulation), so there is no real network/exchange latency for this
+codebase to observe yet. Measuring `time.monotonic()` around the
+`ExecutionEngine().execute()` call is an honest, disclosed measurement
+of what actually happens (Python call + in-memory fill logic), not a
+fabricated stand-in for a number this pipeline has no way to produce --
+same "disclosed limitation, not silently assumed" discipline as decision
+#45's OKX volume-delta gap. If/when a real exchange order path exists
+(`app.execution.live_broker`, currently unused -- see the Milestone-1
+safety guard at the top of `run_paper.py`), this measurement point would
+need to move to wrap the real API call instead.
+
+**Scope discipline**: `market_regime` and `strategy_name` (the other 2
+of milestone 2's 6 new columns) are deliberately NOT populated by this
+milestone, even though both would be cheap to add (the regime detector
+and `settings.USE_JADE_ENGINE` are both already available at the call
+site) -- `docs/ADAPTIVE_ARCHITECTURE.md`'s milestone 5 row names only
+"MAE/MFE/latency tracking." Per decision #20's precedent (treating an
+explicit operator priority list as the scope boundary, not a floor),
+adding those two now would be scope creep against the stated milestone
+title, not extra rigor -- they remain natural, low-cost additions for
+whichever future milestone actually needs them populated (most likely
+milestone 6, or whenever the Strategy Selection Engine, milestone 4,
+starts being called instead of `SignalEngine` directly).
+
+**Status**: 6 new tests (`tests/test_portfolio.py`) -- `close_trade`'s
+new `holding_time_seconds` param, `record_trade`'s new `latency_ms`
+field, `update_excursion`'s running-max behavior (favorable and adverse,
+long and short direction, monotonic non-decreasing), and its safe-no-op
+contract on a closed/unknown trade id. `scripts/run_paper.py` itself has
+no dedicated test file (true before this change too -- it's exercised
+via real paper-trading runs, not pytest); its new logic
+(`_update_excursion_tracking`, the `holding_time_seconds` computation in
+`_check_and_close_open_positions`, the `latency_ms` timing around
+`ExecutionEngine().execute()`) was verified via `py_compile` and the
+full 416/416 backend suite (all `app.portfolio.trades` call sites
+covered). Editing `run_paper.py` does not affect the already-running
+paper-trading process (PID 24616, Python has no hot-reload) -- confirmed
+still running throughout, untouched, and this change takes effect only
+on its next restart (not performed as part of this milestone, per
+standing "never restart anything currently running" instruction).

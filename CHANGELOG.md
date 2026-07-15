@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Adaptive platform milestone 5: MAE/MFE/latency tracking in paper trading
+
+`scripts/run_paper.py` now populates 4 of the 6 Trade columns milestone 2
+added: `max_adverse_excursion`/`max_favorable_excursion` (running maximums
+in R-multiples of the trade's original risk distance, updated every pass
+via the new `TradeTracker.update_excursion()`), `holding_time_seconds`
+(computed at close from `closed_at - opened_at`), and `latency_ms`
+(wall-clock time around the `ExecutionEngine().execute()` call --
+disclosed as measuring the paper engine's own processing time, not real
+exchange order latency, since `PaperBroker` never makes a real API
+round-trip). `market_regime`/`strategy_name` remain deliberately
+unpopulated -- out of this milestone's stated scope (section 7 of
+docs/ADAPTIVE_ARCHITECTURE.md names only "MAE/MFE/latency tracking").
+6 new tests (`tests/test_portfolio.py`). Full rationale:
+`ENGINEERING_DECISIONS.md` #47.
+
+416/416 backend tests passing. Editing `run_paper.py` has no effect on
+the already-running paper trader process (PID 24616, Python has no
+hot-reload) -- confirmed still running throughout, untouched; this
+change only takes effect on a future restart, not performed here.
+
 ## [Unreleased] - Adaptive platform milestone 4: Strategy Selection Engine
 
 `app.strategy.selector.StrategySelector` (a `@runtime_checkable

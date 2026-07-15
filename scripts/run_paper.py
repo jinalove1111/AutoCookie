@@ -216,6 +216,10 @@ def _check_and_close_open_positions(current_price: float) -> list[int]:
             if risk_per_unit > 0 and position["size"] > 0
             else None
         )
+        opened_at = position.get("opened_at")
+        holding_time_seconds = (
+            (closed_at - opened_at).total_seconds() if opened_at is not None else None
+        )
         tracker.close_trade(
             position["id"],
             exit_price=exit_price,
@@ -223,6 +227,7 @@ def _check_and_close_open_positions(current_price: float) -> list[int]:
             closed_at=closed_at,
             exit_reason=exit_info["reason"],
             r_multiple=r_multiple,
+            holding_time_seconds=holding_time_seconds,
         )
         closed_ids.append(position["id"])
         print(
@@ -322,6 +327,30 @@ def _maybe_move_to_breakeven(current_price: float) -> list[int]:
         )
 
     return moved_ids
+
+
+def _update_excursion_tracking(current_price: float) -> list[int]:
+    """Update `max_adverse_excursion`/`max_favorable_excursion` (adaptive
+    platform milestone 5, ENGINEERING_DECISIONS.md #47) for every position
+    still open after the exit-check/breakeven steps above, using
+    `current_price` (the same close-price source `_check_and_close_open_
+    positions`/`_maybe_move_to_breakeven` already use this pass).
+
+    Called AFTER `_maybe_move_to_breakeven`, before the concurrency-guard
+    re-query, in `run_once` -- MAE/MFE for a position that closed THIS
+    pass is intentionally left as of its last observed open state (no
+    further excursion can occur once a trade is closed), so this only
+    ever touches positions genuinely still open. Best-effort per position:
+    `TradeTracker.update_excursion` itself no-ops rather than raises on a
+    since-closed/missing trade, so no additional error handling is needed
+    here beyond the loop itself.
+    """
+    tracker = TradeTracker()
+    updated_ids: list[int] = []
+    for position in tracker.get_open_positions():
+        tracker.update_excursion(position["id"], current_price)
+        updated_ids.append(position["id"])
+    return updated_ids
 
 
 def _check_drawdown_and_maybe_trip(
@@ -583,6 +612,16 @@ def run_once(
 
     summary["breakeven_moved"] = breakeven_moved_ids
 
+    # --- 1.58 Update MAE/MFE for still-open positions ---
+    # Best-effort, non-fatal (adaptive platform milestone 5): a broken
+    # excursion update must not block the real exit-check/breakeven/
+    # signal/risk/execute pipeline, matching every other observability
+    # step in this function (trades_today, daily/weekly PnL, above).
+    try:
+        _update_excursion_tracking(current_price)
+    except Exception as exc:
+        print(f"WARNING: MAE/MFE excursion update failed ({exc}).")
+
     # --- 1.6 Concurrency guard: at most one open position at a time ---
     # Re-queries open positions AFTER the exit-check step above (not
     # before), so a position that just closed this same pass correctly
@@ -734,6 +773,15 @@ def run_once(
             print(f"WARNING: could not update signal status to 'approved' ({exc}).")
 
     # --- 4. Execute the approved signal (paper only) ---
+    # latency_ms (adaptive platform milestone 5, ENGINEERING_DECISIONS.md
+    # #47): wall-clock milliseconds this process itself spent inside the
+    # execute() call. Disclosed scope: PaperBroker.execute() never makes a
+    # real exchange API round-trip, so this measures the paper-trading
+    # ENGINE's own processing latency (Python call + in-memory fill
+    # simulation), not real exchange order latency -- a genuine, honest
+    # measurement of what this pipeline actually does, not a stand-in for
+    # a number this codebase has no way to produce yet.
+    execute_started_at = time.monotonic()
     try:
         result = ExecutionEngine().execute(signal, risk_decision)
     except Exception as exc:
@@ -741,6 +789,7 @@ def run_once(
         summary["error"] = str(exc)
         summary["exit_code"] = 1
         return summary
+    latency_ms = (time.monotonic() - execute_started_at) * 1000
 
     if not result.success:
         print(f"Execution declined: {result.error}")
@@ -809,6 +858,7 @@ def run_once(
         "status": "open",
         "mode": "paper",
         "opened_at": datetime.now(timezone.utc),
+        "latency_ms": latency_ms,
         "strategy_config": {
             "use_jade_engine": settings.USE_JADE_ENGINE,
             "enable_breakeven": settings.ENABLE_BREAKEVEN,

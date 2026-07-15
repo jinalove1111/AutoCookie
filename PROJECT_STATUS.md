@@ -59,7 +59,7 @@ see `ROADMAP.md`'s "Objective change" section and the full design in
 `docs/ADAPTIVE_ARCHITECTURE.md` (architecture diagram, Market Regime
 Detector design, Strategy Interface spec, Strategy Selection Engine,
 Risk Engine extensions, Performance Database schema, 8-milestone
-roadmap). **Milestones 1-4 built**:
+roadmap). **Milestones 1-5 built**:
 
 1. **Strategy Interface**: `app.strategy.strategy_interface.Strategy` (a
    `Protocol`), with `LegacyStrategy`/`JadeStrategy` adapters wrapping the
@@ -82,6 +82,14 @@ roadmap). **Milestones 1-4 built**:
    selects `legacy` unconditionally regardless of regime -- deliberately,
    since no regime-tagged trade history exists yet to justify anything
    else. 4 tests. Not yet wired into any live path.
+5. **MAE/MFE/latency tracking**: `scripts/run_paper.py` now populates
+   `max_adverse_excursion`/`max_favorable_excursion` (running maximums in
+   R-multiples, updated every pass) and `holding_time_seconds`/
+   `latency_ms` at close/open respectively, via two new `TradeTracker`
+   methods. `market_regime`/`strategy_name` remain unpopulated
+   (deliberately out of this milestone's scope). 6 tests. Code change
+   only -- does not affect the already-running paper trader process
+   (PID 24616) until its next restart.
 
 **Unchanged**: Legacy remains the only strategy live in paper trading
 (still running continuously, untouched); nothing about this pivot has

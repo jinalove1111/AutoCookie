@@ -403,7 +403,7 @@ does not depend on a LATER milestone to be safe/useful on its own.
 | 2 | **Performance Database schema extensions** (section 6.2 columns + section 6.3 table, Alembic migration) | none (additive schema, same pattern as decision #40) | Next |
 | 3 | **Market Regime Detector** (section 2 design, implemented) | none new (reuses existing detectors; ADX/MA/VWAP are the only genuinely new calculations) | After #2 |
 | 4 | **Strategy Selection Engine** (`DefaultToLegacySelector`, section 4.2) — BUILT | #1 | After #3 |
-| 5 | **MAE/MFE/latency tracking wired into paper trading** | #2 | After #4 -- requires touching `scripts/run_paper.py`'s open-position-checking loop, more invasive than a schema change alone, sequenced after the lower-risk pieces |
+| 5 | **MAE/MFE/latency tracking wired into paper trading** — BUILT | #2 | After #4 -- requires touching `scripts/run_paper.py`'s open-position-checking loop, more invasive than a schema change alone, sequenced after the lower-risk pieces |
 | 6 | **Rolling metrics computation + auto-disable mechanism** | #2, #5 (needs real MAE/MFE/latency-tagged data to be meaningful, not just PnL) | After #5 |
 | 7 | **Risk Engine extensions** (per-strategy disable hook, volatility-scaled sizing) | #3 (volatility scaling needs regime output), #6 (disable hook needs something to disable strategies) | After #6 |
 | 8 | **New strategy modules** (Trend Following, Range Trading, Breakout, Volatility Expansion) | #1 | Explicitly LAST -- per operator's "prefer structural improvements over parameter optimization" and "do not search for another trading strategy," building new strategy CONTENT is secondary to finishing the system that can host, select, evaluate, and retire strategies. Not started this round. |
