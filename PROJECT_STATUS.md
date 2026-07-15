@@ -51,6 +51,23 @@ resolved the confluence-strength spec ambiguity; hardened risk controls
 `CHANGELOG.md` for the full chronological history of this session's
 findings).
 
+## Adaptive platform pivot (2026-07-15, operator directive)
+
+Objective changed from "find one profitable strategy" to "build an
+adaptive trading system that survives changing market conditions" --
+see `ROADMAP.md`'s "Objective change" section and the full design in
+`docs/ADAPTIVE_ARCHITECTURE.md` (architecture diagram, Market Regime
+Detector design, Strategy Interface spec, Strategy Selection Engine,
+Risk Engine extensions, Performance Database schema, 8-milestone
+roadmap). **Milestone 1 (Strategy Interface) is built**:
+`app.strategy.strategy_interface.Strategy` (a `Protocol`), with
+`LegacyStrategy`/`JadeStrategy` adapters wrapping the existing, unchanged
+`SignalEngine` integration points -- Legacy is now "Strategy A," Jade is
+"Strategy B," both conforming to one interface, neither's underlying
+behavior touched. 7 new tests. **Unchanged**: Legacy remains the only
+strategy live in paper trading (still running continuously, untouched);
+nothing about this pivot has altered production behavior yet.
+
 ## Profitability sprint (2026-07-12, operator-directed autonomous session)
 
 Paper trading started (Legacy engine, all experimental flags off,

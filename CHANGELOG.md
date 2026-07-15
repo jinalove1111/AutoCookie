@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Adaptive platform pivot: objective change, design document, Strategy Interface (milestone 1)
+
+### Objective change (operator directive)
+From "find one profitable strategy" (Phase 1 scope lock, 2026-07-11) to
+"build an adaptive trading system that survives changing market
+conditions." `ROADMAP.md` records the reversal explicitly (original text
+preserved, struck through, not deleted). `docs/CONTINUOUS_RESEARCH_LOG.md`
+archived -- all 6 parameter-search experiments reached documented
+conclusions, nothing left unfinished.
+
+### Complete design document
+`docs/ADAPTIVE_ARCHITECTURE.md`: architecture diagram + data-flow
+contracts, Market Regime Detector design (composite trend/volatility/
+event-flag classification, objective metrics), Strategy Interface spec,
+Strategy Selection Engine (deterministic `DefaultToLegacySelector`),
+Risk Engine extensions, Performance Database schema (new `Trade` columns
++ `strategy_performance_snapshots` table), 8-milestone roadmap.
+
+### Milestone 1: Strategy Interface -- BUILT
+`app.strategy.strategy_interface.Strategy` (`Protocol`), `LegacyStrategy`/
+`JadeStrategy` adapters (wrap the existing `SignalEngine` integration
+point, zero new trading logic -- proven by delegation-equivalence tests),
+`AVAILABLE_STRATEGIES` registry. Legacy is now "Strategy A," Jade is
+"Strategy B." 7 new tests. See `ENGINEERING_DECISIONS.md` #43.
+
+387/387 backend tests passing. Paper trading (Legacy engine only)
+continuously running, untouched -- production behavior unchanged by this
+entire pivot so far.
+
 ## [Unreleased] - Robustness validation: production candidate NOT PROMOTED, material execution-delay failure found
 
 ### Full 7-part robustness suite run against the BTC production candidate

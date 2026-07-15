@@ -1921,3 +1921,51 @@ slippage stress tests. 368/368 backend tests passing. Full 7-part
 robustness suite: `scripts/robustness_report.py`,
 `scripts/reports/robustness_report.json`,
 `docs/ROBUSTNESS_REPORT.md`.
+
+## 43. Strategy Interface is a `Protocol`, adapters wrap `SignalEngine` rather than reimplementing pipeline selection
+
+**Decision** (operator directive, 2026-07-15, adaptive-platform pivot --
+`docs/ADAPTIVE_ARCHITECTURE.md` section 3): `app.strategy.strategy_interface`
+defines `Strategy` as a `@runtime_checkable Protocol` (`name: str`,
+`generate_signal(symbol, ltf_candles, htf_candles) -> TradeSignal | None`),
+with two adapters -- `LegacyStrategy` (Strategy A) and `JadeStrategy`
+(Strategy B) -- plus an `AVAILABLE_STRATEGIES: dict[str, Strategy]`
+registry.
+
+**Why `Protocol`, not an ABC**: neither `entry_model.build_entry_model`
+(Legacy) nor `jade_trade_plan.build_trade_plan` (Jade) were designed
+around a shared base class -- both are free functions with different
+internal composition. A `Protocol` (structural typing) lets both conform
+via a thin wrapper without restructuring either's actual implementation,
+consistent with this project's long-standing "wrap, don't modify"
+discipline for anything already shipped and tested.
+
+**Why adapters delegate to `SignalEngine` instead of calling
+`build_entry_model`/`build_trade_plan` directly**: `SignalEngine.
+generate_signal(..., use_jade_engine=...)` is the ALREADY-EXISTING,
+ALREADY-TESTED integration point (`ENGINEERING_DECISIONS.md` #34) that
+handles bias/sweep/CHOCH/FVG/order-block orchestration for Legacy and the
+full Jade composition for Jade. Reimplementing that orchestration inside
+the adapter would duplicate real logic and create a second place for it
+to drift out of sync. The adapter's entire job is translation (uniform
+interface in, `TradeSignal | None` out), not detection -- proven directly
+by 2 of the 7 new tests asserting the adapter's output is BYTE-IDENTICAL
+to calling `SignalEngine` directly with the matching `use_jade_engine`
+value.
+
+**Why the registry is a plain `dict`, not a class**: the Strategy
+Selection Engine (`docs/ADAPTIVE_ARCHITECTURE.md` section 4, not yet
+built) is what will decide WHICH registered strategy to invoke per
+market regime -- the registry itself only needs to answer "what strategy
+modules exist and conform to the interface," which a dict answers
+without inventing selection logic prematurely.
+
+**Production impact**: none. `scripts/run_paper.py` still calls
+`SignalEngine().generate_signal(...)` directly, unchanged -- this module
+has no callers yet outside its own tests. Legacy's live behavior is
+provably unaffected (same delegation-equivalence tests above).
+
+**Status**: 7 new tests (`tests/test_strategy_interface.py`) -- protocol
+conformance for both adapters, `.name` values, delegation-equivalence for
+both, and registry completeness/conformance. 387/387 backend tests
+passing.
