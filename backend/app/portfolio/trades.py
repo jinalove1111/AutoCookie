@@ -68,6 +68,13 @@ class TradeTracker:
         `latency_ms` (optional, default `None` -- adaptive platform
         milestone 5, ENGINEERING_DECISIONS.md #47): wall-clock milliseconds
         the caller's execution step took, when supplied.
+
+        `strategy_name` (optional, default `None` -- adaptive platform
+        milestone 6, ENGINEERING_DECISIONS.md #48): which `Strategy`
+        (`app.strategy.strategy_interface.AVAILABLE_STRATEGIES` key, e.g.
+        "legacy"/"jade") produced this trade's signal. Needed for
+        `app.portfolio.performance_snapshots` to group closed trades by
+        strategy at all.
         """
         with session_scope() as db:
             trade = Trade(
@@ -85,6 +92,7 @@ class TradeTracker:
                 opened_at=trade_data.get("opened_at") or datetime.now(timezone.utc),
                 strategy_config=trade_data.get("strategy_config"),
                 latency_ms=trade_data.get("latency_ms"),
+                strategy_name=trade_data.get("strategy_name"),
             )
             db.add(trade)
             db.flush()  # populate trade.id (autoincrement PK) before commit

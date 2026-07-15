@@ -2238,3 +2238,107 @@ paper-trading process (PID 24616, Python has no hot-reload) -- confirmed
 still running throughout, untouched, and this change takes effect only
 on its next restart (not performed as part of this milestone, per
 standing "never restart anything currently running" instruction).
+
+## 48. Rolling performance snapshots: R-multiple-based metrics with disclosed finite-value sentinels instead of null/inf, plus a scope reversal on `strategy_name` and two real bugs caught by writing the first real producer for a schema-only table
+
+**Decision** (operator directive, 2026-07-15, adaptive-platform pivot --
+`docs/ADAPTIVE_ARCHITECTURE.md` section 7, milestone 6):
+`app.portfolio.performance_snapshots` adds `compute_rolling_metrics()` (a
+pure function over a list of closed-trade dicts -> `RollingMetrics`) and
+`StrategyPerformanceEvaluator` (queries real `TradeTracker.
+get_closed_trades()`, filters by `strategy_name`/optional `market_regime`,
+takes the most recent `window_trades`, persists one
+`StrategyPerformanceSnapshot` row). Wired as a real producer:
+`scripts/run_paper.py::_check_and_close_open_positions` now calls
+`StrategyPerformanceEvaluator().evaluate_and_snapshot(...)` every time a
+trade closes -- the "Continuous Learning" trigger point named in
+`docs/ADAPTIVE_ARCHITECTURE.md` section 1's feedback loop.
+
+**Why R-multiples for expectancy/sharpe/sortino, percent-of-account for
+max_drawdown**: same reasoning as decision #47's MAE/MFE -- R-multiples
+are comparable across different position sizes/assets, raw PnL is not.
+`max_drawdown` reuses the established `settings.PLACEHOLDER_ACCOUNT_BALANCE`
+percent-of-account convention (decision #3), consistent with every other
+percent-of-account figure in this codebase.
+
+**Why finite sentinel caps (`_UNDEFINED_RATIO_CAP = 10.0`) instead of
+`None`/`inf` for profit_factor/sortino/recovery_factor's "no losses yet"
+case**: `StrategyPerformanceSnapshot`'s ratio columns are all non-nullable
+`Float` (decision #44's schema), and neither SQL `NULL` nor Python
+`inf`/`NaN` round-trips reliably through SQLite/JSON without special
+handling at every reader. A large-but-finite, directionally honest value
+("very good, not literally infinite") is a simpler, safer contract for
+every future reader of this table, and is disclosed explicitly in the
+module docstring/constant rather than left for a reader to discover by
+surprise. Auto-disable logic is unaffected either way -- the cap only
+applies on the WINNING side (no losses/no drawdown), and disabling only
+triggers on the losing side.
+
+**Why auto-disable requires `window_trades >= MIN_TRADES_FOR_CONFIDENCE`
+(20, duplicated from `scripts/experiment_runner.py`, decision #41) before
+`profit_factor <= 1.0` can trip it**: a strategy's first few trades are
+not statistically meaningful (the entire reason this project's backtest
+tooling has enforced a 20-trade floor since decision #41) -- disabling a
+strategy after e.g. 3 losing trades would be noise-driven, not
+evidence-driven, violating this project's core discipline the same way
+inventing a regime->strategy rule table with no data would (decision
+#46). Verified directly: 5 all-losing trades do NOT disable; the 20th
+consecutive losing trade does, in the same test run.
+
+**Scope reversal on `strategy_name`** (decision #47 had deliberately left
+it unpopulated as milestone 5 scope creep): milestone 6's entire premise
+-- PER-STRATEGY rolling metrics -- is impossible to compute on real data
+without knowing which strategy produced each trade. `TradeTracker.
+record_trade` now accepts `strategy_name` (still optional, still `None`
+by default -- nothing breaks for callers that don't pass it), and
+`scripts/run_paper.py` now passes `"jade" if settings.USE_JADE_ENGINE
+else "legacy"`, the exact same effective mapping the Strategy Interface
+(milestone 1) already establishes, just not yet routed through it (paper
+trading still calls `SignalEngine` directly). This is a genuine
+dependency this milestone cannot function without, not the same kind of
+"cheap but unnecessary" addition decision #47 correctly deferred.
+`market_regime` remains unpopulated -- still no real dependency on it
+this milestone (`market_regime` stays an optional filter argument,
+`None` by default, on `evaluate_and_snapshot`).
+
+**Two real bugs found and fixed while writing this milestone's tests --
+both were LATENT, because nothing had ever actually inserted a row into
+`strategy_performance_snapshots` before this milestone's evaluator
+existed**:
+1. The milestone-2 migration (`e3110e6a6b59`) set `computed_at`'s
+   `server_default` to `sa.text('now()')` -- valid Postgres syntax, but
+   SQLite has no `now()` function (`sqlite3.OperationalError: unknown
+   function: now()`), and every OTHER `DateTime` column with a
+   server-side default in this codebase's migrations uses
+   `sa.text('(CURRENT_TIMESTAMP)')` (verified across all of
+   `a0f5ebc23690_initial_schema.py`). Fixed in-place (not via a new
+   migration) since this migration was created earlier in this SAME
+   session, is still the current head, and -- verified directly via
+   `ps -W` before this fix -- had almost certainly never been applied
+   against the real paper-trading database (only `app.main`'s FastAPI
+   lifespan hook calls `run_migrations()`; no such process has been
+   running alongside `scripts/run_paper.py`, PID 24616, since this
+   migration was authored).
+2. `StrategyPerformanceEvaluator.latest_snapshot()`'s ordering
+   (`order_by(computed_at.desc())` alone) is non-deterministic when two
+   snapshots are computed within the same SQLite `CURRENT_TIMESTAMP`
+   tick (1-second resolution) -- a real, reachable case (consecutive
+   trade closes, or this evaluator called back-to-back), caught by a
+   test that intentionally computed two snapshots for the same strategy
+   in quick succession and got the STALE one back. Fixed by adding `id`
+   (monotonically increasing) as a tie-break: `order_by(computed_at.desc(),
+   id.desc())`.
+
+**Status**: 14 new tests (`tests/test_performance_snapshots.py`) --
+`compute_rolling_metrics`'s win_rate/profit_factor/expectancy/
+max_drawdown/sharpe/sortino/recovery_factor correctness plus every
+sentinel-cap edge case, and `StrategyPerformanceEvaluator`'s real-DB
+round-trip (strategy isolation, regime scoping, window-trades capping to
+the most recent N, and the confidence-floor-gated auto-disable behavior
+above). 430/430 backend tests passing. `is_disabled` is computed and
+persisted but not yet CONSULTED by anything -- `DefaultToLegacySelector`
+(milestone 4) still ignores it, same "computation before consumption"
+staging this project has used for every new detector/evaluator since
+decision #19. Editing `scripts/run_paper.py`/the migration file has no
+effect on the already-running paper-trading process (PID 24616) --
+confirmed still running throughout, untouched.

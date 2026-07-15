@@ -37,7 +37,7 @@ def upgrade() -> None:
         sa.Column('strategy_name', sa.String(length=32), nullable=False),
         sa.Column('market_regime', sa.String(length=32), nullable=True),
         sa.Column('window_trades', sa.Integer(), nullable=False),
-        sa.Column('computed_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+        sa.Column('computed_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
         sa.Column('win_rate', sa.Float(), nullable=False),
         sa.Column('profit_factor', sa.Float(), nullable=False),
         sa.Column('expectancy', sa.Float(), nullable=False),

@@ -59,7 +59,7 @@ see `ROADMAP.md`'s "Objective change" section and the full design in
 `docs/ADAPTIVE_ARCHITECTURE.md` (architecture diagram, Market Regime
 Detector design, Strategy Interface spec, Strategy Selection Engine,
 Risk Engine extensions, Performance Database schema, 8-milestone
-roadmap). **Milestones 1-5 built**:
+roadmap). **Milestones 1-6 built**:
 
 1. **Strategy Interface**: `app.strategy.strategy_interface.Strategy` (a
    `Protocol`), with `LegacyStrategy`/`JadeStrategy` adapters wrapping the
@@ -90,6 +90,21 @@ roadmap). **Milestones 1-5 built**:
    (deliberately out of this milestone's scope). 6 tests. Code change
    only -- does not affect the already-running paper trader process
    (PID 24616) until its next restart.
+6. **Rolling performance snapshots + auto-disable**: `app.portfolio.
+   performance_snapshots.StrategyPerformanceEvaluator` computes rolling
+   win_rate/profit_factor/expectancy/max_drawdown/sharpe/sortino/
+   recovery_factor per strategy (R-multiple based) over its most recent
+   trades and persists a `StrategyPerformanceSnapshot`, auto-flagging
+   `is_disabled` once a strategy has >=20 trades and a rolling profit
+   factor <= 1.0. Now wired as a real producer (called from
+   `scripts/run_paper.py` on every trade close); `strategy_name` is now
+   populated on new trades too (a justified reversal of milestone 5's
+   deferral -- this milestone cannot group by strategy without it).
+   Fixed 2 latent bugs surfaced by writing the first real inserts into
+   this table: a Postgres-only `now()` migration default SQLite can't
+   run, and a same-second snapshot-ordering tie in `latest_snapshot()`.
+   14 tests. `is_disabled` is computed but not yet consulted by the
+   Strategy Selection Engine.
 
 **Unchanged**: Legacy remains the only strategy live in paper trading
 (still running continuously, untouched); nothing about this pivot has

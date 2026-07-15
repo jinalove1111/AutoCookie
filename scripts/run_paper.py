@@ -121,6 +121,7 @@ from app.execution.paper_broker import FEE_PERCENT, PaperBroker
 from app.notifications.discord import send_discord_alert
 from app.notifications.telegram import send_telegram_alert
 from app.portfolio.journal import TradeJournal
+from app.portfolio.performance_snapshots import StrategyPerformanceEvaluator
 from app.portfolio.positions import (
     load_circuit_breaker_state,
     save_circuit_breaker_state,
@@ -242,6 +243,22 @@ def _check_and_close_open_positions(current_price: float) -> list[int]:
         )
         send_telegram_alert(alert_message)
         send_discord_alert(alert_message)
+
+        # Adaptive platform milestone 6 (ENGINEERING_DECISIONS.md #48):
+        # recompute this strategy's rolling performance snapshot every time
+        # one of its trades closes -- the real "Continuous Learning" trigger
+        # point (docs/ADAPTIVE_ARCHITECTURE.md section 1's feedback loop).
+        # Best-effort/non-fatal, same pattern as every other observability
+        # step in this module: a broken snapshot computation must not block
+        # a real trade close that already happened.
+        strategy_name = position.get("strategy_name")
+        if strategy_name is not None:
+            try:
+                StrategyPerformanceEvaluator().evaluate_and_snapshot(
+                    strategy_name, account_balance=settings.PLACEHOLDER_ACCOUNT_BALANCE
+                )
+            except Exception as exc:
+                print(f"WARNING: strategy performance snapshot failed ({exc}).")
 
     return closed_ids
 
@@ -859,6 +876,7 @@ def run_once(
         "mode": "paper",
         "opened_at": datetime.now(timezone.utc),
         "latency_ms": latency_ms,
+        "strategy_name": "jade" if settings.USE_JADE_ENGINE else "legacy",
         "strategy_config": {
             "use_jade_engine": settings.USE_JADE_ENGINE,
             "enable_breakeven": settings.ENABLE_BREAKEVEN,

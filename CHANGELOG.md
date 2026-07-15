@@ -4,6 +4,34 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Adaptive platform milestone 6: rolling performance snapshots + auto-disable
+
+`app.portfolio.performance_snapshots`: `compute_rolling_metrics()` (pure
+function) + `StrategyPerformanceEvaluator` (real DB round-trip), computing
+win_rate/profit_factor/expectancy/max_drawdown/sharpe/sortino/
+recovery_factor over a strategy's most recent closed trades (R-multiple
+based, matching decision #47's MAE/MFE convention) and persisting a
+`StrategyPerformanceSnapshot` row. Auto-disables (`is_disabled` +
+`disabled_reason`) once a strategy has reached the established 20-trade
+confidence floor (`experiment_runner.MIN_TRADES_FOR_CONFIDENCE`) with a
+rolling profit factor at or below 1.0. Wired as a real producer:
+`scripts/run_paper.py` now calls it on every trade close, and now also
+populates `strategy_name` on new trades (a deliberate, justified reversal
+of milestone 5's scope deferral -- per-strategy metrics are impossible
+without it).
+
+Fixed 2 latent bugs, both surfaced by writing the first real inserts into
+`strategy_performance_snapshots`: the milestone-2 migration's `computed_at`
+server default used Postgres-only `now()` syntax (SQLite has no such
+function) instead of this codebase's established `CURRENT_TIMESTAMP`
+convention; and `latest_snapshot()`'s ordering was non-deterministic for
+two snapshots computed within the same SQLite timestamp tick, fixed with
+an `id`-based tie-break. Full rationale: `ENGINEERING_DECISIONS.md` #48.
+
+14 new tests, 430/430 full suite passing. `is_disabled` is computed and
+persisted but not yet consulted by `DefaultToLegacySelector` (milestone
+4) -- no strategy is actually blocked by this yet.
+
 ## [Unreleased] - Adaptive platform milestone 5: MAE/MFE/latency tracking in paper trading
 
 `scripts/run_paper.py` now populates 4 of the 6 Trade columns milestone 2
