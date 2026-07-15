@@ -1,5 +1,22 @@
 # Continuous Research Log
 
+**ARCHIVED 2026-07-15 (operator directive: "project scope has officially
+changed... stop all remaining parameter optimization tasks... archive
+unfinished parameter-search experiments").** This log is CLOSED, not
+deleted -- all 6 experiments below reached clear, documented,
+cross-year-validated conclusions (all rejected; see the "Final synthesis
+after 6 experiments" section) before this archival, so nothing here is
+actually "unfinished," but per the operator's explicit instruction no
+further parameter-search work will be added to this file. The project's
+objective is no longer "find one perfect strategy" -- see `ROADMAP.md`'s
+"Objective change (2026-07-15)" section and `docs/ADAPTIVE_ARCHITECTURE.md`
+for the current mandate (an adaptive multi-strategy platform). This log
+remains as the historical record of why the single-strategy execution-
+delay problem was judged unsolvable within reasonable parameter search,
+which is itself part of the evidentiary basis for the pivot.
+
+---
+
 Operator directive (2026-07-14): continuous research mode. Objective:
 increase net profit while preserving robustness, testing existing
 parameters/filters/models systematically. Legacy engine stays the

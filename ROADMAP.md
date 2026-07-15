@@ -11,7 +11,11 @@ Every item below is ranked by how much it moves the project closer to a
 code it produces. Evidence over assumption; a rule stays in the system
 because data proves it, not because it's popular in ICT/SMC communities.
 
-**Scope lock (operator directive, 2026-07-11)**: the objective for Phase
+**SUPERSEDED 2026-07-15 (operator directive) -- see "Objective change" below
+for the current mandate.** Original text preserved for history, not
+currently in force:
+
+~~**Scope lock (operator directive, 2026-07-11)**: the objective for Phase
 1 is narrowly "build, validate, and prove ONE profitable JadeCap
 automated trading system" — nothing else. No multi-strategy platform, no
 quant research platform, no strategy marketplace, no architecture not
@@ -20,7 +24,46 @@ directly increase the probability that JadeCap becomes a profitable
 automated trading system?" — if no, it goes in the "Phase 2 (deferred,
 out of scope for now)" section below, not implemented. The objective
 does not change until JadeCap has completed, in order: Backtest ->
-Walk-Forward -> Paper Trading -> Small Live Validation.
+Walk-Forward -> Paper Trading -> Small Live Validation.~~
+
+## Objective change (operator directive, 2026-07-15): from "one strategy" to "adaptive multi-strategy platform"
+
+The single-strategy scope lock above is explicitly REVERSED, not
+extended or clarified -- this is a real, acknowledged pivot, not a
+continuation of the prior objective. Six consecutive research
+experiments (`docs/CONTINUOUS_RESEARCH_LOG.md`) exhausted the reasonable
+parameter space for fixing the JadeCap candidate's execution-delay
+fragility without finding a fix, and the operator has concluded (not
+this session, unprompted) that "find one perfect strategy" is the wrong
+objective. The new objective, verbatim: **"Build an adaptive trading
+system that survives changing market conditions."**
+
+Concretely, this means:
+- Legacy is no longer positioned as "the strategy to prove" -- it becomes
+  **Strategy A**, one module among several, still the only one live in
+  production/paper trading until others are validated.
+- Multi-strategy architecture (previously explicitly forbidden --
+  "Phase 2 (deferred, out of scope for now)" below) is now the ACTIVE
+  work: a Market Regime Detector, a Strategy Selection Engine, a common
+  Strategy interface, an extended Performance Database, and continuous
+  self-evaluation with automatic strategy disabling.
+- Jade (`app.strategy.jade_trade_plan` and its component modules --
+  entry/exit point engines, HTF/LTF confluence, trendline, CRT, session
+  bias -- all already built, all already tested, never wired into
+  production) becomes **Strategy B**, reusing that existing work rather
+  than discarding it.
+- "Do not endlessly tune parameters" / "prefer structural improvements
+  over parameter optimization" (operator's own research-rules directive)
+  -- the six-experiment parameter search that just concluded is exactly
+  the kind of work this new directive says to stop doing; further
+  hypothesis-driven experiments remain fine, undirected parameter
+  grinding does not.
+- **Unchanged**: Legacy stays untouched, stays the production baseline,
+  paper trading keeps running exactly as before. Nothing about this
+  pivot touches what's currently live.
+
+Full architecture review, gap analysis, and prioritized build order:
+`docs/ADAPTIVE_ARCHITECTURE.md`.
 
 ## CURRENT PRIORITY: Core Rule MVP completion (operator directive, 2026-07-11)
 
