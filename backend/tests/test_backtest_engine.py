@@ -661,6 +661,7 @@ class _FakeSignalEngineFixedSignal:
         use_jade_engine=False,
         structure_tp_max_r=None,
         require_session=None,
+        atr_stop_multiplier=None,
     ):
         self.call_count += 1
         return self._signal

@@ -737,3 +737,48 @@ def test_build_entry_model_premium_discount_filter_independent_of_structure_tp()
 
     assert model is not None
     assert model["take_profit"] == 130
+
+
+def test_build_entry_model_atr_stop_multiplier_widens_a_too_tight_zone_stop():
+    """atr_stop_multiplier (opt-in, default None -- 2026-07-14 continuous
+    research mode, docs/CONTINUOUS_RESEARCH_LOG.md experiment 6) pushes
+    the stop out to atr*multiplier when the zone-derived stop is TIGHTER
+    than that floor -- entry_price/zone selection untouched, only
+    stop_loss/risk (and therefore rr, since take_profit = entry +/- risk*_RR)
+    move.
+    """
+    model = build_entry_model(
+        "bullish", _SWEEP, None, _BULLISH_FVG, None,
+        atr=10.0, atr_stop_multiplier=1.0,
+    )
+
+    assert model is not None
+    assert model["entry_price"] == 110  # zone top, unchanged
+    assert model["stop_loss"] == 100.0  # entry_price - atr*multiplier (10*1.0)
+    risk = model["entry_price"] - model["stop_loss"]
+    assert model["take_profit"] == model["entry_price"] + risk * 2.5  # _RR unchanged
+
+
+def test_build_entry_model_atr_stop_multiplier_no_effect_when_zone_stop_already_wider():
+    """When the zone-based stop is ALREADY wider than atr*multiplier, the
+    floor must not tighten it back in -- the wider of the two always
+    wins."""
+    baseline = build_entry_model("bullish", _SWEEP, None, _BULLISH_FVG, None)
+    with_small_atr = build_entry_model(
+        "bullish", _SWEEP, None, _BULLISH_FVG, None,
+        atr=0.01, atr_stop_multiplier=1.0,
+    )
+
+    assert with_small_atr == baseline
+
+
+def test_build_entry_model_atr_stop_multiplier_ignored_when_atr_missing():
+    """atr_stop_multiplier alone (no atr value) must be a no-op -- both
+    are required together."""
+    baseline = build_entry_model("bullish", _SWEEP, None, _BULLISH_FVG, None)
+    with_multiplier_only = build_entry_model(
+        "bullish", _SWEEP, None, _BULLISH_FVG, None,
+        atr_stop_multiplier=1.0,
+    )
+
+    assert with_multiplier_only == baseline

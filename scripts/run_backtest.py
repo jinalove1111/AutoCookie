@@ -163,6 +163,7 @@ def run_backtest(
     account_balance: float = 10000.0,
     require_session: str | None = None,
     max_entry_drift_pct: float | None = None,
+    atr_stop_multiplier: float | None = None,
 ) -> Any:
     """Replay `ltf_candles`/`htf_candles` once through the real
     Strategy/Risk/Backtest engines.
@@ -195,6 +196,7 @@ def run_backtest(
         entry_delay_candles=entry_delay_candles,
         require_session=require_session,
         max_entry_drift_pct=max_entry_drift_pct,
+        atr_stop_multiplier=atr_stop_multiplier,
     )
 
 

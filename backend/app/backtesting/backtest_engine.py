@@ -182,6 +182,7 @@ class BacktestEngine:
         entry_delay_candles: int = 0,
         require_session: str | None = None,
         max_entry_drift_pct: float | None = None,
+        atr_stop_multiplier: float | None = None,
     ) -> "BacktestResult":
         """Replays historical LTF candles (with a time-aligned, no-lookahead
         HTF slice at each step) through the Strategy Engine and Risk Engine
@@ -353,6 +354,7 @@ class BacktestEngine:
                 use_jade_engine=use_jade_engine,
                 structure_tp_max_r=structure_tp_max_r,
                 require_session=require_session,
+                atr_stop_multiplier=atr_stop_multiplier,
             )
             if signal is None:
                 i += 1

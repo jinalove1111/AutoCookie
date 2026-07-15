@@ -7,7 +7,7 @@ boundary rule itself).
 
 from __future__ import annotations
 
-from app.strategy.utils import is_zone_mitigated
+from app.strategy.utils import average_true_range, is_zone_mitigated
 
 
 def candle(high: float, low: float, ts: str) -> dict:
@@ -66,3 +66,40 @@ def test_is_zone_mitigated_boundary_touch_counts_as_overlap():
         candle(50, 45, "t2"),
     ]
     assert is_zone_mitigated(candles, start_index=1, top=30, bottom=20) is True
+
+
+def _ohlc(open_: float, high: float, low: float, close: float, ts: str) -> dict:
+    return {"open": open_, "high": high, "low": low, "close": close, "timestamp": ts}
+
+
+def test_average_true_range_none_below_minimum_history():
+    """Needs lookback + 1 candles (each True Range needs a previous
+    close) -- returns None rather than a misleading partial average."""
+    candles = [_ohlc(100, 105, 95, 100, f"t{i}") for i in range(5)]
+    assert average_true_range(candles, lookback=14) is None
+
+
+def test_average_true_range_simple_no_gaps():
+    """With no gaps between candles (close == next open, ranges don't
+    exceed the prior close), True Range reduces to plain high-low, so ATR
+    is just the average high-low range -- a simple, independently
+    verifiable case."""
+    candles = [
+        _ohlc(100, 102, 98, 100, "t0"),
+        _ohlc(100, 104, 96, 100, "t1"),  # range 8
+        _ohlc(100, 103, 97, 100, "t2"),  # range 6
+    ]
+    # lookback=2 -> uses t1, t2 (each needs its own prior close, both 100,
+    # no gap) -> true ranges [8, 6] -> ATR = 7.0
+    assert average_true_range(candles, lookback=2) == 7.0
+
+
+def test_average_true_range_captures_gap_up():
+    """A gap up (low of the new candle above the previous close) must
+    still be captured by True Range even though high-low alone would
+    understate the real range."""
+    candles = [
+        _ohlc(100, 101, 99, 100, "t0"),
+        _ohlc(120, 122, 119, 121, "t1"),  # gapped up from close=100; high-low=3, but |high-prev_close|=22
+    ]
+    assert average_true_range(candles, lookback=1) == 22.0

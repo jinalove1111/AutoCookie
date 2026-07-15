@@ -17,6 +17,34 @@ def cf(candle: Any, key: str) -> Any:
     return getattr(candle, key)
 
 
+def average_true_range(candles: list, lookback: int = 14) -> float | None:
+    """Standard ATR (simple moving average of True Range over `lookback`
+    periods, the common default) on the most recent `lookback` candles.
+    True Range = max(high-low, |high-prev_close|, |low-prev_close|).
+
+    2026-07-14 continuous research mode (docs/CONTINUOUS_RESEARCH_LOG.md
+    experiment 6): not a new indicator -- ATR is the standard, widely-used
+    volatility measure -- added here as a shared utility so any caller
+    needing a volatility-scaled reference (e.g. a stop-distance floor) can
+    reuse ONE implementation rather than each computing it independently.
+
+    Returns `None` if fewer than `lookback + 1` candles are available
+    (need `lookback` true-range values, each of which needs a previous
+    close) -- same "insufficient structure, don't fabricate an answer"
+    discipline every other detector in this package follows.
+    """
+    if len(candles) < lookback + 1:
+        return None
+    window = candles[-(lookback + 1):]
+    true_ranges = []
+    for i in range(1, len(window)):
+        high = cf(window[i], "high")
+        low = cf(window[i], "low")
+        prev_close = cf(window[i - 1], "close")
+        true_ranges.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
+    return sum(true_ranges) / len(true_ranges)
+
+
 def is_zone_mitigated(candles: list, start_index: int, top: float, bottom: float) -> bool:
     """True if any candle in `candles[start_index:-1]` has a [low, high]
     range that overlaps `[bottom, top]` -- i.e. price has already traded

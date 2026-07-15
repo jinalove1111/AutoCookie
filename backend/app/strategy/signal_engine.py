@@ -22,7 +22,7 @@ from .market_structure import (
 from .order_block import detect_breaker_block, detect_order_block
 from .premium_discount import calculate_premium_discount
 from .session_liquidity import _ASIAN_SESSION, _LONDON_SESSION
-from .utils import cf, is_zone_mitigated
+from .utils import average_true_range, cf, is_zone_mitigated
 
 _SESSION_WINDOWS = {"asian": _ASIAN_SESSION, "london": _LONDON_SESSION}
 
@@ -72,6 +72,7 @@ class SignalEngine:
         use_jade_engine: bool = False,
         structure_tp_max_r: float | None = None,
         require_session: str | None = None,
+        atr_stop_multiplier: float | None = None,
     ) -> "TradeSignal | None":
         """Analyze market structure for `symbol` and produce a TradeSignal, or None.
 
@@ -287,6 +288,8 @@ class SignalEngine:
         if use_structure_tp or require_premium_discount_filter:
             premium_discount = calculate_premium_discount(ltf_candles)
 
+        atr = average_true_range(ltf_candles) if atr_stop_multiplier is not None else None
+
         model = build_entry_model(
             bias,
             sweep,
@@ -302,6 +305,8 @@ class SignalEngine:
             use_structure_tp=use_structure_tp,
             require_premium_discount_filter=require_premium_discount_filter,
             structure_tp_max_r=structure_tp_max_r,
+            atr=atr,
+            atr_stop_multiplier=atr_stop_multiplier,
         )
         if model is None:
             return None

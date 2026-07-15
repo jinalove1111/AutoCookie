@@ -54,6 +54,8 @@ def build_entry_model(
     use_structure_tp: bool = False,
     require_premium_discount_filter: bool = False,
     structure_tp_max_r: float | None = None,
+    atr: float | None = None,
+    atr_stop_multiplier: float | None = None,
 ) -> dict | None:
     """Combine bias/sweep/CHOCH/FVG/order-block(/breaker-block) signals into
     an entry candidate, or None.
@@ -252,6 +254,28 @@ def build_entry_model(
 
     if risk <= 0:
         return None
+
+    # atr_stop_multiplier (opt-in, default None -- 2026-07-14 continuous
+    # research mode, docs/CONTINUOUS_RESEARCH_LOG.md experiment 6): a
+    # volatility-scaled FLOOR on the stop distance, not a replacement for
+    # the zone-based stop. When the zone-derived `risk` is TIGHTER than
+    # `atr * atr_stop_multiplier`, the stop is pushed out to that floor
+    # instead -- the zone-based stop always wins when it's already wider.
+    # Motivated by docs/ROBUSTNESS_REPORT.md test 2 (execution-delay
+    # fragility traced to tight zone-based stops) and the failure of a
+    # FLAT percentage buffer to fix it without collapsing profitability
+    # (CONTINUOUS_RESEARCH_LOG.md experiments 1/2/5) -- a volatility-
+    # relative floor only widens the stop when the CURRENT regime's own
+    # price action is large relative to the zone, rather than always
+    # adding a fixed distance regardless of context.
+    if atr_stop_multiplier is not None and atr is not None and atr > 0:
+        atr_floor = atr * atr_stop_multiplier
+        if risk < atr_floor:
+            if direction == "long":
+                stop_loss = entry_price - atr_floor
+            else:
+                stop_loss = entry_price + atr_floor
+            risk = atr_floor
 
     take_profit = entry_price + risk * _RR if direction == "long" else entry_price - risk * _RR
     rr = _RR
