@@ -18,6 +18,7 @@ active strategy is excluded from evaluation entirely.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 import pytest
 
@@ -230,5 +231,59 @@ def test_record_shadow_pass_none_regime_skips_snapshot_but_still_evaluates(
         rows = db.query(ShadowSignal).all()
         assert len(rows) == 1
         assert rows[0].market_regime is None
+    finally:
+        db.close()
+
+
+def test_record_shadow_pass_sanitizes_datetime_timestamp_in_payload(migrated_db, monkeypatch):
+    """Milestone 14 follow-up bugfix, 2026-07-16 (regression test).
+
+    Real strategies (range_trading, trend_following, volatility_expansion)
+    set `TradeSignal.timestamp = cf(ltf_candles[-1], "timestamp")`, which is
+    a timezone-aware `datetime` object (see
+    `app.data.data_normalizer.normalize_candle`), not the `str` the type
+    hint claims. `timestamp` is not one of `_PROMOTED_SIGNAL_FIELDS`, so it
+    lands in `signal_payload` verbatim via `asdict(signal)`. Before the
+    fix, an unsanitized `datetime` there raised `TypeError: Object of type
+    datetime is not JSON serializable` at commit time, and -- because that
+    raise happens in the persist step, outside the per-strategy
+    try/except around `generate_signal` -- the shadow signal was silently
+    lost (not even counted as an `errors` entry). This proves: the row IS
+    persisted (not an error), and `signal_payload["timestamp"]` comes out
+    ISO-stringified.
+    """
+    import app.portfolio.shadow_recorder as shadow_recorder
+    from app.database.models import ShadowSignal
+
+    real_timestamp = datetime(2026, 7, 16, 0, 5, 0, tzinfo=timezone.utc)
+
+    @dataclass
+    class _DatetimeTimestampStrategy:
+        def generate_signal(self, symbol, ltf_candles, htf_candles):
+            return _make_signal(symbol=symbol, timestamp=real_timestamp)
+
+    fake_registry = {
+        "datetime_strategy": _DatetimeTimestampStrategy(),
+        "legacy": _FakeStrategy("legacy", "1.0", "none"),  # active -- excluded
+    }
+    monkeypatch.setattr(shadow_recorder, "all_strategies", lambda: fake_registry)
+
+    regime = _make_regime()
+    candles = _synthetic_candles()
+
+    result = shadow_recorder.record_shadow_pass(
+        "BTCUSDT", "5m", candles, candles, regime, "legacy"
+    )
+
+    assert result["errors"] == 0
+    assert result["shadow_signals_written"] == 1
+
+    from app.database.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        rows = db.query(ShadowSignal).all()
+        assert len(rows) == 1
+        assert rows[0].signal_payload["timestamp"] == real_timestamp.isoformat()
     finally:
         db.close()

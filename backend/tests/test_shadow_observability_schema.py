@@ -127,6 +127,9 @@ def test_upgrade_head_creates_shadow_signals_table(migrated_db):
         "rr",
         "market_regime",
         "signal_payload",
+        "outcome",
+        "resolved_at",
+        "resolved_r",
     }
 
 
@@ -290,7 +293,7 @@ def test_migrate_existing_lands_on_new_head_with_new_tables(tmp_path):
 
     cfg = build_alembic_config(db_path)
     current_head = ScriptDirectory.from_config(cfg).get_current_head()
-    assert current_head == "36cb62e9e2ac"
+    assert current_head == "65aba13281ad"
     assert report["head"] == current_head
 
     assert "regime_snapshots" in report["tables"]

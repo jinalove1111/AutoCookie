@@ -95,6 +95,18 @@ pass is fully resolved (both the no-signal early-return and the full
 signal/risk/execute path call it right before their own `return`), and
 always inside its own try/except WARN so a broken shadow step can never
 affect a real trading outcome that already happened this pass.
+
+Milestone 14b (2026-07-16, docs/ADAPTIVE_ARCHITECTURE.md section 4.3,
+ENGINEERING_DECISIONS.md #55): still inside the same
+`ENABLE_SHADOW_STRATEGY_SIGNALS`-gated block, `_maybe_record_shadow_pass`
+now ALSO calls `app.portfolio.shadow_resolver.resolve_open_shadow_signals`
+for this pass's symbol, using this pass's already-fetched `candles`,
+BEFORE recording any new shadow signals below it -- so a signal this very
+pass records is never examined (let alone resolved) by its own pass's
+resolution step; only signals from a STRICTLY EARLIER pass are ever
+candidates. Same fault-isolation discipline as `record_shadow_pass`: any
+failure is WARNed and swallowed by this function's existing outer
+try/except, never allowed to affect a real trading outcome.
 """
 
 from __future__ import annotations
@@ -142,6 +154,7 @@ from app.portfolio.positions import (
     save_circuit_breaker_state,
 )
 from app.portfolio.shadow_recorder import record_shadow_pass
+from app.portfolio.shadow_resolver import resolve_open_shadow_signals
 from app.portfolio.signals import SignalTracker
 from app.portfolio.trades import TradeTracker
 from app.regime.regime_detector import detect_market_regime
@@ -514,9 +527,9 @@ def _maybe_record_shadow_pass(
     influence (or be influenced by) a real trading decision this pass
     already made. Wrapped entirely in its own try/except: any failure
     (regime detection, persistence, an individual strategy raising inside
-    `record_shadow_pass`) is caught here, WARNed, and swallowed -- it must
-    never be the reason a paper-trading pass reports a failure or a
-    non-zero exit code.
+    `record_shadow_pass`, or the Milestone 14b resolution step below) is
+    caught here, WARNed, and swallowed -- it must never be the reason a
+    paper-trading pass reports a failure or a non-zero exit code.
 
     `regime`: when the caller already computed a `MarketRegime` this pass
     (the trade path's own position-sizing step, below, already does), it
@@ -525,11 +538,23 @@ def _maybe_record_shadow_pass(
     the `_UNSET` sentinel (the no-signal path, which never reaches that
     computation), a fresh regime is computed here instead.
 
-    Mutates `summary` in place, adding a `"shadow"` key (the
-    `record_shadow_pass` summary dict, or `None` if the shadow step itself
-    failed) -- only ever added when the flag is on; left entirely absent
-    when off, per this module's summary-dict convention of only adding
-    fields a given pass's configuration actually produced.
+    Milestone 14b (see module docstring): BEFORE recording this pass's own
+    shadow signals, first calls
+    `app.portfolio.shadow_resolver.resolve_open_shadow_signals` for
+    `settings.SYMBOL` against this pass's `candles` -- settling any
+    still-open shadow signal from an EARLIER pass that these fresher
+    candles now have enough evidence to resolve. Doing this first (not
+    after `record_shadow_pass` below) means a signal `record_shadow_pass`
+    is about to insert THIS pass is never a candidate for THIS pass's own
+    resolution step -- it always waits for at least the next pass.
+
+    Mutates `summary` in place, adding a `"shadow"` key -- the
+    `record_shadow_pass` summary dict with one extra nested key,
+    `"resolution"` (the `resolve_open_shadow_signals` summary dict), or
+    `None` for the whole `"shadow"` entry if the shadow step itself failed
+    -- only ever added when the flag is on; left entirely absent when off,
+    per this module's summary-dict convention of only adding fields a
+    given pass's configuration actually produced.
     """
     if not settings.ENABLE_SHADOW_STRATEGY_SIGNALS:
         return
@@ -537,6 +562,7 @@ def _maybe_record_shadow_pass(
     try:
         active_strategy_name = "jade" if settings.USE_JADE_ENGINE else "legacy"
         effective_regime = detect_market_regime(candles) if regime is _UNSET else regime
+        resolution_summary = resolve_open_shadow_signals(settings.SYMBOL, candles)
         summary["shadow"] = record_shadow_pass(
             settings.SYMBOL,
             settings.DEFAULT_TIMEFRAME,
@@ -545,6 +571,7 @@ def _maybe_record_shadow_pass(
             effective_regime,
             active_strategy_name,
         )
+        summary["shadow"]["resolution"] = resolution_summary
     except Exception as exc:
         print(f"WARNING: shadow-mode recording failed ({exc}).")
         summary["shadow"] = None
@@ -569,7 +596,8 @@ def run_once(
         "skipped_signal_generation": bool,  # True if the concurrency guard skipped
                                              # everything past the exit-check step
         "skipped_reason": str | None,       # why, when skipped_signal_generation is True
-        "shadow": dict | None,       # Milestone 11b: only present when
+        "shadow": dict | None,       # Milestone 11b (+14b's nested "resolution" key):
+                                      # only present when
                                       # settings.ENABLE_SHADOW_STRATEGY_SIGNALS is True --
                                       # see _maybe_record_shadow_pass's docstring
       }

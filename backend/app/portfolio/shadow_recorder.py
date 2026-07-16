@@ -40,6 +40,7 @@ downstream in the real trading pipeline (Risk Engine, ExecutionEngine,
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import datetime
 from typing import Any
 
 from app.database.models import RegimeSnapshot, ShadowSignal
@@ -57,6 +58,43 @@ _PROMOTED_SIGNAL_FIELDS = {
     "take_profit",
     "rr",
 }
+
+
+def _json_safe(value: Any) -> Any:
+    """Recursively coerce `value` into something safe for a JSON DB column.
+
+    Milestone 14 follow-up bugfix, 2026-07-16: real strategies
+    (range_trading, trend_following, volatility_expansion, and
+    signal_engine's own `TradeSignal` construction) set
+    `TradeSignal.timestamp = cf(ltf_candles[-1], "timestamp")`, which is a
+    timezone-aware `datetime` object (see
+    `app.data.data_normalizer.normalize_candle`) -- not a JSON primitive.
+    `timestamp` is not one of `_PROMOTED_SIGNAL_FIELDS`, so it lands in
+    `signal_payload` verbatim via `asdict(signal)`; unsanitized, committing
+    the `ShadowSignal` row raises `TypeError: Object of type datetime is
+    not JSON serializable`. That raise happens in the persist step below,
+    outside this module's per-strategy try/except around
+    `generate_signal`, so it was not even contained to "drop this one
+    row" -- the first real shadow signal in production would abort the
+    rest of that pass's evaluation. Observability-loss, not a
+    trading-safety issue (see module docstring).
+
+    `datetime` -> ISO 8601 string (`.isoformat()`); dicts/lists/tuples are
+    walked recursively; any other value that isn't already a JSON
+    primitive (`str`/`int`/`float`/`bool`/`None`) falls back to
+    `str(value)` as a documented last resort -- deliberately generic so
+    this doesn't need to be revisited for the next exotic type some
+    strategy or regime metric starts carrying.
+    """
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
 
 
 def record_shadow_pass(
@@ -97,7 +135,11 @@ def record_shadow_pass(
     columns, for audit; `strategy_version` comes from the strategy
     instance's own `.version` attribute (falls back to `None` if a
     strategy module doesn't expose one -- defensive, every current
-    `Strategy` implementation does).
+    `Strategy` implementation does). Both `market_regime` and
+    `signal_payload` are run through `_json_safe` first (Milestone 14
+    follow-up bugfix, 2026-07-16) so a non-JSON-primitive value -- notably
+    `TradeSignal.timestamp`, a real `datetime` in production -- doesn't
+    blow up the commit; see `_json_safe`'s docstring.
 
     Returns a summary dict:
       {
@@ -121,7 +163,10 @@ def record_shadow_pass(
         "errors": 0,
     }
 
-    regime_dict = asdict(regime) if regime is not None else None
+    # `_json_safe` here is defense in depth: `MarketRegime.metrics` only
+    # ever carries floats/strings today, but sanitizing generically means
+    # a future metric type can't reopen this same bug (see `_json_safe`).
+    regime_dict = _json_safe(asdict(regime)) if regime is not None else None
 
     if regime is not None:
         with session_scope() as db:
@@ -157,6 +202,10 @@ def record_shadow_pass(
 
         signal_dict = asdict(signal)
         payload = {k: v for k, v in signal_dict.items() if k not in _PROMOTED_SIGNAL_FIELDS}
+        # Sanitize non-JSON-primitive values (e.g. a real datetime
+        # `timestamp`, see `_json_safe`) before this reaches the JSON
+        # column below.
+        payload = _json_safe(payload)
 
         with session_scope() as db:
             row_kwargs: dict[str, Any] = dict(

@@ -281,6 +281,23 @@ class ShadowSignal(Base):
     `Trade.market_regime`); `signal_payload` carries the full
     `app.strategy.signal_engine.TradeSignal` asdict, minus whatever is
     already promoted to its own column below, for audit.
+
+    Milestone 14, 2026-07-16: `outcome`/`resolved_at`/`resolved_r` are the
+    outcome-resolution fields a future resolver (Milestone 14b) fills in by
+    walking candles subsequent to `captured_at`. All three are nullable and
+    start NULL (an "open"/unresolved shadow signal); the DB does not enforce
+    the semantics below -- the resolver does:
+
+      - `outcome`: one of `"tp"` (take-profit level touched first),
+        `"sl"` (stop-loss level touched first), or `"expired"` (the signal
+        aged past the resolver's lookahead window without either level
+        being touched -- neither a win nor a loss, just undecided).
+      - `resolved_at`: UTC timestamp of when the resolver settled the
+        signal (i.e. when it wrote a non-NULL `outcome`).
+      - `resolved_r`: the realized R multiple. `+rr` (this row's own `rr`
+        column) when `outcome == "tp"`, `-1.0` when `outcome == "sl"`, and
+        `NULL` when `outcome == "expired"` (no realized R for an
+        undecided signal).
     """
 
     __tablename__ = "shadow_signals"
@@ -299,3 +316,6 @@ class ShadowSignal(Base):
     rr: Mapped[float] = mapped_column(Float, nullable=False)
     market_regime: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     signal_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    outcome: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_r: Mapped[float | None] = mapped_column(Float, nullable=True)
