@@ -127,6 +127,29 @@ risk-evaluated, or executed -- only the same observability-only
 symbol already uses are called, against every strategy (no strategy is
 "active" for a symbol nothing trades -- see that helper's docstring for
 the `active_strategy_name=None` contract this relies on).
+
+Milestone 21 (2026-07-17): consecutive candle-fetch-failure alerting for
+loop mode. Real incident, 2026-07-16: a transient DNS failure produced
+"ERROR: failed to fetch candles ... getaddrinfo failed" on one pass and
+recovered silently on the next -- fine, that's the correct behavior for a
+blip. But a PERSISTENT outage previously had no operator-facing signal at
+all: every pass would keep printing the same ERROR line to stdout forever,
+silently starving both real trading and shadow-evidence collection, with
+no alert ever firing. `run_once()`'s summary dict now carries a
+`"fetch_failed"` bool, True only when this pass's initial LTF candle fetch
+(step 1) raised an exception -- the exact shape of the incident. `main()`'s
+loop mode feeds every iteration's summary into a new `_FetchFailureAlerter`
+instance (same one-instance-per-loop lifetime as the circuit breaker
+above): once `settings.FETCH_FAILURE_ALERT_THRESHOLD` consecutive failures
+are observed, one Telegram/Discord alert fires (never repeated for the
+same streak); the first success after an alerted streak fires one recovery
+alert. `FETCH_FAILURE_ALERT_THRESHOLD` = 0 disables this alerting
+entirely. Purely observability: nothing here can alter `run_once()`'s pass
+logic, trading decisions, or exit codes, and single-pass mode
+(`--iterations 1`, the default) is untouched -- a single pass cannot have a
+"consecutive" streak by definition, and never constructs a
+`_FetchFailureAlerter` at all. See that class's docstring for the full
+dedup contract.
 """
 
 from __future__ import annotations
@@ -525,6 +548,117 @@ def _check_drawdown_and_maybe_trip(
         send_discord_alert(message)
 
 
+class _FetchFailureAlerter:
+    """Milestone 21 (2026-07-17, real incident 2026-07-16 -- see the module
+    docstring and `FETCH_FAILURE_ALERT_THRESHOLD`'s comment in
+    app/config.py): tracks CONSECUTIVE candle-fetch failures across
+    loop-mode iterations and sends one Telegram/Discord alert once the
+    streak reaches `settings.FETCH_FAILURE_ALERT_THRESHOLD`, plus one
+    recovery alert on the first success after an alerted streak.
+
+    One instance is constructed in `main()`'s loop scope and lives for the
+    lifetime of the loop -- exactly the same "state lives across
+    iterations, in the loop, not in run_once()" pattern
+    `PersistentCircuitBreaker` already uses there, since `run_once()` has
+    no memory of its own between calls. Deliberately its own small class
+    (rather than a couple of loose module-level variables threaded through
+    `main()`) so this milestone's dedup/recovery logic is unit-testable in
+    isolation, by constructing an instance directly and feeding it stubbed
+    `run_once()`-shaped summary dicts -- see tests/test_paper_fetch_failure_
+    alerting.py.
+
+    Observability only (Hard Rule): nothing here ever reads or changes
+    `signal_found`/`approved`/`executed`/`exit_code`/etc, and nothing here
+    is consulted by `run_once()`, `RiskManager`, or `PersistentCircuitBreaker`
+    -- nothing in this class can alter which trades happen. It only decides
+    whether an alert is sent about a fact (`summary["fetch_failed"]`) that
+    already happened.
+
+    Dedup contract (Hard Rule):
+      - a failure alert fires exactly once: the pass the streak reaches
+        `threshold` (not on the pass that crosses it, and not again on any
+        later pass while the streak continues past `threshold`)
+      - a recovery alert fires exactly once: the first success
+        (`fetch_failed` False) after a streak that DID alert. A streak that
+        recovers before ever reaching `threshold` (a sub-threshold blip,
+        e.g. the real 2026-07-16 DNS incident) stays silent on both ends --
+        there is nothing to alert about, and nothing to recover from.
+      - `threshold <= 0` disables both the failure and the recovery alert
+        entirely (matches `FETCH_FAILURE_ALERT_THRESHOLD`'s own "0
+        disables" contract in app/config.py); the streak is still counted
+        internally (harmless) but `alerted` can never become True, so
+        `_on_success` never has anything to recover from either.
+
+    Fault isolation (Hard Rule: alerting must never break the loop):
+      `_send` wraps both `send_telegram_alert`/`send_discord_alert` calls in
+      one try/except WARN. Both senders already have their own frozen
+      "never raises" contract (see app/notifications/telegram.py|discord.py
+      and this module's own "5b. Notify" comment above), so this is
+      defense-in-depth, not reliance on that contract alone -- a change to
+      either sender's contract, or a genuinely unexpected exception from
+      this class's own message formatting, still cannot take down the loop.
+
+    Single-pass mode (`--iterations <= 1`, `main()`'s default path) never
+    constructs this class at all -- see `main()`. A single pass cannot have
+    a "consecutive" streak by definition, and single-pass mode has never
+    had a persistent loop-mode-style breaker/alerter of any kind (see the
+    module docstring's existing single-pass vs loop-mode distinctions).
+    """
+
+    def __init__(self, threshold: int | None = None) -> None:
+        self.threshold = (
+            settings.FETCH_FAILURE_ALERT_THRESHOLD if threshold is None else threshold
+        )
+        self.consecutive_failures = 0
+        self.alerted = False
+
+    def observe(self, summary: dict[str, Any]) -> None:
+        """Call once per completed loop-mode `run_once()` iteration, with
+        that iteration's returned summary dict."""
+        if summary.get("fetch_failed"):
+            self._on_failure(summary)
+        else:
+            self._on_success()
+
+    def _on_failure(self, summary: dict[str, Any]) -> None:
+        self.consecutive_failures += 1
+        if self.threshold <= 0:
+            return  # alerting disabled entirely -- see class docstring
+
+        if self.consecutive_failures == self.threshold:
+            self.alerted = True
+            message = (
+                f"Candle fetch failing: {self.consecutive_failures} consecutive "
+                f"failure(s) for {settings.SYMBOL} (last error: "
+                f"{summary.get('error')}) as of "
+                f"{datetime.now(timezone.utc).isoformat()}"
+            )
+            self._send(message)
+
+    def _on_success(self) -> None:
+        if self.alerted:
+            message = (
+                f"Candle fetch recovered for {settings.SYMBOL} after "
+                f"{self.consecutive_failures} consecutive failure(s), as of "
+                f"{datetime.now(timezone.utc).isoformat()}"
+            )
+            self._send(message)
+        self.consecutive_failures = 0
+        self.alerted = False
+
+    @staticmethod
+    def _send(message: str) -> None:
+        # Matches _check_drawdown_and_maybe_trip's existing alert style:
+        # the printed line carries the "ALERT:" prefix, the dispatched
+        # message itself does not.
+        print(f"ALERT: {message}")
+        try:
+            send_telegram_alert(message)
+            send_discord_alert(message)
+        except Exception as exc:
+            print(f"WARNING: fetch-failure alert dispatch failed ({exc}).")
+
+
 _UNSET = object()  # sentinel: distinguishes "no regime supplied" from a genuine `None` regime
 
 
@@ -728,6 +862,9 @@ def run_once(
                                       # +17a's nested "extra_symbols" key): only present
                                       # when settings.ENABLE_SHADOW_STRATEGY_SIGNALS is
                                       # True -- see _maybe_record_shadow_pass's docstring
+        "fetch_failed": bool,        # Milestone 21: True only when this pass's initial
+                                      # LTF candle fetch raised an exception -- see
+                                      # _FetchFailureAlerter's docstring
       }
 
     When `circuit_breaker` is None (the default -- used by the no-args
@@ -798,6 +935,17 @@ def run_once(
         "breakeven_moved": [],
         "skipped_signal_generation": False,
         "skipped_reason": None,
+        # Milestone 21 (2026-07-17, real incident 2026-07-16): True ONLY
+        # when the very first candle fetch this pass (the LTF fetch for
+        # settings.SYMBOL, immediately below) raised an exception -- the
+        # exact "ERROR: failed to fetch candles ... getaddrinfo failed"
+        # shape of the incident this field exists to make visible.
+        # Deliberately scoped to just that one branch, not every path that
+        # sets exit_code=1 (risk/execution/persistence failures are real
+        # but not fetch failures, and alerting on those too would blur the
+        # signal this field exists to give _FetchFailureAlerter). See that
+        # class's docstring for how this field is consumed in loop mode.
+        "fetch_failed": False,
     }
 
     # --- 0. Drawdown/circuit-breaker check (loop mode only) ---
@@ -816,6 +964,7 @@ def run_once(
         print(f"ERROR: failed to fetch candles for {settings.SYMBOL}: {exc}")
         summary["error"] = str(exc)
         summary["exit_code"] = 1
+        summary["fetch_failed"] = True  # Milestone 21 -- see summary dict comment above
         return summary
 
     if not candles:
@@ -1337,6 +1486,13 @@ def main() -> int:
             f"state -- tripped=True, reason={circuit_breaker.reason!r}, "
             f"tripped_at={circuit_breaker.tripped_at}."
         )
+
+    # Milestone 21: one _FetchFailureAlerter instance, created here and
+    # reused across every iteration for the lifetime of the loop -- same
+    # single-instance-per-loop lifetime as circuit_breaker above (see that
+    # class's docstring for why this state can't live inside run_once()).
+    fetch_alerter = _FetchFailureAlerter()
+
     completed = 0
     try:
         for i in range(args.iterations):
@@ -1345,8 +1501,9 @@ def main() -> int:
                 f"(circuit_breaker id={id(circuit_breaker)}, "
                 f"tripped={circuit_breaker.is_tripped()}) ---"
             )
-            run_once(circuit_breaker=circuit_breaker)
+            iteration_summary = run_once(circuit_breaker=circuit_breaker)
             completed += 1
+            fetch_alerter.observe(iteration_summary)
             if i < args.iterations - 1:
                 time.sleep(args.interval_seconds)
     except KeyboardInterrupt:

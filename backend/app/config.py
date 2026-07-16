@@ -181,6 +181,26 @@ class Settings(BaseSettings):
     # Do not flip this above 0.0 without that evidence.
     MIN_STOP_ATR_MULT: float = 0.0
 
+    # Consecutive candle-fetch-failure alerting (Milestone 21, 2026-07-17).
+    # Real incident, 2026-07-16: a transient DNS failure produced "ERROR:
+    # failed to fetch candles ... getaddrinfo failed" on one loop-mode pass
+    # and recovered silently on the next -- fine, that's exactly what a
+    # transient blip should do. But scripts/run_paper.py's loop mode had (and
+    # still has) no operator-facing signal for a PERSISTENT outage: every
+    # 300s pass would keep emitting the same ERROR line to stdout forever,
+    # silently starving both real trading and shadow-evidence collection,
+    # with nobody watching logs ever notified. This setting is the number of
+    # CONSECUTIVE full-pass candle-fetch failures (loop mode only -- see
+    # scripts/run_paper.py's `_FetchFailureAlerter`) required before one
+    # Telegram/Discord alert fires; a recovery alert fires once on the first
+    # success after an alerted streak. 0 disables this alerting entirely
+    # (both the failure and the recovery alert never fire). Observability
+    # only, same discipline as every alerting call site in this codebase:
+    # this can never change whether a pass counts as a fetch failure, reject
+    # a signal, or otherwise alter trading behavior -- it only decides
+    # whether an alert is sent about a fact that already happened.
+    FETCH_FAILURE_ALERT_THRESHOLD: int = 3
+
     @field_validator("TRADING_MODE")
     @classmethod
     def validate_trading_mode(cls, value: str) -> str:
