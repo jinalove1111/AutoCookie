@@ -3443,3 +3443,107 @@ closes that docs debt. **Same-day ops** (tracked in `HANDOFF.md`/
 was migrated to head `6b085b904777`, and the trader was restarted with
 the v2 resolution model active plus 4-symbol shadow collection
 (milestone 17a's `SHADOW_SYMBOLS`) running.
+
+## 59. Milestone 19: backtester quadratic-scan fix in `detect_order_block` -- reverse-scan early-exit, a declined rolling-sum micro-optimization, and a three-namespace monkeypatch lesson
+
+**Decision** (2026-07-16): a profiling round (measurement-only, prior
+session, interrupted by the session usage limit and flagged as a pending
+item in milestone 18's own writeup) diagnosed the backtest engine's
+scaling as effectively quadratic -- a log-log exponent of ~2.26 measured
+across 500/1000/2000/3000-candle runs on real BTCUSDT data, not a
+synthetic worst case. `detect_order_block()` accounted for 62.6% of
+total runtime; `is_zone_mitigated()` was a distant #2 at 22.2% (O(n) FVG
+zones times per-step scans); the `cf()` OHLCV accessor contributed a
+large constant factor to self-time (~40%, 220M calls at n=3000) without
+being asymptotically responsible for the quadratic shape itself.
+Slicing (`ltf_candles[:i+1]`, the thing most likely to be blamed on
+sight) was measured and ruled out as the cause -- under 0.2% of runtime.
+`order_block.py::detect_order_block()` was rewritten to scan
+newest-to-oldest and return the FIRST qualifying match (an impulse
+candle with an opposite-color prior candle), replacing the old
+oldest-to-newest forward scan that recomputed a fresh 15-candle
+average-range window at every history position on every walk-forward
+step while only the LAST qualifying match it found ever survived to be
+returned.
+
+**Why the reverse scan is provably the same answer, not just a faster
+one**: the old forward scan's "keep overwriting the result on each new
+qualifying match" behavior means it always returned the newest
+qualifying match in the scanned range -- exactly what a newest-to-oldest
+scan finds on its FIRST hit. The two loops therefore terminate at the
+identical candle by construction; the reverse scan just stops looking
+the moment it finds it instead of continuing to re-examine (and
+re-average) every older candidate that could never have won anyway. Both
+of the forward loop's existing traps were deliberately preserved rather
+than "cleaned up" during the rewrite: a candle whose impulse fails to
+qualify must continue the scan toward older candidates (not treated as a
+stopping condition), and a doji candle must do the same -- changing
+either would silently change which candle gets returned, not just how
+fast the answer arrives.
+
+**Two things this round considered and did NOT do**:
+- **Window-capping history** (limiting how far back any detector scans)
+  was explicitly REJECTED as behavior-unsafe, not just out of scope.
+  Sweeps, FVGs, and CHoCH legitimately reference arbitrarily old
+  structure in this strategy's own logic (see `docs/strategy_spec.md`);
+  capping the lookback would change what trades get generated, not just
+  how fast they're computed -- exactly the kind of silent behavior change
+  this project's "measure before changing, verify bit-identical after"
+  discipline exists to prevent.
+- **A rolling-window sum for the 15-candle average-range computation**
+  (maintaining a running total by adding the newest candle's range and
+  subtracting the oldest, instead of recomputing `sum()` fresh every
+  step) was implemented and tested, then DROPPED. Floating-point
+  addition/subtraction is not associativity-safe -- a rolling sum that
+  adds then subtracts accumulates rounding error along a different path
+  than a fresh sum every time, and this round's own verification bar
+  (below) was BIT-IDENTICAL output, not "close enough." The rolling-sum
+  variant failed that bar on real data. Rather than relax the bar to let
+  a small extra speedup in, the bar was kept and the optimization was
+  declined -- correctness-under-the-established-standard over marginal
+  additional speed.
+
+**Verification (the part of this round worth recording as a pattern for
+future performance work)**: two independent checks, not one. First, a
+property test built against a VERBATIM reference copy of the old
+forward-scan implementation (kept in the test file specifically so the
+comparison isn't "new code vs. its own memory of the old behavior") run
+over 5,200 seeded synthetic candle series, including adversarial modes
+designed to stress the forward loop's two traps -- 0 mismatches. This
+property test is now a permanent regression test, not a one-time check
+discarded after the round. Second, a golden run on real, anchored data
+(BTCUSDT 15m, 2000 candles, `end_time_ms` fixed at 2026-06-27 so the
+fetch is reproducible) across all 4 meaningfully different flag
+combinations this codebase supports (default / `use_breaker_block` /
+`use_structure_tp` / `use_jade_engine`) -- old-vs-new trade lists
+compared deep-equal at exact float precision, not a tolerance-based
+comparison. **A genuine subtlety surfaced by the golden run**: three
+separate modules (`signal_engine.py`, `entry_point_engine.py`,
+`htf_ltf_confluence.py`) each bind `detect_order_block` into their own
+module namespace at import time (`from ... import detect_order_block`),
+so patching only `order_block.py`'s own module attribute during the
+old-vs-new comparison silently left two of the three call sites still
+calling the NEW code under a false "old" label. The golden-run harness
+had to patch all three namespaces explicitly for the comparison to be
+valid -- a reusable lesson for any future change to a widely-imported
+detector in this codebase, not specific to this optimization.
+
+**Measured speedup** (unprofiled, real wall-clock timing, not a
+profiler's self-reported number): 1000 candles 4.32s -> 1.81s (2.39x),
+2000 candles 16.15s -> 7.09s (2.28x). Practical consequence:
+Milestone-10-style evidence rounds (`--candles 3000 --periods 6`, this
+project's standard scale) drop from roughly 40 minutes to roughly 17.
+
+**Deferred, not scheduled**: Fix B (incremental zone-mitigation caching
+for `is_zone_mitigated()`, the remaining ~22% of runtime) was
+deliberately NOT attempted this round -- it requires maintaining
+cross-walk-forward-step state inside a `SignalEngine` that is currently
+stateless by design, a materially higher-risk change than a pure
+algorithmic rewrite of one detector's internal scan direction. Revisit
+only if the 2.3x speedup already delivered proves insufficient for a
+future evidence round's actual needs -- not on a fixed schedule and not
+because 22% is a round number worth chasing on its own.
+
+**Status**: full suite **653/653 passed / 0 failed** (652 baseline from
+milestone 18, +1 permanent property test). Code complete in the working
+tree as of this entry; not yet committed (tracked in `HANDOFF.md`).

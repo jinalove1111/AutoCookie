@@ -65,10 +65,53 @@ def detect_order_block(candles: list) -> dict | None:
     that CONFIRMS an order block routinely originates from/overlaps the
     base candle's own range, which would make every fresh order block
     look immediately "mitigated" by its own confirming move.
-    """
-    found: dict | None = None
 
-    for i in range(_LOOKBACK, len(candles)):
+    Milestone 19 (2026-07-16, performance): this function was profiled as
+    the backtester's #1 hotspot -- 62.6% of a 3000-candle walk-forward's
+    runtime, driving a whole-engine time-vs-candle-count exponent of
+    ~2.26 (should be ~1 for a per-step-O(1)-ish engine called once per
+    walk-forward step). Root cause: the original implementation scanned
+    `range(_LOOKBACK, len(candles))` FORWARD from the oldest eligible
+    candle to the newest, recomputing a fresh rolling-average-range window
+    at every position, while simply overwriting `found` on every
+    qualifying match -- so only the LAST (most recent) qualifying match
+    was ever kept, and all the earlier work scanning older candles was
+    pure waste. Called once per walk-forward step, this made the whole
+    detector (and therefore the engine) effectively O(n^2) in candle
+    count. The fix scans from the NEWEST candle backward and returns the
+    first qualifying match, with an early exit -- O(n) typical case
+    (the common "found something recent" case exits almost immediately;
+    the no-match worst case still degrades to the same O(n) per-call cost
+    the forward scan always had, since every position must still be
+    checked). This is a pure reordering of an otherwise-unmodified
+    algorithm: for each candle index `i`, the qualifying test (rolling
+    average range over the same `_LOOKBACK`-candle window, same
+    `_IMPULSE_MULT` threshold, same bullish/bearish impulse check) and the
+    opposite-color base-candle search are byte-for-byte identical to the
+    original, including summing each window fresh with the same left-to-
+    right float addition order `sum()` always used -- a true O(1) rolling
+    window-sum was considered and deliberately NOT used, because it would
+    require add/subtract instead of a fresh left-to-right sum, which is
+    not guaranteed to produce bit-identical float results (floating-point
+    addition is not associative); the reverse-scan early-exit alone
+    already captures effectively all of the win in the typical case, so
+    the non-bit-identical-risk optimization was skipped. The only
+    behavioral difference from the forward version is which of multiple
+    equally-qualifying matches gets returned when there are none newer
+    than any other -- and since the forward version already only ever
+    kept the LAST (most recent, i.e. highest-`i`) qualifying match, and
+    this version scans newest-first and returns on first qualifying
+    match, the two are guaranteed to return the exact same match for
+    every input (verified by a 5,000+ case randomized property test
+    comparing against the original algorithm, see
+    `tests/test_strategy_order_block.py`). Callers (`signal_engine.py`,
+    `detect_breaker_block` below, `entry_point_engine.py`,
+    `htf_ltf_confluence.py`) each call this function once per
+    `detect_order_block(candles)` invocation on a plain, non-consumed
+    `list`, so they receive identical values by construction -- there is
+    no caching or mutation of `candles` anywhere in this module.
+    """
+    for i in range(len(candles) - 1, _LOOKBACK - 1, -1):
         window = candles[i - _LOOKBACK : i]
         avg_range = sum(_range(c) for c in window) / _LOOKBACK
         if avg_range <= 0:
@@ -81,27 +124,25 @@ def detect_order_block(candles: list) -> dict | None:
         if _is_bullish(candles[i]):
             for j in range(i - 1, -1, -1):
                 if _is_bearish(candles[j]):
-                    found = {
+                    return {
                         "type": "bullish",
                         "top": cf(candles[j], "high"),
                         "bottom": cf(candles[j], "low"),
                         "index": j,
                         "impulse_index": i,
                     }
-                    break
         elif _is_bearish(candles[i]):
             for j in range(i - 1, -1, -1):
                 if _is_bullish(candles[j]):
-                    found = {
+                    return {
                         "type": "bearish",
                         "top": cf(candles[j], "high"),
                         "bottom": cf(candles[j], "low"),
                         "index": j,
                         "impulse_index": i,
                     }
-                    break
 
-    return found
+    return None
 
 
 def detect_breaker_block(candles: list) -> dict | None:

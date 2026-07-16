@@ -263,9 +263,50 @@ the existing 20-sample floor). Consequences for this backlog:
   evidence now accumulating toward any future
   `RollingPerformanceSelector` wiring decision no longer rests on the
   zero-fee/zero-delay assumptions already proven decision-relevant.
-- **Pending item: performance profiling analysis** -- measurements were
-  captured, but the analysis was interrupted by the session usage limit;
-  it resumes next session.
+- **Performance round 1 -- CLOSED (2026-07-16, Milestone 19).** The
+  profiling analysis left pending after the session-usage-limit
+  interruption noted above resumed and completed. `detect_order_block()`
+  was diagnosed as 62.6% of backtest runtime (log-log scaling exponent
+  ~2.26 measured across 500/1000/2000/3000-candle runs on real BTCUSDT
+  data) and fixed with a reverse-scan (newest-to-oldest) early-exit that
+  returns the same result the old forward scan kept, provably, with far
+  less work. Verified bit-identical two ways: a 5,200-case property test
+  against a verbatim reference copy of the old implementation (now a
+  permanent regression test) and a real-data golden run across all 4
+  flag combinations, which required patching `detect_order_block` in the
+  three separate module namespaces that each bind it at import
+  (`signal_engine`, `entry_point_engine`, `htf_ltf_confluence`).
+  Window-capping history was rejected as behavior-unsafe (sweeps/FVGs/
+  CHOCH legitimately reference arbitrarily old structure); a
+  rolling-window-sum micro-optimization was tried and dropped for failing
+  the bit-identical bar (float add/subtract is not associativity-safe).
+  Measured 2.28-2.39x speedup (1000 candles 4.32s->1.81s, 2000 candles
+  16.15s->7.09s) -- **Milestone-10-style evidence rounds
+  (`--candles 3000 --periods 6`) now take ~17 minutes instead of ~40**.
+  Full suite 653/653. See `ENGINEERING_DECISIONS.md` #59,
+  `CHANGELOG.md`.
+  - **Fix B (incremental zone-mitigation caching for `is_zone_mitigated`,
+    the remaining ~22% of runtime) is DEFERRED-WITH-CONDITIONS, not
+    scheduled.** It needs cross-walk-forward-step state inside a
+    `SignalEngine` that is currently stateless by design -- a materially
+    higher-risk change than a pure algorithmic rewrite of one detector's
+    scan direction. Revisit ONLY if the 2.3x already delivered proves
+    insufficient for a future evidence round's actual needs (e.g. a
+    round that needs >3000-candle windows or many more period splits
+    than this project's current standard scale) -- not on a fixed
+    schedule and not because 22% is a round number worth chasing on its
+    own.
+  - **The profiling methodology, not a specific committed script, is the
+    reusable artifact for future performance rounds.** This round's
+    profiling script lived in the session scratchpad, not the repo --
+    the reusable pattern is: profile against real, anchored data at
+    multiple candle counts to measure the actual scaling exponent (not
+    assume O(n) or O(n^2) from reading code), isolate the single largest
+    cost center, fix exactly one thing, and verify bit-identical output
+    (property test against a reference copy plus a real-data golden run)
+    before trusting any measured speedup. Any future performance round
+    should follow this same sequence rather than starting from
+    intuition about what "looks slow."
 
 **Natural next steps after milestone 12** (superseded by the above --
 retained for continuity): the data path to a justified

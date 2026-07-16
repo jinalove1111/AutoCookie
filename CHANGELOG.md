@@ -4,6 +4,66 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Adaptive platform milestone 19: backtester quadratic-scan fix -- reverse-scan early-exit in detect_order_block, bit-identical verified, 2.3x measured speedup
+
+2026-07-16. Closes the "performance profiling analysis" item left pending
+by milestone 18 after a session-usage-limit interruption. **Performance
+round 1 (profiling, measurement-only, prior session)**: diagnosed the
+backtest engine as effectively quadratic -- log-log scaling exponent
+~2.26 measured across 500/1000/2000/3000-candle runs on real BTCUSDT
+data. `detect_order_block()` accounted for 62.6% of total runtime: its
+forward scan recomputed a fresh 15-candle average-range window at every
+history position on every walk-forward step, while only the LAST
+qualifying match it found ever survived to be returned. `#2` was
+`is_zone_mitigated()` at 22.2% (O(n) FVG zones times per-step scans);
+the `cf()` OHLCV accessor was a large constant factor in self-time (~40%,
+220M calls at n=3000) without driving the quadratic shape itself.
+Slicing (`ltf_candles[:i+1]`) was measured and ruled out -- under 0.2% of
+runtime. Window-capping history was explicitly REJECTED as
+behavior-unsafe: sweeps/FVGs/CHOCH legitimately reference arbitrarily
+old structure in this strategy's own logic, so capping would silently
+change trades generated, not just speed.
+
+**Fix (Milestone 19, `order_block.py`).** `detect_order_block()` now
+scans newest-to-oldest and returns the FIRST qualifying match (impulse
+candle + opposite-color prior candle) -- provably the same candle the
+old oldest-to-newest scan kept (its "last match found" behavior means it
+always returned the newest qualifying match, exactly what a
+newest-to-oldest scan finds first), reached with far less work. Both of
+the forward loop's existing traps are preserved unchanged: a
+non-qualifying impulse candle continues scanning toward older
+candidates, and so does a doji candle. A rolling-window-sum
+micro-optimization for the average-range computation was implemented,
+tested, and DELIBERATELY SKIPPED -- float addition/subtraction is not
+associativity-safe, and it failed this round's own bit-identical
+verification gate.
+
+**Verification.** (1) A property test against a verbatim reference copy
+of the old implementation: 5,200 seeded synthetic candle series
+including adversarial modes, 0 mismatches -- now a permanent regression
+test. (2) A golden run on anchored real data (BTCUSDT 15m, 2000 candles,
+`end_time_ms` 2026-06-27) across all 4 flag combinations
+(default/breaker/structure-tp/jade) -- trade lists deep-equal at exact
+float precision. Noteworthy subtlety: three modules (`signal_engine`,
+`entry_point_engine`, `htf_ltf_confluence`) each bind
+`detect_order_block` into their own namespace at import, so the
+golden-run's old-vs-new comparison had to patch all three module
+namespaces, not just `order_block.py`'s own.
+
+**Measured speedup** (unprofiled wall-clock): 1000 candles 4.32s ->
+1.81s (2.39x), 2000 candles 16.15s -> 7.09s (2.28x) -- Milestone-10-style
+evidence rounds (`--candles 3000 --periods 6`) drop from roughly 40
+minutes to roughly 17.
+
+**Deferred**: Fix B (incremental zone-mitigation caching for
+`is_zone_mitigated`, the remaining ~22%) -- medium risk, needs
+cross-step state inside a currently-stateless `SignalEngine`; revisit
+only if this 2.3x proves insufficient.
+
+**Totals**: full suite **653/653 passed / 0 failed** (652 + 1 permanent
+property test). Code complete in the working tree; not yet committed.
+Full rationale: `ENGINEERING_DECISIONS.md` #59.
+
 ## [Unreleased] - Adaptive platform milestone 18: research round 1's top-3 adopted -- delay-check promotion gate, RiskManager ATR stop-distance floor, realistic shadow-fill resolution (v2)
 
 2026-07-16. Implements the top-3 recommendations of

@@ -398,6 +398,52 @@ practice** (`scripts/cto_report.py`, milestone 17b below).
     `6b085b904777`, trader restarted with v2 active + 4-symbol shadow
     collection. Full rationale: `ENGINEERING_DECISIONS.md` #58.
 
+19. **Performance round 1: backtester quadratic-scan fix in
+    `detect_order_block`** (2026-07-16): a profiling round (measurement-
+    only, prior session, interrupted by the session usage limit and
+    flagged as pending in milestone 18's writeup) diagnosed the backtest
+    engine's scaling as effectively quadratic -- log-log exponent ~2.26
+    across 500/1000/2000/3000-candle runs on real BTCUSDT data.
+    `detect_order_block()` was 62.6% of total runtime: its forward scan
+    recomputed a fresh 15-candle average-range window at every history
+    position on every walk-forward step, while only the LAST qualifying
+    match it found ever survived to be returned. (`is_zone_mitigated()`
+    was #2 at 22.2%; the `cf()` accessor was a large constant factor in
+    self-time, ~40%/220M calls at n=3000, without driving the quadratic
+    shape itself; slicing was measured and ruled out at <0.2%.) Fixed by
+    rewriting the scan newest-to-oldest with early-exit on the first
+    qualifying match -- provably the identical result the old forward
+    scan kept (its "last match survives" behavior always returned the
+    newest qualifying match, exactly what a reverse scan finds first),
+    reached with far less work, while preserving both of the forward
+    loop's existing traps (non-qualifying impulse and doji candles both
+    continue to older candidates). Window-capping history was rejected as
+    behavior-unsafe (sweeps/FVGs/CHOCH legitimately reference arbitrarily
+    old structure); a rolling-window-sum micro-optimization was
+    implemented, tested, and DROPPED -- float addition/subtraction is not
+    associativity-safe and it failed this round's own bit-identical
+    verification bar. **Verified two ways**: a property test against a
+    verbatim reference copy of the old implementation (5,200 seeded
+    synthetic series including adversarial modes, 0 mismatches, now a
+    permanent regression test) and a golden run on anchored real data
+    (BTCUSDT 15m, 2000 candles, `end_time_ms` 2026-06-27) across all 4
+    flag combinations (default/breaker/structure-tp/jade) -- trade lists
+    deep-equal at exact float precision. Had to patch `detect_order_block`
+    in three separate module namespaces (`signal_engine`,
+    `entry_point_engine`, `htf_ltf_confluence`, each binds it at import)
+    for the golden-run comparison to be valid. **Measured speedup**
+    (unprofiled wall-clock): 1000 candles 4.32s->1.81s (2.39x), 2000
+    candles 16.15s->7.09s (2.28x) -- Milestone-10-style evidence rounds
+    (`--candles 3000 --periods 6`) now take roughly 17 minutes instead of
+    roughly 40, a ~2.3x reduction in wall time for this project's
+    standard validation scale. Full suite **653/653 passed / 0 failed**
+    (652 + 1 permanent property test). **Deferred**: Fix B (incremental
+    zone-mitigation caching for `is_zone_mitigated`, the remaining ~22%
+    of runtime) -- medium risk, needs cross-step state inside a
+    currently-stateless `SignalEngine`; revisit only if this 2.3x proves
+    insufficient. **Status: code complete in the working tree, not yet
+    committed.** Full rationale: `ENGINEERING_DECISIONS.md` #59.
+
 **Production-behavior note**: milestones 1-6 were purely additive/
 observational. Milestone 7 was the FIRST to change actual paper-trading
 sizing/rejection math (more conservative sizing in high volatility;
