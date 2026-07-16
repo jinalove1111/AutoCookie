@@ -161,3 +161,76 @@ def test_strategy_disabled_not_checked_when_omitted(risk_manager: RiskManager):
     decision = risk_manager.evaluate(signal)
 
     assert decision.approved is True
+
+
+# --- Milestone 18b: minimum stop-distance-as-ATR-multiple gate ---
+
+
+def test_atr_floor_gate_disabled_by_default_even_with_tight_stop(risk_manager: RiskManager):
+    """min_stop_atr_mult defaults to 0.0 (disabled) -- a very tight
+    stop_distance_atr_mult must NOT be rejected when the gate is off."""
+    signal = FakeSignal(stop_loss=95, take_profit=110, rr=2.5)
+
+    decision = risk_manager.evaluate(signal, stop_distance_atr_mult=0.1)
+
+    assert decision.approved is True
+    assert decision.reasons == []
+
+
+def test_atr_floor_gate_rejects_tight_stop_when_enabled(risk_manager: RiskManager):
+    signal = FakeSignal(stop_loss=95, take_profit=110, rr=2.5)
+
+    decision = risk_manager.evaluate(
+        signal, stop_distance_atr_mult=1.0, min_stop_atr_mult=1.5
+    )
+
+    assert decision.approved is False
+    assert "stop_distance_below_atr_floor" in decision.reasons
+
+
+def test_atr_floor_gate_passes_adequate_stop_when_enabled(risk_manager: RiskManager):
+    signal = FakeSignal(stop_loss=95, take_profit=110, rr=2.5)
+
+    decision = risk_manager.evaluate(
+        signal, stop_distance_atr_mult=2.0, min_stop_atr_mult=1.5
+    )
+
+    assert decision.approved is True
+    assert decision.reasons == []
+
+
+def test_atr_floor_gate_warns_and_allows_when_measurement_missing(risk_manager: RiskManager):
+    """Gate enabled but caller couldn't compute ATR (None) -- missing
+    measurement is not evidence of a tight stop, so this must NOT reject."""
+    signal = FakeSignal(stop_loss=95, take_profit=110, rr=2.5)
+
+    decision = risk_manager.evaluate(
+        signal, stop_distance_atr_mult=None, min_stop_atr_mult=1.5
+    )
+
+    assert decision.approved is True
+    assert decision.reasons == []
+
+
+def test_atr_floor_gate_boundary_exactly_at_floor_passes(risk_manager: RiskManager):
+    """Boundary convention (matches MIN_RR's `rr < settings.MIN_RR`):
+    exactly at the floor PASSES, strictly below REJECTS."""
+    signal = FakeSignal(stop_loss=95, take_profit=110, rr=2.5)
+
+    decision = risk_manager.evaluate(
+        signal, stop_distance_atr_mult=1.5, min_stop_atr_mult=1.5
+    )
+
+    assert decision.approved is True
+    assert decision.reasons == []
+
+
+def test_atr_floor_gate_boundary_strictly_below_floor_rejects(risk_manager: RiskManager):
+    signal = FakeSignal(stop_loss=95, take_profit=110, rr=2.5)
+
+    decision = risk_manager.evaluate(
+        signal, stop_distance_atr_mult=1.499, min_stop_atr_mult=1.5
+    )
+
+    assert decision.approved is False
+    assert "stop_distance_below_atr_floor" in decision.reasons

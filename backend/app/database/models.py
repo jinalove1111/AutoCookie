@@ -298,6 +298,28 @@ class ShadowSignal(Base):
         column) when `outcome == "tp"`, `-1.0` when `outcome == "sl"`, and
         `NULL` when `outcome == "expired"` (no realized R for an
         undecided signal).
+
+    Milestone 18c, 2026-07-16 (docs/RESEARCH_ROUND_1.md recommendation
+    #3, migration `6b085b904777`): `resolution_model` records WHICH
+    resolution model settled this row, so rows resolved under different
+    measurement regimes are never silently mixed as evidence:
+
+      - `NULL`: a legacy row resolved before this migration existed,
+        under the original (Milestone 14b) OPTIMISTIC model -- instant,
+        fee-free fills at the recorded signal price. This is that row's
+        permanent, honest label; it is never backfilled retroactively,
+        since doing so would misrepresent a genuinely different
+        measurement instrument as the new one.
+      - Non-NULL: the resolver's `RESOLUTION_MODEL` constant
+        (`app.portfolio.shadow_resolver.RESOLUTION_MODEL`, currently
+        `"v2_realistic_fills"`) at the moment this row was resolved --
+        fee/slippage/entry-delay-adjusted. See `shadow_resolver.py`'s
+        module docstring for the exact fill/fee/R formulas.
+
+    `app.portfolio.rolling_regime_performance.collect_regime_evidence`
+    only counts rows whose `resolution_model == RESOLUTION_MODEL`
+    (current model) toward its evidence `n`; NULL/legacy-model rows are
+    tracked separately (`n_excluded`) rather than pooled in.
     """
 
     __tablename__ = "shadow_signals"
@@ -319,3 +341,4 @@ class ShadowSignal(Base):
     outcome: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolved_r: Mapped[float | None] = mapped_column(Float, nullable=True)
+    resolution_model: Mapped[str | None] = mapped_column(String(32), nullable=True)

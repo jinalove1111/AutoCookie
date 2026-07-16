@@ -74,6 +74,10 @@ def test_upgrade_head_adds_outcome_columns_to_shadow_signals(migrated_db):
     finally:
         conn.close()
 
+    # Milestone 18c (docs/RESEARCH_ROUND_1.md recommendation #3, migration
+    # "6b085b904777") added "resolution_model" on top of this milestone's
+    # three columns -- update this set alongside any future additive
+    # shadow_signals migration.
     assert columns == {
         "id",
         "captured_at",
@@ -90,6 +94,7 @@ def test_upgrade_head_adds_outcome_columns_to_shadow_signals(migrated_db):
         "outcome",
         "resolved_at",
         "resolved_r",
+        "resolution_model",
     }
 
 
@@ -220,7 +225,10 @@ def test_migrate_existing_lands_on_new_head_with_outcome_columns(tmp_path):
 
     cfg = build_alembic_config(db_path)
     current_head = ScriptDirectory.from_config(cfg).get_current_head()
-    assert current_head == "65aba13281ad"
+    # Head-pin: was "65aba13281ad" prior to Milestone 18c's
+    # "resolution_model" migration ("6b085b904777") -- update alongside
+    # any future additive shadow_signals migration.
+    assert current_head == "6b085b904777"
     assert report["head"] == current_head
 
     assert "shadow_signals" in report["tables"]
@@ -231,7 +239,7 @@ def test_migrate_existing_lands_on_new_head_with_outcome_columns(tmp_path):
     finally:
         conn.close()
 
-    assert {"outcome", "resolved_at", "resolved_r"}.issubset(shadow_cols)
+    assert {"outcome", "resolved_at", "resolved_r", "resolution_model"}.issubset(shadow_cols)
 
 
 def test_migrate_existing_report_still_validates_previous_generation_artifacts(tmp_path):
@@ -257,4 +265,4 @@ def test_migrate_existing_report_still_validates_previous_generation_artifacts(t
     finally:
         conn.close()
 
-    assert {"outcome", "resolved_at", "resolved_r"}.issubset(shadow_cols)
+    assert {"outcome", "resolved_at", "resolved_r", "resolution_model"}.issubset(shadow_cols)

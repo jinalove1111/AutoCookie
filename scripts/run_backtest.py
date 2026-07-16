@@ -88,6 +88,7 @@ DEFAULT_CANDLE_COUNT = 5000
 _HTF_FLOOR_CANDLES = 300
 
 from app.backtesting.backtest_engine import MIN_CANDLES, BacktestEngine
+from app.backtesting.performance import calculate_profit_factor
 from app.backtesting.report_generator import ReportGenerator
 from app.data.candle_fetcher import CandleFetcher, timeframe_to_timedelta
 from app.risk.risk_manager import RiskManager
@@ -334,6 +335,163 @@ def walk_forward_report(
     }
 
 
+def delay_robustness_report(
+    baseline_result: Any,
+    delayed_result: Any,
+    *,
+    max_pf_degradation: float = 0.5,
+) -> dict:
+    """Compare a zero-delay backtest run against an `entry_delay_candles=1`
+    run of the SAME candles/config, as a cheap, repeatable, EARLY
+    promotion-gate check for execution-delay robustness (Milestone 18a,
+    2026-07-16, docs/RESEARCH_ROUND_1.md recommendation #1).
+
+    Motivation: the platform's only fully-validated candidate to date
+    (cross-asset AND cross-year validated -- see
+    docs/PROFITABILITY_EXPERIMENT_REPORT.md sections 12-14) died on a
+    single 5-minute (1-candle) execution delay AFTER weeks of that
+    validation work (`docs/ROBUSTNESS_REPORT.md` test 2: profit factor
+    5.24 -> 0.16, a PF-retention ratio of only ~0.03 -- fully reversing
+    sign from strongly profitable to a losing system). That specific
+    failure mode is now checked here, mechanically and cheaply, instead
+    of via a one-off manual script -- meant to run EARLY, before
+    investing weeks in cross-asset/cross-year validation of a candidate
+    whose edge can't even survive one candle of real dispatch/network/
+    exchange latency.
+
+    `max_pf_degradation` (default 0.5, DISCLOSED-NOT-TUNED): the minimum
+    fraction of baseline profit factor the delayed run must retain to
+    pass. Chosen only as "materially more forgiving than what the known
+    failure case actually produced" -- `ROBUSTNESS_REPORT.md` test 2's
+    real retention was ~0.03 (delayed PF 0.16 / baseline PF 5.24), i.e.
+    the failing candidate kept only ~3% of its baseline profit factor.
+    0.5 is not fit to any dataset and not the subject of any sweep or
+    optimization; callers who want a stricter or looser gate should pass
+    their own value explicitly.
+
+    `baseline_result`/`delayed_result`: `BacktestResult`-shaped objects
+    (`.total_trades`, `.total_pnl`, `.trades` -- a list of dicts with a
+    "pnl" key, matching `app.backtesting.backtest_engine.BacktestResult`).
+    Profit factor is computed here via
+    `app.backtesting.performance.calculate_profit_factor` -- the same
+    formula used everywhere else in this codebase, not re-derived ad hoc.
+
+    Returns a dict:
+      `baseline_pf` / `delayed_pf`: profit factor of each run (`float`,
+        possibly `float('inf')` if a run had zero losing trades -- see
+        `calculate_profit_factor`'s own docstring for that convention;
+        `None` in the insufficient-data cases below, never a fake 0.0).
+      `pf_retention`: `delayed_pf / baseline_pf` (`None` if undefined --
+        see edge-case handling below -- never a crash, never a silently
+        wrong/misleading number).
+      `sign_flip`: `True` if the baseline run was net profitable
+        (`total_pnl > 0`) and the delayed run was not (`total_pnl <= 0`).
+        `None` in the insufficient-data case.
+      `passed`: `True`/`False` once both runs have >= 1 trade and
+        `baseline_pf` is nonzero (i.e. `pf_retention` is a real,
+        meaningful number): `pf_retention >= max_pf_degradation AND not
+        sign_flip`. `None` when there isn't enough data to judge
+        honestly -- see `insufficient_data`/`reason` -- NEVER a fake
+        pass.
+      `insufficient_data` / `reason`: `True` + explanation when either
+        run had zero trades, or the baseline had a zero profit factor
+        (every baseline trade broke exactly even -- a 0/0-shaped ratio,
+        genuinely undefined rather than assigned any particular value).
+
+    Edge cases handled explicitly (never a crash, never a fake pass):
+      - Either run has zero trades: can't compute a meaningful PF
+        comparison at all -- `passed=None`, `insufficient_data=True`.
+      - `baseline_pf == 0` (no losing trades AND no/zero gross profit,
+        i.e. every baseline trade broke exactly even): division is
+        undefined, not silently treated as any particular fake value --
+        `pf_retention=None`, `passed=None`, `insufficient_data=True`.
+      - `baseline_pf` infinite (no losing trades at all) and
+        `delayed_pf` also infinite: `pf_retention=1.0` (both "perfect",
+        no measurable degradation).
+      - `baseline_pf` infinite and `delayed_pf` finite: `pf_retention`
+        is the real `delayed_pf / baseline_pf` (finite/inf -> `0.0`),
+        correctly read as full degradation, not a crash.
+    """
+    baseline_trades = baseline_result.total_trades
+    delayed_trades = delayed_result.total_trades
+    criteria = {"max_pf_degradation": max_pf_degradation}
+
+    if baseline_trades == 0 or delayed_trades == 0:
+        which = []
+        if baseline_trades == 0:
+            which.append("baseline")
+        if delayed_trades == 0:
+            which.append("delayed")
+        return {
+            "baseline_trades": baseline_trades,
+            "delayed_trades": delayed_trades,
+            "baseline_pf": None,
+            "delayed_pf": None,
+            "pf_retention": None,
+            "sign_flip": None,
+            "passed": None,
+            "insufficient_data": True,
+            "reason": (
+                f"{'/'.join(which)} run had zero trades -- no meaningful "
+                "profit-factor comparison is possible."
+            ),
+            "criteria": criteria,
+        }
+
+    baseline_pf = calculate_profit_factor(baseline_result.trades)
+    delayed_pf = calculate_profit_factor(delayed_result.trades)
+
+    if baseline_pf == 0:
+        return {
+            "baseline_trades": baseline_trades,
+            "delayed_trades": delayed_trades,
+            "baseline_pf": baseline_pf,
+            "delayed_pf": delayed_pf,
+            "pf_retention": None,
+            "sign_flip": None,
+            "passed": None,
+            "insufficient_data": True,
+            "reason": (
+                "baseline profit factor is 0 (every baseline trade broke "
+                "exactly even) -- the retention ratio is undefined."
+            ),
+            "criteria": criteria,
+        }
+
+    if math.isinf(baseline_pf) and math.isinf(delayed_pf):
+        pf_retention = 1.0
+    else:
+        pf_retention = delayed_pf / baseline_pf
+
+    sign_flip = baseline_result.total_pnl > 0 and delayed_result.total_pnl <= 0
+    passed = pf_retention >= max_pf_degradation and not sign_flip
+
+    return {
+        "baseline_trades": baseline_trades,
+        "delayed_trades": delayed_trades,
+        "baseline_pf": baseline_pf,
+        "delayed_pf": delayed_pf,
+        "pf_retention": pf_retention,
+        "sign_flip": sign_flip,
+        "passed": passed,
+        "insufficient_data": False,
+        "reason": None,
+        "criteria": criteria,
+    }
+
+
+def _fmt_optional_float(value: float | None) -> str:
+    """CLI-print helper for a value that may be `None` (insufficient data,
+    see `delay_robustness_report`'s docstring) or `float('inf')`
+    (`calculate_profit_factor`'s zero-losing-trades convention) -- never
+    lets either case crash an f-string's `:.3f` formatting."""
+    if value is None:
+        return "n/a"
+    if isinstance(value, float) and math.isinf(value):
+        return "inf"
+    return f"{value:.3f}"
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -573,6 +731,30 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--delay-check",
+        action="store_true",
+        default=False,
+        help=(
+            "Run the execution-delay robustness gate (opt-in, default off, "
+            "Milestone 18a, 2026-07-16, docs/RESEARCH_ROUND_1.md "
+            "recommendation #1). Re-runs the SAME already-fetched candles "
+            "(no second network fetch) twice through the identical "
+            "strategy/flag config used above: once at "
+            "entry_delay_candles=0 (baseline) and once at "
+            "entry_delay_candles=1 (~1 candle of execution latency), then "
+            "compares them via delay_robustness_report() -- profit-factor "
+            "retention and sign flip. Makes the failure documented in "
+            "docs/ROBUSTNESS_REPORT.md test 2 (a candidate that had "
+            "already passed weeks of cross-asset/cross-year validation, "
+            "then flipped from profit factor 5.24 to 0.16 on a single "
+            "5-minute delay) a cheap, repeatable, EARLY check for every "
+            "future candidate instead of a one-off script run. Composable "
+            "with --strategy (works for experimental modules too -- that "
+            "is the point). If --walk-forward is also set, the two "
+            "reports are printed together as a combined gate summary."
+        ),
+    )
+    parser.add_argument(
         "--end-date",
         default=None,
         help=(
@@ -775,7 +957,71 @@ def main() -> int:
             "regardless of the aggregate total."
         )
 
-    # --- 3b. Walk-forward validation report (opt-in via --walk-forward,
+    # --- 3b. Execution-delay robustness gate (opt-in via --delay-check,
+    # Milestone 18a, 2026-07-16, docs/RESEARCH_ROUND_1.md recommendation
+    # #1) -- reruns the SAME already-fetched `candles`/`htf_candles` (no
+    # second network fetch) once at entry_delay_candles=0 and once at
+    # entry_delay_candles=1 through the identical config used for the
+    # period run(s) above, independent of --periods (this is a single
+    # supplementary check on the whole fetched sample, not a per-period
+    # one). See delay_robustness_report()'s docstring for exact criteria
+    # and the docs/ROBUSTNESS_REPORT.md test 2 failure this targets. ---
+    delay_report: dict | None = None
+    if args.delay_check:
+        try:
+            baseline_delay_result = run_backtest(
+                candles,
+                htf_candles,
+                use_breakeven=args.breakeven,
+                use_breaker_block=args.breaker_block,
+                use_partial_tp=args.partial_tp,
+                require_full_confluence=args.strict_confluence,
+                require_ob_fvg_confluence=args.ob_fvg_confluence,
+                use_structure_tp=args.structure_tp,
+                require_premium_discount_filter=args.premium_discount_filter,
+                use_jade_engine=args.jade_engine,
+                strategy=strategy_obj,
+                entry_delay_candles=0,
+            )
+            delayed_result = run_backtest(
+                candles,
+                htf_candles,
+                use_breakeven=args.breakeven,
+                use_breaker_block=args.breaker_block,
+                use_partial_tp=args.partial_tp,
+                require_full_confluence=args.strict_confluence,
+                require_ob_fvg_confluence=args.ob_fvg_confluence,
+                use_structure_tp=args.structure_tp,
+                require_premium_discount_filter=args.premium_discount_filter,
+                use_jade_engine=args.jade_engine,
+                strategy=strategy_obj,
+                entry_delay_candles=1,
+            )
+        except Exception as exc:  # unexpected engine failure is a genuine failure
+            print(f"ERROR: backtest engine raised an exception during --delay-check: {exc}")
+            return 1
+
+        delay_report = delay_robustness_report(baseline_delay_result, delayed_result)
+        print(
+            "Execution-delay robustness gate (entry_delay_candles=0 vs. =1, "
+            "SAME candles/config, docs/ROBUSTNESS_REPORT.md test 2's check "
+            "made repeatable):"
+        )
+        print(f"  baseline trades        : {delay_report['baseline_trades']}")
+        print(f"  delayed trades         : {delay_report['delayed_trades']}")
+        print(f"  baseline profit factor : {_fmt_optional_float(delay_report['baseline_pf'])}")
+        print(f"  delayed profit factor  : {_fmt_optional_float(delay_report['delayed_pf'])}")
+        print(
+            f"  PF retention           : {_fmt_optional_float(delay_report['pf_retention'])} "
+            f"(criterion >= {delay_report['criteria']['max_pf_degradation']})"
+        )
+        print(f"  sign flip (profit->loss): {delay_report['sign_flip']}")
+        if delay_report["passed"] is None:
+            print(f"  DELAY-CHECK GATE       : INSUFFICIENT DATA ({delay_report['reason']})")
+        else:
+            print(f"  DELAY-CHECK GATE       : {'PASSED' if delay_report['passed'] else 'FAILED'}")
+
+    # --- 3c. Walk-forward validation report (opt-in via --walk-forward,
     # requires --periods > 1 -- see walk_forward_report()'s docstring for
     # exact criteria and why this is not a parameter-refitting walk-forward) ---
     if args.walk_forward:
@@ -793,6 +1039,20 @@ def main() -> int:
         print(f"  second-half avg PnL    : {wf['second_half_avg_pnl']:.2f}")
         print(f"  degrading trend        : {'YES' if wf['degrading'] else 'no'}")
         print(f"  WALK-FORWARD VALIDATION: {'PASSED' if wf['passed'] else 'FAILED'}")
+
+        # Combined promotion-gate summary -- only printed when BOTH
+        # --walk-forward and --delay-check are set, per Milestone 18a's
+        # goal of a single early gate view for a candidate under review.
+        if delay_report is not None:
+            print("Combined promotion-gate summary:")
+            print(f"  walk-forward validation : {'PASSED' if wf['passed'] else 'FAILED'}")
+            if delay_report["passed"] is None:
+                print("  execution-delay gate    : INSUFFICIENT DATA")
+                print("  OVERALL                 : INCOMPLETE (delay-check inconclusive)")
+            else:
+                print(f"  execution-delay gate    : {'PASSED' if delay_report['passed'] else 'FAILED'}")
+                overall_passed = wf["passed"] and delay_report["passed"]
+                print(f"  OVERALL                 : {'PASSED' if overall_passed else 'FAILED'}")
 
     # --- 4. Write markdown report(s) + CSV trade export(s) ---
     output_path = Path(args.output).resolve()

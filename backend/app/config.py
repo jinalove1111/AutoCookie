@@ -161,6 +161,26 @@ class Settings(BaseSettings):
     # extra-symbol evidence.
     SHADOW_SYMBOLS: str = ""
 
+    # Minimum stop-distance-as-ATR-multiple gate (opt-in, default off --
+    # Milestone 18b, 2026-07-16, docs/RESEARCH_ROUND_1.md recommendation
+    # #2). docs/ROBUSTNESS_REPORT.md traced the dead candidate's execution-
+    # delay failure to a root cause: its stop averaged just 0.17-0.23% of
+    # price, tighter than routine single-candle movement, so ANY delay
+    # invalidated its risk geometry. Standard practice per Wilder-
+    # convention literature is stops of 1.5-3.0x ATR -- disclosed here as
+    # the literature's convention, NOT as an operator-tuned value; no
+    # backtest evidence for a specific multiple exists yet on this
+    # platform. 0.0 (the default) DISABLES the gate and preserves prior
+    # `RiskManager.evaluate()` behavior EXACTLY, including for signals
+    # with very tight stops -- this is the same "implemented is not
+    # evidenced" discipline every other experimental flag in this file
+    # follows (see USE_JADE_ENGINE, ENABLE_BREAKEVEN above). IMPORTANT:
+    # this gate changes trade ACCEPTANCE when enabled (it can reject
+    # signals that would otherwise pass) and MUST be A/B backtest-
+    # evaluated in `BacktestEngine` before being enabled in paper trading.
+    # Do not flip this above 0.0 without that evidence.
+    MIN_STOP_ATR_MULT: float = 0.0
+
     @field_validator("TRADING_MODE")
     @classmethod
     def validate_trading_mode(cls, value: str) -> str:

@@ -31,33 +31,53 @@ market_regime` and `Trade.market_regime` store the same full
 already covers both row types.
 
 Two data sources, kept in SEPARATE cells (`shadow` vs `live`), never
-averaged together: `ShadowSignal` outcomes are SIMULATED fills (no fees,
-no slippage, an optimistic upper bound -- see the Milestone 14/14a
-resolver's own caveat in `app.database.models.ShadowSignal`'s
-docstring: `resolved_r` is a candle-walk simulation, not a real fill),
-while `Trade` rows are real, fee-paying executions. Averaging a
-simulated-fill win rate together with a real-fill win rate into one
-number would silently blend two different measurement instruments and
-produce a figure that is neither an honest shadow estimate nor an
-honest live one. The dict key returned by `collect_regime_evidence`
-therefore includes `source` (`(strategy_name, bucket, source)`, not just
+averaged together: `ShadowSignal` outcomes are SIMULATED fills, while
+`Trade` rows are real, fee-paying executions. Averaging a simulated-fill
+win rate together with a real-fill win rate into one number would
+silently blend two different measurement instruments and produce a
+figure that is neither an honest shadow estimate nor an honest live
+one. The dict key returned by `collect_regime_evidence` therefore
+includes `source` (`(strategy_name, bucket, source)`, not just
 `(strategy_name, bucket)`) so a caller (the future selector) can see
 both cells for the same (strategy, bucket) pair and decide EXPLICITLY
 which to trust/prefer -- that precedence decision belongs to the
 selector, not to this evidence layer.
+
+Milestone 18c (2026-07-16, docs/RESEARCH_ROUND_1.md recommendation #3):
+shadow fills are now simulated but fee/slippage/delay-adjusted (v2) --
+`app.portfolio.shadow_resolver`'s realistic-fill model (1-candle entry
+delay, adverse slippage, both-leg fees folded into `resolved_r`), not
+the original Milestone 14b instant fee-free fill this module's docstring
+used to describe as an "optimistic upper bound". That resolver stamps
+every row it settles with `resolution_model =
+app.portfolio.shadow_resolver.RESOLUTION_MODEL` (imported here, not
+copied); rows resolved under the OLD, more optimistic model (or never
+re-resolved at all) still carry `resolution_model IS NULL` and are a
+DIFFERENT, less trustworthy measurement instrument -- mixing them into
+the same evidence pool as current-model rows would repeat exactly the
+shadow-vs-live blending mistake this module's own two-source design
+already avoids. `_collect_shadow` therefore only counts a resolved
+(`"tp"`/`"sl"`) row toward `n`/`win_rate`/`expectancy_r` when its
+`resolution_model == RESOLUTION_MODEL`; a resolved row under any other
+model (including legacy NULL) is excluded from `n` and counted in
+`n_excluded` instead, same as an `"expired"`/still-open row.
 
 Sample-inclusion contract (see `RegimeCellEvidence` below for field
 shapes):
 
   - Shadow (`source="shadow"`): a `ShadowSignal` row contributes to a
     cell's `n`/`win_rate`/`expectancy_r` only when `outcome` is `"tp"`
-    or `"sl"` (a definitively resolved, win-or-loss sample) AND its
-    resolution timestamp falls inside `[now - window_days, now]`.
-    `"expired"` rows (aged out without either level touching -- neither
-    a win nor a loss) and still-`open` rows (`outcome IS NULL`, no
-    verdict yet) are EXCLUDED from `n` but counted in `n_excluded` for
-    that same cell -- they are real observed signals, just not yet
-    (or never going to be) evidence of a win or a loss.
+    or `"sl"` (a definitively resolved, win-or-loss sample) AND
+    `resolution_model == RESOLUTION_MODEL` (current-model evidence only
+    -- see the Milestone 18c paragraph above) AND its resolution
+    timestamp falls inside `[now - window_days, now]`. `"expired"` rows
+    (aged out without either level touching, or gapped past the target
+    before the delayed entry could fill -- neither a win nor a loss
+    either way), still-`open` rows (`outcome IS NULL`, no verdict yet),
+    and resolved rows under a DIFFERENT/legacy `resolution_model` are
+    all EXCLUDED from `n` but counted in `n_excluded` for that same cell
+    -- they are real observed signals, just not (or not currently
+    trusted as) evidence of a win or a loss.
 
     Window timestamp used per row: `resolved_at` when set (true for
     `"tp"`/`"sl"`/`"expired"` rows once the Milestone 14b resolver has
@@ -107,6 +127,18 @@ from app.database.models import ShadowSignal, Trade
 from app.portfolio.shadow_status import market_regime_bucket
 from app.utils.time_utils import utc_now
 
+# `RESOLUTION_MODEL` is imported LAZILY, inside `_collect_shadow` below,
+# rather than at module level here: `app.portfolio.shadow_resolver`
+# itself imports `app.portfolio.trades.session_scope`, which imports
+# `app.database.session`, which binds a real SQLAlchemy engine to
+# `settings.DATABASE_URL` at IMPORT time (see conftest.py's module
+# docstring for the full rationale). Several callers of this module
+# (e.g. `app.strategy.selector`, and tests that import
+# `RegimeCellEvidence` at module/collection time) import THIS module
+# before any DB-URL-setting fixture has run; a module-level import here
+# would transitively force that premature engine bind for every one of
+# them, exactly the failure mode conftest.py warns about.
+
 # Same established floor duplicated (not imported) a fourth time -- same
 # cross-module reasoning `app.backtesting.regime_analysis`,
 # `app.portfolio.shadow_status`, and `app.portfolio.performance_snapshots`
@@ -125,12 +157,15 @@ class RegimeCellEvidence:
     cell over the trailing `window_days` -- see this module's own
     docstring for the exact per-source inclusion/exclusion rules.
 
-    `n`: resolved samples only (tp+sl for shadow; closed trades with a
-    non-NULL `r_multiple` for live) -- the denominator behind `win_rate`
-    and `expectancy_r`.
+    `n`: resolved samples only (tp+sl resolved under the CURRENT
+    `resolution_model` for shadow -- see this module's docstring,
+    Milestone 18c paragraph; closed trades with a non-NULL `r_multiple`
+    for live) -- the denominator behind `win_rate` and `expectancy_r`.
     `n_excluded`: samples observed in this cell/window that could not be
-    scored as a win or a loss (shadow: `"expired"` + still-`open`; live:
-    NULL `r_multiple`) -- reported, never hidden, never folded into `n`.
+    scored as current-model evidence (shadow: `"expired"` + still-`open`
+    + tp/sl rows resolved under a different/legacy `resolution_model`;
+    live: NULL `r_multiple`) -- reported, never hidden, never folded
+    into `n`.
     `sufficient`: `n >= MIN_TRADES_FOR_CONFIDENCE` (the `min_samples`
     argument `collect_regime_evidence` was called with) -- `>=`, not
     `>`, matching this project's existing floor convention (`regime_
@@ -189,6 +224,8 @@ def _naive_utc(dt):
 def _collect_shadow(
     session: Session, window_start, cells: dict[tuple[str, str, str], _CellAccumulator]
 ) -> None:
+    from app.portfolio.shadow_resolver import RESOLUTION_MODEL
+
     rows = session.execute(select(ShadowSignal)).scalars().all()
     for row in rows:
         # `resolved_at` is set for "tp"/"sl"/"expired" (the resolver
@@ -207,8 +244,18 @@ def _collect_shadow(
         acc = cells.setdefault(key, _CellAccumulator())
 
         if row.outcome not in ("tp", "sl"):
-            # "expired" or still-open (outcome IS NULL): observed, but
+            # "expired" (including a Milestone 18c gap-past-TP
+            # resolution) or still-open (outcome IS NULL): observed, but
             # neither a win nor a loss -- excluded from n, counted here.
+            acc.n_excluded += 1
+            continue
+
+        if row.resolution_model != RESOLUTION_MODEL:
+            # Resolved under a DIFFERENT (or legacy/NULL) resolution
+            # model -- a different measurement instrument than current
+            # evidence. Excluded from n rather than silently pooled with
+            # v2-resolved rows; see this module's docstring, Milestone
+            # 18c paragraph.
             acc.n_excluded += 1
             continue
 

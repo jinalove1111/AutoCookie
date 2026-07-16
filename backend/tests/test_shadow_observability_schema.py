@@ -114,6 +114,10 @@ def test_upgrade_head_creates_shadow_signals_table(migrated_db):
     finally:
         conn.close()
 
+    # Milestone 18c (docs/RESEARCH_ROUND_1.md recommendation #3, migration
+    # "6b085b904777") added "resolution_model" on top of Milestone 14a's
+    # three outcome-resolution columns -- update this set alongside any
+    # future additive shadow_signals migration.
     assert columns == {
         "id",
         "captured_at",
@@ -130,6 +134,7 @@ def test_upgrade_head_creates_shadow_signals_table(migrated_db):
         "outcome",
         "resolved_at",
         "resolved_r",
+        "resolution_model",
     }
 
 
@@ -293,7 +298,10 @@ def test_migrate_existing_lands_on_new_head_with_new_tables(tmp_path):
 
     cfg = build_alembic_config(db_path)
     current_head = ScriptDirectory.from_config(cfg).get_current_head()
-    assert current_head == "65aba13281ad"
+    # Head-pin: was "65aba13281ad" prior to Milestone 18c's
+    # "resolution_model" migration ("6b085b904777") -- update alongside
+    # any future additive shadow_signals migration.
+    assert current_head == "6b085b904777"
     assert report["head"] == current_head
 
     assert "regime_snapshots" in report["tables"]

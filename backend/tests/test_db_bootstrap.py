@@ -50,9 +50,11 @@ def test_fresh_sqlite_boots_via_real_alembic_migration(app_main):
     # performance-tracking migration "e3110e6a6b59", added for
     # ENGINEERING_DECISIONS.md #44; was "36cb62e9e2ac", the Milestone 11
     # shadow-mode observability schema -- regime_snapshots/shadow_signals;
-    # now "65aba13281ad", the Milestone 14a outcome-resolution columns on
-    # shadow_signals).
-    assert version == "65aba13281ad"
+    # was "65aba13281ad", the Milestone 14a outcome-resolution columns on
+    # shadow_signals; now "6b085b904777", the Milestone 18c
+    # `resolution_model` column on shadow_signals, docs/RESEARCH_ROUND_1.md
+    # recommendation #3).
+    assert version == "6b085b904777"
     engine.dispose()
 
 

@@ -30,6 +30,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 NOW = datetime.now(timezone.utc)
 
 
@@ -58,8 +60,22 @@ def _shadow_signal(
     captured_days_ago: float,
     resolved_days_ago: float | None,
     rr: float = 2.0,
+    resolution_model: str | None = "__CURRENT__",
 ):
+    """Build a `ShadowSignal` row. `resolution_model` defaults to the
+    CURRENT resolver's `RESOLUTION_MODEL` (Milestone 18c,
+    docs/RESEARCH_ROUND_1.md recommendation #3) -- the sentinel
+    `"__CURRENT__"` is resolved lazily here (not at module import time)
+    for the same reason `app.*` imports live inside test functions
+    throughout this module (see this module's own docstring). Pass
+    `resolution_model=None` explicitly to simulate a legacy row resolved
+    under the pre-Milestone-18c optimistic model.
+    """
     from app.database.models import ShadowSignal
+    from app.portfolio.shadow_resolver import RESOLUTION_MODEL
+
+    if resolution_model == "__CURRENT__":
+        resolution_model = RESOLUTION_MODEL
 
     return ShadowSignal(
         captured_at=NOW - timedelta(days=captured_days_ago),
@@ -74,6 +90,7 @@ def _shadow_signal(
         outcome=outcome,
         resolved_at=(NOW - timedelta(days=resolved_days_ago)) if resolved_days_ago is not None else None,
         resolved_r=resolved_r,
+        resolution_model=resolution_model,
     )
 
 
@@ -197,6 +214,72 @@ def test_shadow_untagged_bucket_when_market_regime_none_or_incomplete(db_session
     evidence = collect_regime_evidence(db_session, window_days=30)
     cell = evidence[("jade_v1", "untagged", "shadow")]
     assert cell.n == 2
+
+
+# --------------------------------------------------------------------
+# resolution_model: legacy (NULL) rows excluded from n, Milestone 18c
+# (v2_realistic_fills) rows counted (docs/RESEARCH_ROUND_1.md
+# recommendation #3)
+# --------------------------------------------------------------------
+
+
+def test_shadow_legacy_resolution_model_excluded_v2_counted(db_session):
+    """A tp/sl-resolved row with `resolution_model IS NULL` (resolved
+    under the pre-Milestone-18c optimistic instant-fill model) is a
+    DIFFERENT measurement instrument than a row resolved under the
+    current model -- it must not be silently pooled into `n` alongside
+    it. `collect_regime_evidence` excludes it into `n_excluded` instead;
+    only the current-model row counts toward `n`/`win_rate`/
+    `expectancy_r`."""
+    from app.portfolio.rolling_regime_performance import collect_regime_evidence
+
+    regime = {"trend": "range", "volatility": "normal_volatility"}
+    # Legacy row: resolved "tp" under the OLD model (resolution_model
+    # NULL) -- observed, but not current-model evidence.
+    db_session.add(
+        _shadow_signal(
+            strategy_name="jade_v1", market_regime=regime, outcome="tp",
+            resolved_r=2.0, captured_days_ago=2, resolved_days_ago=1,
+            resolution_model=None,
+        )
+    )
+    # Current-model row: resolved "sl" under RESOLUTION_MODEL -- counts.
+    db_session.add(
+        _shadow_signal(
+            strategy_name="jade_v1", market_regime=regime, outcome="sl",
+            resolved_r=-1.02, captured_days_ago=2, resolved_days_ago=1,
+        )
+    )
+    db_session.commit()
+
+    evidence = collect_regime_evidence(db_session, window_days=30)
+    cell = evidence[("jade_v1", "range/normal_volatility", "shadow")]
+    assert cell.n == 1
+    assert cell.win_rate == 0.0
+    assert cell.expectancy_r == pytest.approx(-1.02)
+    assert cell.n_excluded == 1
+
+
+def test_shadow_resolution_model_other_than_current_also_excluded(db_session):
+    """A row resolved under some OTHER non-NULL model string (e.g. a
+    future v3) is excluded from `n` the same way a NULL/legacy row is --
+    only rows matching the resolver's CURRENT `RESOLUTION_MODEL` count."""
+    from app.portfolio.rolling_regime_performance import collect_regime_evidence
+
+    regime = {"trend": "range", "volatility": "normal_volatility"}
+    db_session.add(
+        _shadow_signal(
+            strategy_name="jade_v1", market_regime=regime, outcome="tp",
+            resolved_r=2.0, captured_days_ago=2, resolved_days_ago=1,
+            resolution_model="v3_hypothetical_future_model",
+        )
+    )
+    db_session.commit()
+
+    evidence = collect_regime_evidence(db_session, window_days=30)
+    cell = evidence[("jade_v1", "range/normal_volatility", "shadow")]
+    assert cell.n == 0
+    assert cell.n_excluded == 1
 
 
 # --------------------------------------------------------------------
