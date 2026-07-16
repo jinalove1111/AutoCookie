@@ -4,12 +4,13 @@ BACKTEST_MODE only. Never places live orders, never imports execution/.
 """
 
 import copy
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, time, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 from app.backtesting.performance import calculate_max_drawdown, calculate_win_rate
 from app.config import settings
+from app.regime.regime_detector import detect_market_regime
 from app.risk.position_sizing import calculate_position_size
 
 if TYPE_CHECKING:
@@ -194,6 +195,7 @@ class BacktestEngine:
         max_entry_drift_pct: float | None = None,
         atr_stop_multiplier: float | None = None,
         strategy: "Strategy | None" = None,
+        tag_regimes: bool = False,
     ) -> "BacktestResult":
         """Replays historical LTF candles (with a time-aligned, no-lookahead
         HTF slice at each step) through the Strategy Engine and Risk Engine
@@ -329,6 +331,37 @@ class BacktestEngine:
         -- this is the whole point: a strategy module gets evaluated
         through the exact same execution simulation as the production
         SignalEngine path, not a separate/looser one.
+
+        `tag_regimes` (default `False`, opt-in -- Milestone 12,
+        2026-07-16, the adaptive platform's evidence pipeline:
+        docs/ADAPTIVE_ARCHITECTURE.md section 4.3 needs per-regime
+        strategy performance evidence AT SCALE, without waiting for live
+        shadow-mode trading to slowly accumulate it one trade at a time --
+        a backtest can produce the same regime-tagged evidence over years
+        of history in one run). When `True`, every trade this run
+        actually simulates (i.e. AFTER risk acceptance -- only real
+        trades get tagged, matching `scripts/run_paper.py`'s own
+        `market_regime` tagging point, never a rejected/no-signal step)
+        gets a `"market_regime"` key added to its dict in
+        `BacktestResult.trades`: `app.regime.regime_detector.
+        detect_market_regime(ltf_candles[: i + 1])` -- the SAME walk-
+        forward index `i` used for signal generation at this step (the
+        regime that produced the decision, not the regime as of the
+        delayed fill when `entry_delay_candles > 0`) -- serialized via
+        `dataclasses.asdict()` (identical convention to `run_paper.py`'s
+        `asdict(regime) if regime is not None else None`), or `None` if
+        `detect_market_regime` returns `None` (below its own minimum-
+        history floor) or raises (wrapped in try/except, WARN-and-
+        continue spirit matching `run_paper.py`'s own best-effort regime
+        calls -- a regime-tagging failure must never break or skip an
+        otherwise-valid trade). Works identically regardless of which
+        path produced the signal (default `SignalEngine` path or the
+        Milestone 9 `strategy`-injection path above) -- the tagging point
+        is downstream of both. Default `False` preserves the exact prior
+        behavior for every existing caller: trade dicts get NO new key at
+        all (not even `"market_regime": None`) when this is left off, so
+        a consumer can distinguish "untagged run" from "tagged run, no
+        classification available" purely by key absence vs. presence.
 
         Walk-forward, expanding window, one trade open at a time (no
         overlap): starts at index MIN_CANDLES - 1 so LTF signal generation
@@ -498,6 +531,17 @@ class BacktestEngine:
                 use_breakeven=use_breakeven,
                 use_partial_tp=use_partial_tp,
             )
+            if tag_regimes:
+                # Milestone 12 (2026-07-16, see `tag_regimes`'s docstring):
+                # tag this real, risk-accepted trade with the market
+                # regime as of the SIGNAL's own candle (`ltf_candles[: i +
+                # 1]`) -- best-effort, WARN-and-continue on any failure,
+                # matching run_paper.py's own regime-tagging spirit.
+                try:
+                    regime = detect_market_regime(ltf_candles[: i + 1])
+                except Exception:
+                    regime = None
+                trade["market_regime"] = asdict(regime) if regime is not None else None
             trades.append(trade)
             equity_curve.append(account_balance)
             i = exit_index + 1

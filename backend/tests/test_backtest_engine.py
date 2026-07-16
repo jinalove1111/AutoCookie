@@ -1072,3 +1072,217 @@ def test_run_strategy_none_default_matches_omitting_the_parameter():
     )
 
     assert result_default.trades == result_explicit_none.trades
+
+
+# --- Regime tagging (tag_regimes, opt-in -- Milestone 12, 2026-07-16,
+# docs/ADAPTIVE_ARCHITECTURE.md section 4.3: a backtest can produce the
+# same per-regime strategy performance evidence a live shadow-mode run
+# would slowly accumulate, but at scale over years of history in one
+# pass). Default False preserves the exact prior trade-dict shape (no
+# "market_regime" key at all, not even set to None) for every existing
+# caller/consumer -- see BacktestEngine.run's tag_regimes docstring. ---
+
+
+class _FakeSignalEngineFiresAfterHistory:
+    """Like `_FakeSignalEngineFixedSignal`, but returns `None` until
+    `ltf_candles` has at least `min_history` candles, then the fixed
+    signal on every call after that -- lets a test control exactly which
+    walk-forward step opens the trade, so there's comfortably enough LTF
+    history by then to clear `detect_market_regime`'s own minimum-history
+    floor (`app.regime.regime_detector.volatility_percentile` requires
+    `>= vol_lookback(20) + percentile_window(100) + 1 = 121` candles) --
+    a REAL classification is produced, not just the "None below the
+    floor" fallback path.
+    """
+
+    def __init__(self, signal, min_history):
+        self._signal = signal
+        self.min_history = min_history
+        self.call_count = 0
+
+    def generate_signal(
+        self,
+        symbol,
+        ltf_candles,
+        htf_candles,
+        use_breaker_block=False,
+        require_full_confluence=False,
+        require_ob_fvg_confluence=False,
+        use_structure_tp=False,
+        require_premium_discount_filter=False,
+        use_jade_engine=False,
+        structure_tp_max_r=None,
+        require_session=None,
+        atr_stop_multiplier=None,
+    ):
+        self.call_count += 1
+        if len(ltf_candles) < self.min_history:
+            return None
+        return self._signal
+
+
+class _FakeStrategyFiresAfterHistory:
+    """Strategy-injection counterpart to
+    `_FakeSignalEngineFiresAfterHistory` -- same "returns None until
+    enough LTF history, then the fixed signal" gating, driving the
+    Milestone 9 `strategy`-injection path instead of `signal_engine`.
+    """
+
+    name = "fake-strategy-fires-after-history"
+    version = "1.0"
+
+    def __init__(self, signal, min_history):
+        self._signal = signal
+        self.min_history = min_history
+        self.calls: list[tuple] = []
+
+    def generate_signal(self, symbol, ltf_candles, htf_candles):
+        self.calls.append((symbol, len(ltf_candles), len(htf_candles)))
+        if len(ltf_candles) < self.min_history:
+            return None
+        return self._signal
+
+
+# detect_market_regime's real minimum-history floor is 121 candles (see
+# _FakeSignalEngineFiresAfterHistory's docstring); 125 leaves comfortable
+# margin so this is unambiguously a real classification, not a fixture
+# that happens to sit right at the edge. 126 total candles = exactly
+# enough for the trade to open on the history-125th candle and exit on
+# the very next (and last) one -- same "exactly enough candles, exactly
+# one trade" sizing convention as test_run_wires_real_settings_risk_per_
+# trade_percent_into_trade_size above.
+_REGIME_MIN_HISTORY = 125
+
+
+def _flat_candles_with_volume(n: int) -> list[dict]:
+    """Same OHLC shape as `_flat_ltf_candles`, but with a `volume` key
+    included on every candle. `_c`/`_flat_ltf_candles` deliberately never
+    set one (BacktestEngine's own core mechanics -- fills, SL/TP, sizing,
+    fees -- never read `volume`), but `detect_market_regime`'s `vwap()`/
+    `is_breakout()` do (`app.strategy.utils.cf` does a plain dict index,
+    not a `.get()` with a default, so a missing `volume` key would raise
+    a `KeyError` -- caught by `tag_regimes`'s try/except and silently
+    degrading to `market_regime: None`, which would make these tests
+    vacuous rather than proving a real classification).
+    """
+    ts = BASE_TS
+    candles = []
+    for _ in range(n):
+        candles.append(_c(100, 110, 99, 105, ts))
+        candles[-1]["volume"] = 100.0
+        ts += LTF_STEP
+    return candles
+
+
+def test_run_tag_regimes_true_adds_market_regime_key_with_real_classification():
+    """tag_regimes=True on the default SignalEngine path: the trade dict
+    gains a "market_regime" key. The fixture is deliberately sized well
+    above detect_market_regime's minimum-history floor (see
+    _REGIME_MIN_HISTORY), so this must resolve to a REAL classification
+    (a dict with trend/volatility among its keys), not None.
+    """
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=110.0, direction="long")
+    signal_engine = _FakeSignalEngineFiresAfterHistory(signal, min_history=_REGIME_MIN_HISTORY)
+    ltf_candles = _flat_candles_with_volume(_REGIME_MIN_HISTORY + 1)
+
+    result = BacktestEngine().run(
+        ltf_candles,
+        [],
+        signal_engine,
+        _FakeRiskManager(),
+        account_balance=10000.0,
+        tag_regimes=True,
+    )
+
+    assert result.total_trades == 1
+    trade = result.trades[0]
+    assert "market_regime" in trade
+    assert trade["market_regime"] is not None
+    assert set(trade["market_regime"].keys()) >= {
+        "trend",
+        "volatility",
+        "breakout",
+        "mean_reversion",
+        "liquidity_sweep_environment",
+        "metrics",
+    }
+    assert trade["market_regime"]["trend"] in ("strong_trend", "weak_trend", "range")
+    assert trade["market_regime"]["volatility"] in (
+        "high_volatility",
+        "normal_volatility",
+        "low_volatility",
+    )
+
+
+def test_run_default_tag_regimes_false_market_regime_key_absent():
+    """Default (tag_regimes left unset, i.e. False): trade dicts get NO
+    "market_regime" key at all -- not even set to None -- proving the
+    False path is byte-identical to pre-Milestone-12 behavior (Hard Rule:
+    a consumer distinguishes "untagged run" from "tagged run, no
+    classification available" purely by key absence vs. presence).
+    """
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=110.0, direction="long")
+    signal_engine = _FakeSignalEngineFixedSignal(signal)
+    ltf_candles = _flat_ltf_candles(MIN_CANDLES + 1)
+
+    result = BacktestEngine().run(
+        ltf_candles, [], signal_engine, _FakeRiskManager(), account_balance=10000.0
+    )
+
+    assert result.total_trades == 1
+    assert "market_regime" not in result.trades[0]
+
+
+def test_run_tag_regimes_explicit_false_matches_omitting_the_parameter():
+    """tag_regimes=False (explicit) must be byte-for-byte identical to
+    not passing the parameter at all -- same backward-compatibility proof
+    pattern as entry_delay_candles=0 and strategy=None above.
+    """
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=110.0, direction="long")
+    ltf_candles = _flat_ltf_candles(MIN_CANDLES + 1)
+
+    result_default = BacktestEngine().run(
+        ltf_candles, [], _FakeSignalEngineFixedSignal(signal), _FakeRiskManager(),
+        account_balance=10000.0,
+    )
+    result_explicit_false = BacktestEngine().run(
+        ltf_candles, [], _FakeSignalEngineFixedSignal(signal), _FakeRiskManager(),
+        account_balance=10000.0, tag_regimes=False,
+    )
+
+    assert result_default.trades == result_explicit_false.trades
+
+
+def test_run_tag_regimes_true_on_strategy_injection_path_also_tags():
+    """tag_regimes=True works identically on the Milestone 9
+    `strategy`-injection path -- the tagging point (right after a trade
+    is actually simulated) is downstream of both signal-generation paths,
+    so it must tag here too, not just on the default SignalEngine path.
+    """
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=110.0, direction="long")
+    strategy = _FakeStrategyFiresAfterHistory(signal, min_history=_REGIME_MIN_HISTORY)
+    ltf_candles = _flat_candles_with_volume(_REGIME_MIN_HISTORY + 1)
+
+    result = BacktestEngine().run(
+        ltf_candles,
+        [],
+        _ExplodingSignalEngine(),
+        _FakeRiskManager(),
+        account_balance=10000.0,
+        strategy=strategy,
+        tag_regimes=True,
+    )
+
+    assert result.total_trades == 1
+    trade = result.trades[0]
+    assert "market_regime" in trade
+    assert trade["market_regime"] is not None
+    assert trade["market_regime"]["trend"] in ("strong_trend", "weak_trend", "range")
+    assert trade["market_regime"]["volatility"] in (
+        "high_volatility",
+        "normal_volatility",
+        "low_volatility",
+    )
+    # The engine really did reach the strategy-injection path with real
+    # (non-empty) history, not just the immediately-firing fixed signal.
+    assert len(strategy.calls) >= 1

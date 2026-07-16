@@ -305,6 +305,19 @@ spirit.
    `argmax` strategy by (e.g.) rolling expectancy within each regime,
    falling back to `legacy` whenever a regime has insufficient data for
    any strategy.
+
+   **Status update (milestone 12, evidence round 2, 2026-07-16)**: this
+   data requirement is now quantified, not just described. Running a
+   `RollingPerformanceSelector` against the current regime-tagged
+   backtest dataset (BTCUSDT 15m, single window) shows only 1 of 9
+   regime buckets (`weak_trend/normal_volatility`) clears the n>=20
+   floor on both Legacy and an experimental strategy -- the other 8
+   would fall back to `legacy` purely on insufficient data. At Legacy's
+   own observed trade rate (111 trades/6 months on this asset), it would
+   take multiple such windows to fill the remaining buckets from Legacy
+   trade history alone -- confirming milestone 11's shadow-mode
+   recording (which accumulates at pass speed, not trade speed) as the
+   faster path once enabled. See `ENGINEERING_DECISIONS.md` #54.
 2. **ML-based selection**: explicitly deferred, not scoped further here
    -- the operator named it as a future direction, not a current
    requirement, and building it before step 1 has real data to learn
@@ -428,6 +441,7 @@ does not depend on a LATER milestone to be safe/useful on its own.
 | 8 | **New strategy modules** (Trend Following, Range Trading, Breakout, Volatility Expansion) | #1 | ✅ DONE 2026-07-16 -- implemented AND quarantined in `EXPERIMENTAL_STRATEGIES` (`app.strategy.experimental`), zero backtest evidence yet, **NOT production candidates**. See `ENGINEERING_DECISIONS.md` #52. |
 | 10 | **Evidence round 1** (backtest evaluation of the four milestone-8/9 experimental strategies vs. Legacy baseline) | #8 | ✅ DONE 2026-07-16 -- BTCUSDT 15m, 5 runs on identical candles. All four FAILED walk-forward; **none promoted**. `breakout` clearly dead; `volatility_expansion` least-bad (3/6 profitable periods). Full report: `docs/EXPERIMENTAL_STRATEGY_EVALUATION.md`. |
 | 11 | **Shadow-mode observability** (`regime_snapshots` + `shadow_signals` tables, `app.portfolio.shadow_recorder`) | #2, #3, #4 | ✅ DONE 2026-07-16 -- default-off (`ENABLE_SHADOW_STRATEGY_SIGNALS=False`); records a regime snapshot every paper pass plus what every non-active registered strategy would have signaled. Unblocks this section's (4.3) data requirement once enabled and given time to accumulate. See `ENGINEERING_DECISIONS.md` #53. |
+| 12 | **Regime-tagged backtesting + per-regime performance analytics + evidence round 2** (`BacktestEngine.run(tag_regimes=True)`, `app.backtesting.regime_analysis`, `scripts/analyze_regime_performance.py`) | #3, #8, #10 | ✅ DONE 2026-07-16 -- thesis unsupported on this evidence: BTCUSDT single-window backtest shows no regime bucket where an experimental strategy credibly beats Legacy (only bucket with n>=20 both sides: Legacy +$26.28 expectancy/PF 3.30 vs best experimental +$4.29/PF 1.23), and Legacy routes 9/9 buckets today (8 by insufficient-data fallback, 1 by argmax). See `ENGINEERING_DECISIONS.md` #54, full report `docs/REGIME_PERFORMANCE_ANALYSIS.md` (final). |
 
 **This session's scope**: all 9 milestones on this roadmap (1 through 8,
 plus 8.1) are now built and committed. Milestone 8 (new strategy modules)

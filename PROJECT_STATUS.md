@@ -204,6 +204,36 @@ roadmap). **Milestones 1-7 built**:
     date has accumulated at trade speed only (effectively zero rows). 16
     new tests. **518/518 full suite passing** (was 505). Full rationale:
     `ENGINEERING_DECISIONS.md` #53.
+12. **Regime-tagged backtesting + per-regime performance analytics +
+    evidence round 2** (2026-07-16): `BacktestEngine.run()` gained
+    `tag_regimes: bool = False` -- when `True`, each accepted/simulated
+    trade gets a `"market_regime"` key (full classification, computed
+    post-risk-approval at the signal's own candle index, same tagging
+    point as `run_paper.py`); when `False`, the key is absent and
+    behavior is byte-identical. New `app.backtesting.regime_analysis`
+    (pure functions: `regime_bucket`/`aggregate_by_regime`/
+    `comparison_table`, `MIN_TRADES_FOR_CONFIDENCE=20`) and new
+    `scripts/analyze_regime_performance.py` CLI. **Real bug found and
+    fixed**: the CLI crashed with `UnicodeEncodeError` on a Unicode
+    marker inside `print(table)` under Windows' default cp1252 console
+    encoding -- AFTER a completed multi-minute run and BEFORE the
+    results were written to a file, losing the run's output outright.
+    Fixed with an ASCII marker plus reordering the CLI to write its
+    output file before printing to console. 4 new `BacktestEngine`
+    tests + 17 new `regime_analysis` tests. **539/539 full suite
+    passing** (was 518). **Evidence round 2**: same anchor as round 1
+    (BTCUSDT 15m, `--candles 3000 --periods 6 --end-date 2026-07-10`),
+    pooled totals reproduced round 1 exactly. No regime bucket shows an
+    experimental strategy credibly beating Legacy -- the only bucket
+    with n>=20 on both sides (`weak_trend/normal_volatility`) has Legacy
+    at +$26.28 expectancy/PF 3.30 (n=28) vs. best experimental
+    `volatility_expansion` at +$4.29/PF 1.23 (n=56). Legacy is positive
+    in all 9 buckets but 8 of 9 are n<20 (trades too selectively for
+    per-regime evidence to accumulate fast). A correctly built
+    `RollingPerformanceSelector` run against this data would route
+    Legacy in 9/9 buckets today. Full report:
+    `docs/REGIME_PERFORMANCE_ANALYSIS.md` (final). Full rationale:
+    `ENGINEERING_DECISIONS.md` #54.
 
 **Production-behavior note**: milestones 1-6 were purely additive/
 observational. Milestone 7 was the FIRST to change actual paper-trading

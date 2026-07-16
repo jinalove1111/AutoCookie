@@ -4,6 +4,74 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Adaptive platform milestone 12: regime-tagged backtesting + per-regime performance analytics + evidence round 2
+
+`BacktestEngine.run()` gained a new final parameter `tag_regimes: bool =
+False` (2026-07-16). When `True`, each accepted/simulated trade dict
+gets a `"market_regime"` key holding the full `detect_market_regime`
+classification computed at the signal's own candle index, post-risk-
+approval -- the same tagging point `run_paper.py` already uses for real
+trades (wrapped in try/except, degrades to `None` on failure). When
+`False`, the key is absent entirely and behavior is byte-identical to
+every pre-milestone-12 run. Works identically on both signal paths (the
+default `SignalEngine` path and the milestone-9 `strategy=` injection
+path). `scripts/run_backtest.py` gained `--tag-regimes`.
+
+New `backend/app/backtesting/regime_analysis.py` (pure functions, no
+I/O): `regime_bucket` (`"{trend}/{volatility}"`, `"untagged"` fallback),
+`aggregate_by_regime` (per-bucket trades/wins/win_rate/total_pnl/
+expectancy/profit_factor/sufficient_sample, `MIN_TRADES_FOR_CONFIDENCE
+=20` per this project's own evidence-floor convention), `comparison_
+table` (markdown, insufficient-sample rows marked with the ASCII string
+`"(! n<20)"`). `win_rate`/`profit_factor` reused from `app.backtesting.
+performance`; `expectancy` reimplemented locally since `scripts/` is not
+importable from `app` code. New `scripts/analyze_regime_performance.py`
+CLI: fetches candles once, runs Legacy plus all four experimental
+strategies over identical periods with `tag_regimes=True`, writes and
+prints the comparison table.
+
+**A real bug found by evidence round 2 and fixed.** The first live run
+of `analyze_regime_performance.py` crashed with `UnicodeEncodeError` on
+the `⚠` (U+26A0) insufficient-sample marker inside `print(table)` --
+the Windows console's default cp1252 encoding cannot represent it. The
+crash landed AFTER a completed multi-minute run (candle fetch + five
+full strategy backtests) and BEFORE the results were written to a file,
+so a fully completed run's output was lost outright. Fixed two ways:
+the ASCII marker above replaces the Unicode glyph, and the CLI now
+writes its output file BEFORE printing to console, so a console-
+encoding failure can never again take a completed run's results down
+with it. Verified via a cp1252 round-trip encode of the new marker.
+
+Tests: +4 in `test_backtest_engine.py` (real-classification tagging on
+both signal paths, key-absence as the untagged default, explicit
+`tag_regimes=False` identity -- caught one fixture bug along the way, a
+regime-detection candle fixture was missing the `volume` key) + 17 new
+in `test_regime_analysis.py` (hand-computed arithmetic fixtures, the
+19-vs-20 sample-size boundary, markdown markers, empty input). Full
+suite **539 passed / 0 failed** (was 518 after milestone 11).
+
+**Evidence round 2**: same anchor as round 1 (BTCUSDT 15m,
+`--candles 3000 --periods 6 --end-date 2026-07-10`); pooled totals
+reproduced round 1 exactly (integrity check). No regime bucket shows an
+experimental strategy credibly beating Legacy -- the only bucket with
+n>=20 on both sides (`weak_trend/normal_volatility`, BTC's dominant
+regime) has Legacy at +$26.28 expectancy / PF 3.30 (n=28) versus the
+best experimental strategy, `volatility_expansion`, at +$4.29 / PF 1.23
+(n=56). Each experimental strategy is least-bad in its own designed
+regime (`range_trading` positive only in `range/low_volatility`, PF
+1.03, n=44; `breakout` only in `weak_trend/high_volatility`, PF 1.06,
+n=44) but none crosses meaningfully above breakeven-with-costs. Legacy
+is positive in all 9 buckets but 8 of 9 are n<20 -- it trades too
+selectively (111 trades/6mo) for per-regime evidence to accumulate fast.
+Platform implication: a correctly built `RollingPerformanceSelector` run
+against this data would route Legacy in 9/9 buckets today (8 by
+insufficient-data fallback, 1 by argmax) -- shadow-mode recording
+(milestone 11) remains the right lever for filling sparse buckets, not
+another backtesting round on this same asset/window. Caveats: single
+asset/window, in-sample, disclosed-not-tuned rules. Full report:
+`docs/REGIME_PERFORMANCE_ANALYSIS.md` (final). Design rationale:
+`ENGINEERING_DECISIONS.md` #54.
+
 ## [Unreleased] - Adaptive platform milestones 10+11: evidence round 1 (no promotions) + shadow-mode observability (default-off)
 
 Two milestones landed in the same round (both 2026-07-16).

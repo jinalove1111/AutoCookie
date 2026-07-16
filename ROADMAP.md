@@ -131,6 +131,41 @@ targets the regime-tagged-data blocker below. See
   continues to run (and faster still once shadow mode is enabled); no
   further new code is required, only an operator decision plus time.
 
+**Milestone 12 (2026-07-16): evidence round 2 -- DONE, thesis unsupported
+on this evidence.** `BacktestEngine.run(tag_regimes=True)` plus new
+`app.backtesting.regime_analysis` and `scripts/analyze_regime_
+performance.py` re-ran Legacy and all four milestone-9 experimental
+strategies over the same anchor as evidence round 1 (BTCUSDT 15m,
+`--candles 3000 --periods 6 --end-date 2026-07-10`), this time bucketed
+by market regime instead of pooled. Pooled totals reproduced round 1
+exactly. **No regime bucket justifies routing any experimental strategy
+over Legacy** -- the only bucket with n>=20 on both sides has Legacy at
++$26.28 expectancy/PF 3.30 (n=28) versus the best experimental strategy
+at +$4.29/PF 1.23 (n=56), and Legacy is positive (though mostly n<20) in
+all 9 buckets. A correctly built `RollingPerformanceSelector` evaluated
+against this data would route Legacy in 9/9 buckets today. **No
+regime-based routing is justified by this evidence.** Full report:
+`docs/REGIME_PERFORMANCE_ANALYSIS.md` (final). A real bug was found and
+fixed along the way (Windows console encoding crash that would have
+silently discarded a completed run's results) -- see
+`ENGINEERING_DECISIONS.md` #54.
+
+**Natural next steps after milestone 12** (not commitments): the data
+path to a justified `RollingPerformanceSelector` is unchanged from what
+milestone 11 already established -- enabling `ENABLE_SHADOW_STRATEGY_
+SIGNALS` (an OPERATOR decision, not made this round) plus time, so the
+8 currently-insufficient buckets accumulate real regime-tagged
+signal/trade history at pass speed rather than backtest speed.
+**Cross-asset regime analysis is a possible future round but is NOT
+recommended right now** -- all four experimental strategies remain
+rejected (evidence round 1), this round found no regime carve-out that
+reverses that rejection, and spending compute on a second dimension of
+analysis for configs already shown to lose would be the same undirected
+grinding this project's operator directive already told it to stop
+doing. If shadow-mode data eventually fills the sparse buckets, THAT is
+the next evidence-generating step -- not a second backtest sweep of
+already-rejected strategies on a new asset.
+
 Full architecture review, gap analysis, and prioritized build order:
 `docs/ADAPTIVE_ARCHITECTURE.md`.
 

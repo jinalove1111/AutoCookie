@@ -166,6 +166,7 @@ def run_backtest(
     max_entry_drift_pct: float | None = None,
     atr_stop_multiplier: float | None = None,
     strategy: Any = None,
+    tag_regimes: bool = False,
 ) -> Any:
     """Replay `ltf_candles`/`htf_candles` once through the real
     Strategy/Risk/Backtest engines.
@@ -185,6 +186,14 @@ def run_backtest(
     SignalEngine-configuration flag above is then ignored, see that
     parameter's own docstring. Default `None` preserves the exact prior
     SignalEngine-driven behavior for every existing caller.
+
+    `tag_regimes` (default `False`, Milestone 12, 2026-07-16): threaded
+    straight through to `BacktestEngine.run(..., tag_regimes=...)` -- see
+    that parameter's own docstring
+    (`app.backtesting.backtest_engine.BacktestEngine.run`) for what it
+    does. Default `False` preserves the exact prior behavior (no
+    `"market_regime"` key at all on trade dicts) for every existing
+    caller.
     """
     return BacktestEngine().run(
         ltf_candles,
@@ -208,6 +217,7 @@ def run_backtest(
         max_entry_drift_pct=max_entry_drift_pct,
         atr_stop_multiplier=atr_stop_multiplier,
         strategy=strategy,
+        tag_regimes=tag_regimes,
     )
 
 
@@ -526,6 +536,28 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--tag-regimes",
+        action="store_true",
+        default=False,
+        help=(
+            "Tag every simulated trade with its market regime (opt-in, "
+            "default off): app.regime.regime_detector.detect_market_regime() "
+            "classification (trend/volatility/breakout/mean_reversion/"
+            "liquidity_sweep_environment) as of the signal's own candle, "
+            "added as a 'market_regime' key on that trade's dict (None if "
+            "below detect_market_regime's own minimum-history floor or on "
+            "any detection failure). Milestone 12 (2026-07-16, "
+            "docs/ADAPTIVE_ARCHITECTURE.md section 4.3): produces the same "
+            "per-regime strategy performance evidence a backtest can "
+            "generate at scale over years of history, without waiting for "
+            "live shadow-mode trading to accumulate it one trade at a "
+            "time. See BacktestEngine.run's tag_regimes docstring for the "
+            "full contract. Default off preserves the exact prior trade-"
+            "dict shape (no 'market_regime' key at all) for every "
+            "existing caller/consumer."
+        ),
+    )
+    parser.add_argument(
         "--walk-forward",
         action="store_true",
         default=False,
@@ -634,6 +666,7 @@ def main() -> int:
     print(f"Breaker Block entries: {'ENABLED' if args.breaker_block else 'disabled'}")
     print(f"Partial take-profit: {'ENABLED' if args.partial_tp else 'disabled'}")
     print(f"Strict confluence (sweep AND choch): {'ENABLED' if args.strict_confluence else 'disabled'}")
+    print(f"Regime tagging: {'ENABLED' if args.tag_regimes else 'disabled'}")
     print(f"Fetched {len(candles)} candles for {args.symbol}/{args.timeframe}.")
     if len(candles) < total_requested:
         print(
@@ -707,6 +740,7 @@ def main() -> int:
                 require_premium_discount_filter=args.premium_discount_filter,
                 use_jade_engine=args.jade_engine,
                 strategy=strategy_obj,
+                tag_regimes=args.tag_regimes,
             )
         except Exception as exc:  # unexpected engine failure is a genuine failure
             print(f"ERROR: backtest engine raised an exception on period {period_num}: {exc}")

@@ -2893,3 +2893,103 @@ milestone 9). Verified with a real-temp-DB smoke script: flag ON writes
 rows and adds a `"shadow"` summary key; flag OFF writes zero rows, adds
 no key, and the rest of the summary is identical -- confirming the
 flag-off path is byte-identical to pre-milestone behavior.
+
+## 54. Milestone 12: regime-tagged backtesting + per-regime performance analytics + evidence round 2 -- post-risk-approval tagging point, key-absence over `None`, pure-function analytics, and a real Windows console encoding bug caught before it could silently discard a completed run
+
+**Decision** (2026-07-16): `BacktestEngine.run()` gained a new final
+parameter `tag_regimes: bool = False`. When `True`, every
+accepted/simulated trade dict gets a `"market_regime"` key holding the
+full `detect_market_regime` classification computed at the signal's OWN
+candle index; when `False` the key is absent entirely, and every other
+byte of behavior is unchanged. New pure-function module
+`backend/app/backtesting/regime_analysis.py`
+(`regime_bucket`/`aggregate_by_regime`/`comparison_table`) and new CLI
+`scripts/analyze_regime_performance.py`.
+
+**(a) Tagging point is post-risk-approval, at the signal's own candle
+index**: this mirrors exactly where `scripts/run_paper.py` tags
+`Trade.market_regime` -- the regime is computed once risk has already
+approved the trade, not at signal-generation time and not at exit. Only
+real (accepted, simulated) trades are tagged, matching what "a trade's
+regime" already means everywhere else in this codebase. The computation
+is wrapped in try/except and degrades to `None` on failure, so a regime
+detector edge case can never fail an otherwise-valid backtest trade.
+Both signal paths -- the default `SignalEngine` path and the milestone-9
+`strategy=` injection path -- go through the same tagging call, so
+regime data is available identically regardless of which strategy
+produced the trade.
+
+**(b) Key-absence, not `None`, distinguishes untagged runs**: when
+`tag_regimes=False`, `"market_regime"` is not merely set to `None` --
+the key does not exist in the trade dict at all, so the result is
+byte-identical to every pre-milestone-12 trade dict (no new key for old
+callers to accidentally serialize, diff, or iterate over). `None` is
+reserved for the genuinely different case of "tagging was requested but
+classification failed for this trade."
+
+**(c) Analytics as pure functions, separate from I/O**:
+`regime_analysis.py` takes trade lists in and returns
+rows/strings out -- no DB access, no file writes, no network calls --
+so it is independently unit-testable against hand-computed fixtures and
+reusable from any future caller (CLI, future dashboard, tests) without
+dragging in I/O concerns. `win_rate`/`profit_factor` are reused from
+`app.backtesting.performance` rather than reimplemented; `expectancy` is
+defined locally in `regime_analysis.py` because `scripts/` (where the
+project's other `expectancy` lives, in `experiment_runner.py`) is not
+importable from `app` code -- a one-way dependency boundary this project
+has kept consistently. Bucketing is `"{trend}/{volatility}"` with an
+explicit `"untagged"` fallback for trades carrying `None`, and
+`MIN_TRADES_FOR_CONFIDENCE=20` reuses this project's own established
+evidence floor (`experiment_runner.MIN_TRADES_FOR_CONFIDENCE`) rather
+than inventing a new threshold.
+
+**(d) A real bug, caught by evidence round 2 itself, before it could
+silently discard a completed multi-minute run**: the first real run of
+`analyze_regime_performance.py` crashed with `UnicodeEncodeError` on the
+'⚠' (U+26A0) insufficient-sample marker inside `print(table)`, because
+the Windows console default encoding is cp1252, which cannot represent
+that character. The crash happened AFTER the (slow, multi-minute) run
+had already fetched candles and backtested five strategies across the
+full periods -- and BEFORE the results were written to a file, so the
+completed run's output was entirely lost to a print-time encoding
+error. Two changes: (1) `comparison_table()` now marks insufficient-
+sample rows with the ASCII string `"(! n<20)"` instead of a Unicode
+glyph -- console-safe on any platform's default encoding, not just
+UTF-8 terminals; (2) `analyze_regime_performance.py` now writes the
+report to its output file BEFORE printing it to the console, so a
+console-encoding failure can no longer take completed results down with
+it. Verified by an explicit cp1252 round-trip encode of the new marker
+string. Recorded as its own lettered point because it is a real
+lesson, not a cosmetic tweak: **user-facing tool output in this
+codebase must be ASCII-safe by default, and any script that both writes
+a file and prints to console must write the file first** -- the print
+is allowed to fail; the results are not allowed to be lost when it
+does.
+
+**Status**: 4 new tests in `test_backtest_engine.py` (real-classification
+tagging on both signal paths, key-absence as the untagged default,
+explicit `tag_regimes=False` producing an identical result to the
+implicit default -- one fixture bug caught along the way, the regime-
+detection fixture was missing the `volume` key needed for classification
+to run at all) + 17 new tests in `test_regime_analysis.py`
+(hand-computed arithmetic fixtures, the 19-vs-20 sample-size boundary,
+markdown marker rendering, empty-input handling). Full suite **539
+passed / 0 failed** (was 518 after milestone 11).
+
+**Evidence round 2 result** (full report:
+`docs/REGIME_PERFORMANCE_ANALYSIS.md`, final): same anchor as round 1
+(BTCUSDT 15m, `--candles 3000 --periods 6 --end-date 2026-07-10`), pooled
+totals reproduced round 1 exactly, confirming the tagging machinery
+changes nothing about what was already evidenced. No bucket shows an
+experimental strategy credibly beating Legacy -- the only bucket with
+n>=20 on both sides (`weak_trend/normal_volatility`, BTC's dominant
+regime) has Legacy at +$26.28 expectancy / PF 3.30 (n=28) versus the
+best experimental strategy, `volatility_expansion`, at +$4.29 / PF 1.23
+(n=56). Legacy is positive in all 9 regime buckets but 8 of 9 are
+n<20 -- it trades too selectively (111 trades/6mo) for per-regime
+evidence to accumulate fast on this asset/window alone. A correctly
+built `RollingPerformanceSelector` run against this exact dataset would
+therefore route Legacy in 9/9 buckets today (8 by insufficient-data
+fallback, 1 by argmax) -- confirming shadow-mode recording (milestone
+11) is the right lever for filling the sparse buckets, not a further
+backtesting round on this same single asset/window.
