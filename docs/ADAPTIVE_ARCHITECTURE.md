@@ -474,6 +474,7 @@ does not depend on a LATER milestone to be safe/useful on its own.
 | 14 | **Shadow outcome resolution** (migration `65aba13281ad`, `app.portfolio.shadow_resolver`) | #11 | ✅ DONE 2026-07-16 -- `ShadowSignal` gains `outcome`/`resolved_at`/`resolved_r`; `resolve_open_shadow_signals()` walks post-capture candles, SL-before-TP within a candle (mirrors `BacktestEngine._simulate_trade`), 7-day expiry, wired into `run_paper.py` behind the existing shadow flag. Simulated fills only, no fees/slippage. A production JSON-serialization bug (datetime in a JSON column, raise outside the per-strategy guard) was found and fixed in the same round. See `ENGINEERING_DECISIONS.md` #55(b)-(d). |
 | 15 | **Rolling per-regime evidence layer** (`app.portfolio.rolling_regime_performance`) | #14 | ✅ DONE 2026-07-16 -- `collect_regime_evidence()` returns per-(strategy, bucket, source) cells, shadow and live sources kept permanently separate (never averaged). See `ENGINEERING_DECISIONS.md` #55(e). |
 | 16 | **`RollingPerformanceSelector`** (`app.strategy.selector`, `scripts/selector_dry_run.py`) | #15 | ✅ DONE 2026-07-16, **built but NOT wired** -- unmeasured-baseline fallback, live-precedence, strict-inequality qualification, disclosed non-significance. Dry run against a scratch DB reproduced the predicted "legacy in all 10 buckets" result from milestone 12. Wiring into `run_paper.py` deferred to a future, evidence-gated operator decision. See `ENGINEERING_DECISIONS.md` #56. |
+| 17 | **Multi-symbol shadow collection + daily CTO reporting** (`settings.SHADOW_SYMBOLS`, `scripts/cto_report.py`, `app.portfolio.cto_report`) | #11, #13, #15, #16 | ✅ DONE 2026-07-16 -- evidence-throughput multiplication (17a: extra symbols shadow-evaluated by all six registered strategies, since none is active there) plus a daily CTO reporting tool (17b: 8 sections, never-fabricate fallbacks, mechanical bottleneck rule). First live run: 28 regime snapshots (3 buckets), 0 sufficient evidence cells. See `ENGINEERING_DECISIONS.md` #57. |
 
 **This session's scope**: all 9 milestones on this roadmap (1 through 8,
 plus 8.1) are now built and committed. Milestone 8 (new strategy modules)
@@ -496,3 +497,18 @@ untouched), design decision recorded in `ENGINEERING_DECISIONS.md`,
 commit message describing what changed and why, push to `origin/master`
 -- the same discipline every prior commit in this session has already
 followed, continued unchanged for this new phase of work.
+
+**Operating model, updated 2026-07-16 (operator directive)**: with rows
+1-16 above complete, this roadmap's role changes from "queue of
+milestones to finish" to "evidence base a CTO-driven, continuously
+operating process consults." Specialist-agent roles (CTO/Research/
+Strategy/Backtest/Risk/Monitoring/QA/Performance) now select the next
+milestone by bottleneck analysis against this document and the live
+evidence tables, rather than asking what to build next; the CTO stops
+only for architectural decisions, credentials, production deployment, or
+destructive actions. Promotion gates (row-16-and-earlier discipline:
+significant edge, positive expectancy, lower drawdown, sufficient
+sample, multi-market, regime validation) are unchanged and never
+bypassed -- Legacy remains the only production engine under this model,
+exactly as before it. A daily morning CTO report (`scripts/cto_report.py`,
+row 17) is now standing practice. See `ENGINEERING_DECISIONS.md` #57.

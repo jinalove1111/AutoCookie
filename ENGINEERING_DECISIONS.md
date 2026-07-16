@@ -3222,3 +3222,97 @@ Combined with milestones 13-15 (decision #55) and the bugfix: full suite
 **602 passed / 0 failed** (was 539 after milestone 12). Live paper
 trader ran untouched throughout this entire round; production selection
 behavior is unchanged.
+
+## 57. Operating-model shift to continuous CTO-driven improvement, plus Milestone 17: multi-symbol shadow collection (17a) and daily CTO reporting (17b)
+
+**Decision** (2026-07-16, operator directive): with adaptive-platform
+milestones 1-16 complete, the mandate shifts from feature implementation
+to continuous CTO-driven improvement. Specialist-agent roles (CTO /
+Research / Strategy / Backtest / Risk / Monitoring / QA / Performance)
+now operate without asking what to build next -- prioritization is by
+bottleneck analysis (highest ROI given the current evidence gap), not by
+a fixed roadmap queue. The CTO stops and asks only for: architectural
+decisions, credentials, production deployment, or destructive actions.
+**Promotion gates are unchanged and never bypassed** -- significant
+edge, positive expectancy, lower drawdown, sufficient sample size,
+multi-market confirmation, and regime validation, exactly as milestone
+12's evidence rounds already established; Legacy stays the only
+production engine under this new operating model just as it was under
+the old one. Every milestone under this model still follows the same
+discipline as every milestone before it: implementation + tests + docs +
+changelog + architecture update + benchmark + commit + push, followed
+automatically by an architecture review -> bottleneck analysis -> next
+milestone. A daily morning CTO report (milestone 17b, below) is now
+standing practice, not a one-off.
+
+**Milestone 17a: multi-symbol shadow collection.** Bottleneck-driven --
+`docs/REGIME_PERFORMANCE_ANALYSIS.md` found 8 of 9 regime buckets
+evidence-starved, and the root cause was single-symbol (BTCUSDT-only)
+collection. New `settings.SHADOW_SYMBOLS` (comma-separated, default `""`
+-- byte-identical off): when shadow mode is on and this is set, the
+existing shadow block in `run_paper.py` additionally fetches candles and
+runs resolve+record for each extra symbol (ETH/SOL/XRP intended),
+per-symbol fault-isolated so one symbol's fetch/resolve failure does not
+take down the others. Results surface under
+`summary["shadow"]["extra_symbols"]`, kept separate from the primary
+symbol's own shadow summary.
+
+**The exclude-nobody design point, worth recording deliberately**: on
+extra symbols, no strategy is the ACTIVE strategy -- nothing trades
+them, so `active_strategy_name=None` is passed into the shadow
+evaluation, which excludes nobody. This means ALL six registered
+strategies, INCLUDING `legacy` and `jade`, get shadow-evaluated on the
+extra symbols, not just the four quarantined experimental ones. That is
+intentional, not an oversight: it multiplies evidence for the single
+scarcest resource identified by milestone 12/16 -- Legacy's OWN
+per-bucket live sample count, which milestone 16's dry run showed
+insufficient in 10 of 10 buckets. Trading logic never touches the extra
+symbols at any point; only shadow observation runs there. 9 new tests
+plus a real-temp-DB smoke test (rows written for both symbols compared
+against active-only rows; the live DB was untouched by the smoke test).
+
+**Milestone 17b: daily CTO report generator.** New `scripts/cto_report.py`
+plus pure helpers in `app/portfolio/cto_report.py`, producing 8 fixed
+sections: completed work (via `git log --since`), evidence accumulated
+(via the shadow_status helpers), strategy rankings plus shadow
+performance (via `collect_regime_evidence`, carrying forward decision
+#55(e)'s shadow-optimism caveat), a `RollingPerformanceSelector` dry-run
+bucket count, a mechanical disclosed bottleneck rule (fewer than 1
+sufficient-evidence cell -> bottleneck is reported as "evidence
+accumulation"), live risk checks (is the trader process running, is the
+DB at migration head), a suggested next milestone quoted verbatim from
+`ROADMAP.md`, and a completion percentage parsed from
+`docs/ADAPTIVE_ARCHITECTURE.md` section 7 (labeled explicitly "of
+currently-scoped milestones," never presented as the long-term vision's
+completion). **Every section carries an explicit "unavailable: <reason>"
+fallback and never fabricates a number it cannot derive from a live
+source.** The DB is opened read-only (`mode=ro`, mirroring milestone
+13's own discipline), output is ASCII-only, and the script writes its
+report to a file before printing to console -- both conventions lifted
+directly from decision #54's post-mortem. 22 new tests.
+
+**A real bug, found and fixed during the build.** `subprocess.run(...,
+text=True)` on Windows decodes captured `git log` output using the
+process's default codepage (cp1252), not UTF-8 -- so any UTF-8
+multi-byte commit-message character was already mangled by the time it
+reached the report's own sanitizer; the sanitizer had nothing left to
+sanitize correctly. Fixed with an explicit UTF-8 decode
+(`errors="replace"`) ahead of any further processing. **This is the
+SECOND cp1252-decoding lesson on this platform, after decision #54's
+console-print crash** -- the pattern worth naming explicitly: every
+user-facing or subprocess-facing text path on this Windows deployment
+needs explicit encoding discipline; the platform default is never safe
+to assume.
+
+**First real run against the live DB**: 28 regime snapshots across 3
+buckets, 0 shadow signals yet, 0 sufficient-evidence cells -> reported
+bottleneck = evidence accumulation; trader process confirmed running; DB
+confirmed at migration head `65aba13281ad`; completion 100.0% of the 16
+currently-scoped section-7 milestones (explicitly not the long-term
+vision, which the report does not claim to measure).
+
+**Status**: full suite **602 -> 633 passed / 0 failed** (+31: 9 from
+milestone 17a, 22 from milestone 17b). Live trader ran untouched during
+the entire build; a restart with `SHADOW_SYMBOLS` set is a pending,
+orchestrator-handled operational step that comes after commit, not part
+of this code change (see `HANDOFF.md`).

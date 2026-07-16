@@ -139,6 +139,28 @@ class Settings(BaseSettings):
     # for the "quarantine intact" discipline this preserves.
     ENABLE_SHADOW_STRATEGY_SIGNALS: bool = False
 
+    # Multi-symbol shadow collection (opt-in, default off -- Milestone 17a,
+    # 2026-07-16, docs/REGIME_PERFORMANCE_ANALYSIS.md). Motivation: that
+    # analysis found evidence accumulation to be this platform's binding
+    # constraint -- 8 of 9 regime buckets evidence-starved -- and today
+    # shadow data (RegimeSnapshot/ShadowSignal rows, see
+    # ENABLE_SHADOW_STRATEGY_SIGNALS above) only ever accrues from the ONE
+    # symbol scripts/run_paper.py actually trades (`settings.SYMBOL`, e.g.
+    # "BTCUSDT"). Comma-separated extra symbols here (e.g.
+    # "ETHUSDT,SOLUSDT,XRPUSDT" -- this project's standard validation set)
+    # are evaluated for shadow-only regime snapshots/signals/outcome
+    # resolution ONLY, multiplying evidence throughput roughly N-fold at
+    # zero production risk: nothing in `SHADOW_SYMBOLS` is ever traded, and
+    # this setting is only even consulted when
+    # `ENABLE_SHADOW_STRATEGY_SIGNALS` is also True (see
+    # `scripts/run_paper.py`'s shadow block). Default "" (empty) preserves
+    # today's behavior EXACTLY -- an empty string parses to zero extra
+    # symbols, so the shadow block's existing single-symbol
+    # (`settings.SYMBOL`) behavior is untouched byte-for-byte; this is a
+    # pure opt-in, the operator/launcher must explicitly set it to collect
+    # extra-symbol evidence.
+    SHADOW_SYMBOLS: str = ""
+
     @field_validator("TRADING_MODE")
     @classmethod
     def validate_trading_mode(cls, value: str) -> str:

@@ -4,6 +4,59 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Operating-model shift to continuous CTO-driven improvement, plus adaptive platform milestone 17: multi-symbol shadow collection and daily CTO reporting
+
+2026-07-16. Adaptive-platform milestones 1-16 are complete; the operator
+directive shifts the mandate from feature implementation to continuous
+CTO-driven improvement -- specialist-agent roles (CTO/Research/Strategy/
+Backtest/Risk/Monitoring/QA/Performance) select the next highest-ROI
+milestone by bottleneck analysis rather than asking what to build next,
+stopping only for architectural decisions, credentials, production
+deployment, or destructive actions. Promotion gates are unchanged and
+never bypassed (significant edge, positive expectancy, lower drawdown,
+sufficient sample, multi-market, regime validation); Legacy remains the
+only production engine. A daily morning CTO report is now standing
+practice.
+
+**Milestone 17a: multi-symbol shadow collection.** Bottleneck-driven by
+`docs/REGIME_PERFORMANCE_ANALYSIS.md`'s finding that 8 of 9 regime
+buckets were evidence-starved due to single-symbol collection. New
+`settings.SHADOW_SYMBOLS` (comma-separated, default `""` -- byte-
+identical off): when set, `run_paper.py`'s shadow block additionally
+fetches candles and runs resolve+record for each extra symbol (ETH/SOL/
+XRP intended), per-symbol fault-isolated. Summaries surface under
+`summary["shadow"]["extra_symbols"]`. On extra symbols no strategy is
+active, so `active_strategy_name=None` excludes nobody -- ALL six
+registered strategies, including `legacy` and `jade`, get shadow-
+evaluated there, multiplying evidence for the scarcest resource: Legacy's
+own per-bucket live sample count. Trading logic never touches extra
+symbols. 9 new tests plus a real-temp-DB smoke test (live DB untouched).
+
+**Milestone 17b: daily CTO report generator.** New `scripts/cto_report.py`
++ `app/portfolio/cto_report.py`: 8 fixed sections (completed work,
+evidence accumulated, strategy rankings + shadow performance, selector
+dry-run bucket count, a mechanical disclosed bottleneck rule, live risk
+checks, suggested next milestone quoted from `ROADMAP.md`, completion %
+parsed from `docs/ADAPTIVE_ARCHITECTURE.md` section 7). Every section has
+an explicit "unavailable: <reason>" fallback -- it never fabricates a
+number. Read-only DB (`mode=ro`), ASCII-only, file-write-before-print
+(decision #54 conventions). 22 new tests. First real run against the live
+DB: 28 regime snapshots (3 buckets), 0 shadow signals yet, 0 sufficient
+evidence cells -> bottleneck = evidence accumulation; trader running; DB
+at head `65aba13281ad`; 100.0% of the 16 currently-scoped section-7
+milestones (explicitly not the long-term vision).
+
+**A real bug, found and fixed during the build**: `subprocess.run(...,
+text=True)` decodes captured `git log` output as cp1252 on Windows,
+mangling UTF-8 commit-message characters BEFORE any sanitizer sees them.
+Fixed with an explicit UTF-8 decode (`errors="replace"`). The second
+cp1252-decoding lesson on this platform, after decision #54.
+
+**Totals**: full suite **602 -> 633 passed / 0 failed** (+31: 9 multi-
+symbol + 22 report). Live trader untouched during the build; a restart
+with `SHADOW_SYMBOLS` set is a pending, orchestrator-handled operational
+step. Full rationale: `ENGINEERING_DECISIONS.md` #57.
+
 ## [Unreleased] - Adaptive platform milestones 13-16: shadow-data tooling, outcome resolution, rolling per-regime evidence, and a built-but-unwired RollingPerformanceSelector -- plus a JSON-serialization bugfix
 
 Four milestones plus one production bugfix, all 2026-07-16, completing the

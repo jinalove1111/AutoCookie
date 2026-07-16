@@ -107,6 +107,26 @@ resolution step; only signals from a STRICTLY EARLIER pass are ever
 candidates. Same fault-isolation discipline as `record_shadow_pass`: any
 failure is WARNed and swallowed by this function's existing outer
 try/except, never allowed to affect a real trading outcome.
+
+Milestone 17a (2026-07-16, docs/REGIME_PERFORMANCE_ANALYSIS.md): still
+inside the same `ENABLE_SHADOW_STRATEGY_SIGNALS`-gated block, after the
+active symbol's (`settings.SYMBOL`) own shadow work above,
+`_maybe_record_shadow_pass` now ALSO runs the exact same resolve-then-
+record shadow flow for every extra symbol listed in
+`settings.SHADOW_SYMBOLS` (comma-separated, default "" -- see
+app/config.py's docstring on that setting for the evidence-accumulation
+motivation). This closes the gap where shadow evidence -- the input every
+regime-tagged strategy comparison depends on -- only ever accrued from one
+symbol. Each extra symbol gets its OWN fresh LTF+HTF candle fetch (the
+active symbol's candles are for a different symbol and cannot be reused)
+and its own try/except, so one symbol's fetch/resolve/record failure never
+blocks another symbol (see `_maybe_record_extra_symbol_shadow_passes`).
+Still purely observational: no extra symbol is ever traded, sized,
+risk-evaluated, or executed -- only the same observability-only
+`resolve_open_shadow_signals`/`record_shadow_pass` functions the active
+symbol already uses are called, against every strategy (no strategy is
+"active" for a symbol nothing trades -- see that helper's docstring for
+the `active_strategy_name=None` contract this relies on).
 """
 
 from __future__ import annotations
@@ -508,6 +528,95 @@ def _check_drawdown_and_maybe_trip(
 _UNSET = object()  # sentinel: distinguishes "no regime supplied" from a genuine `None` regime
 
 
+def _maybe_record_extra_symbol_shadow_passes() -> dict[str, dict]:
+    """Milestone 17a (2026-07-16, docs/REGIME_PERFORMANCE_ANALYSIS.md --
+    evidence accumulation identified as this platform's binding constraint,
+    8 of 9 regime buckets evidence-starved): shadow-only collection for
+    every extra symbol in `settings.SHADOW_SYMBOLS` (comma-separated,
+    default "" -- see app/config.py), ADDITIONAL to `settings.SYMBOL`'s own
+    shadow work in `_maybe_record_shadow_pass` above. Purely multiplies
+    evidence throughput; NEVER trades -- nothing here is reachable from the
+    real signal/risk/execute pipeline, it only calls the same
+    observability-only `resolve_open_shadow_signals`/`record_shadow_pass`
+    functions the active symbol's own shadow step already uses, against a
+    FRESH LTF+HTF candle fetch for each extra symbol (the active symbol's
+    already-fetched `candles`/`htf_candles`, passed into
+    `_maybe_record_shadow_pass`, are for a DIFFERENT symbol and cannot be
+    reused here).
+
+    `active_strategy_name` contract (see
+    `app.portfolio.shadow_recorder.record_shadow_pass`'s docstring): for
+    the active trading symbol, that function excludes whichever strategy
+    is genuinely "active" this pass -- it already had a real chance to
+    trade via the normal pipeline, so shadowing it again would just
+    duplicate (not shadow) its own real signal. For an EXTRA symbol,
+    nothing is active -- no strategy trades it at all, by construction (see
+    module docstring) -- so no strategy should be excluded from shadow
+    evaluation. `record_shadow_pass` only excludes a strategy when
+    `strategy_name == active_strategy_name` (a plain `==` against
+    `app.strategy.experimental.all_strategies()`'s string keys); every real
+    strategy is keyed by a non-None string name, so passing `None` here
+    matches no strategy and therefore excludes none -- exactly the
+    "evaluate everything" behavior a never-traded extra symbol needs. (No
+    changes were made to shadow_recorder.py itself to arrive at this --
+    this is purely a call-site argument choice.)
+
+    Symbols equal to `settings.SYMBOL` (plain string equality, matching
+    this codebase's existing symbol-string convention -- see e.g.
+    `ShadowSignal.symbol`) are skipped, to avoid double-recording the
+    active symbol's own shadow pass a second time under this loop. Blank/
+    whitespace-only entries (an empty `SHADOW_SYMBOLS`, or a stray/trailing
+    comma) are tolerated and skipped, never an error.
+
+    Returns one entry per non-skipped `SHADOW_SYMBOLS` entry, keyed by
+    symbol: the `record_shadow_pass` summary dict with an extra nested
+    `"resolution"` key (the `resolve_open_shadow_signals` summary dict) on
+    success, or `{"error": str(exc)}` on failure -- for
+    `summary["shadow"]["extra_symbols"]`. A per-symbol failure (candle
+    fetch, regime detection, resolution, or recording) is WARNed and
+    recorded as that symbol's `"error"` entry; it does NOT stop the
+    remaining symbols from being processed -- this loop's own per-symbol
+    try/except (not `_maybe_record_shadow_pass`'s outer one) provides that
+    isolation, per this milestone's per-symbol fault-isolation requirement.
+    Always returns a dict (empty when `SHADOW_SYMBOLS` is "" or contains
+    only blank/active-symbol entries) -- callers do not need a `None` check.
+    """
+    results: dict[str, dict] = {}
+
+    raw_symbols = [s.strip() for s in settings.SHADOW_SYMBOLS.split(",")]
+    for symbol in raw_symbols:
+        if not symbol or symbol == settings.SYMBOL:
+            continue
+
+        try:
+            symbol_candles = CandleFetcher().fetch_ohlcv(
+                symbol, settings.DEFAULT_TIMEFRAME, limit=300
+            )
+            symbol_htf_candles = CandleFetcher().fetch_ohlcv(
+                symbol, settings.HTF_TIMEFRAME, limit=300
+            )
+            if not symbol_candles or not symbol_htf_candles:
+                raise ValueError(f"no candles returned for extra shadow symbol {symbol!r}")
+
+            symbol_regime = detect_market_regime(symbol_candles)
+            resolution_summary = resolve_open_shadow_signals(symbol, symbol_candles)
+            record_summary = record_shadow_pass(
+                symbol,
+                settings.DEFAULT_TIMEFRAME,
+                symbol_candles,
+                symbol_htf_candles,
+                symbol_regime,
+                None,  # nothing is "active" for a shadow-only extra symbol
+            )
+            record_summary["resolution"] = resolution_summary
+            results[symbol] = record_summary
+        except Exception as exc:
+            print(f"WARNING: extra-symbol shadow recording failed for {symbol!r} ({exc}).")
+            results[symbol] = {"error": str(exc)}
+
+    return results
+
+
 def _maybe_record_shadow_pass(
     summary: dict[str, Any],
     candles: list,
@@ -549,12 +658,30 @@ def _maybe_record_shadow_pass(
     resolution step -- it always waits for at least the next pass.
 
     Mutates `summary` in place, adding a `"shadow"` key -- the
-    `record_shadow_pass` summary dict with one extra nested key,
-    `"resolution"` (the `resolve_open_shadow_signals` summary dict), or
-    `None` for the whole `"shadow"` entry if the shadow step itself failed
-    -- only ever added when the flag is on; left entirely absent when off,
-    per this module's summary-dict convention of only adding fields a
-    given pass's configuration actually produced.
+    `record_shadow_pass` summary dict with two extra nested keys,
+    `"resolution"` (the `resolve_open_shadow_signals` summary dict) and
+    `"extra_symbols"` (Milestone 17a -- see
+    `_maybe_record_extra_symbol_shadow_passes`'s docstring; a dict keyed by
+    symbol, empty when `settings.SHADOW_SYMBOLS` is "" or resolves to no
+    symbols), or `None` for the whole `"shadow"` entry if the ACTIVE
+    symbol's shadow step itself failed -- only ever added when the flag is
+    on; left entirely absent when off, per this module's summary-dict
+    convention of only adding fields a given pass's configuration actually
+    produced.
+
+    Milestone 17a design call (documented, not implicit): extra-symbol
+    processing runs AFTER the active symbol's own resolve/record steps
+    above, still inside this function's single outer try/except -- so if
+    the active symbol's own shadow step raises, extra symbols are skipped
+    for this pass too (the whole `"shadow"` entry becomes `None`, exactly
+    as it always has), rather than partially populating `summary["shadow"]`
+    around a `None`. Extra symbols get their own per-symbol fault isolation
+    (see `_maybe_record_extra_symbol_shadow_passes`) for failures AMONG
+    THEMSELVES, not independence from the active symbol's own failure --
+    the active symbol's shadow observability is this pass's primary
+    signal, and either way, a broken pass here has zero effect on real
+    trading (already fully resolved before this function is ever called)
+    and simply retries clean next pass.
     """
     if not settings.ENABLE_SHADOW_STRATEGY_SIGNALS:
         return
@@ -572,6 +699,7 @@ def _maybe_record_shadow_pass(
             active_strategy_name,
         )
         summary["shadow"]["resolution"] = resolution_summary
+        summary["shadow"]["extra_symbols"] = _maybe_record_extra_symbol_shadow_passes()
     except Exception as exc:
         print(f"WARNING: shadow-mode recording failed ({exc}).")
         summary["shadow"] = None
@@ -596,10 +724,10 @@ def run_once(
         "skipped_signal_generation": bool,  # True if the concurrency guard skipped
                                              # everything past the exit-check step
         "skipped_reason": str | None,       # why, when skipped_signal_generation is True
-        "shadow": dict | None,       # Milestone 11b (+14b's nested "resolution" key):
-                                      # only present when
-                                      # settings.ENABLE_SHADOW_STRATEGY_SIGNALS is True --
-                                      # see _maybe_record_shadow_pass's docstring
+        "shadow": dict | None,       # Milestone 11b (+14b's nested "resolution" key,
+                                      # +17a's nested "extra_symbols" key): only present
+                                      # when settings.ENABLE_SHADOW_STRATEGY_SIGNALS is
+                                      # True -- see _maybe_record_shadow_pass's docstring
       }
 
     When `circuit_breaker` is None (the default -- used by the no-args

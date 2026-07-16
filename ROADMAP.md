@@ -212,6 +212,29 @@ and the JSON-serialization fix -- both are code-complete but only take
 effect once applied/restarted, same "code change vs. live effect" gap
 every prior milestone in this section has carried.
 
+**Operating model, updated 2026-07-16 (operator directive): continuous
+CTO-driven improvement is now the standing mode for this section.** With
+milestones 1-16 complete, prioritization here is no longer a fixed
+milestone queue -- specialist-agent roles select the next highest-ROI
+item by bottleneck analysis against the evidence tables, stopping only
+for architectural decisions, credentials, production deployment, or
+destructive actions. Promotion gates remain unchanged and are never
+bypassed. **Milestone 17 (2026-07-16)** is the first output of this
+model: `settings.SHADOW_SYMBOLS` extends shadow collection to extra
+symbols (ETH/SOL/XRP intended), and `scripts/cto_report.py` adds a daily
+CTO report (now standing practice) covering completed work, evidence
+accumulated, strategy rankings, live risk checks, and a mechanical
+bottleneck rule. See `ENGINEERING_DECISIONS.md` #57. **Evidence
+accumulation runs at 4 symbols (BTC live-trading plus ETH/SOL/XRP
+shadow-only) once the paper trader restarts with `SHADOW_SYMBOLS=
+ETHUSDT,SOLUSDT,XRPUSDT` set** -- that restart is a pending ops step, not
+yet performed. **The next review point is when `scripts/shadow_status.py`
+/ the CTO report shows sufficient evidence cells** (n>=20 on both live
+and shadow sides for a meaningful number of regime buckets) -- until
+then, the evidence-accumulation bottleneck the first CTO report
+disclosed (0 sufficient cells) stands unchanged, and no further
+architecture work is scheduled ahead of it.
+
 **Natural next steps after milestone 12** (superseded by the above --
 retained for continuity): the data path to a justified
 `RollingPerformanceSelector` was unchanged from what milestone 11

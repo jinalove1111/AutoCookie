@@ -310,6 +310,50 @@ migration behind (`65aba13281ad` not yet applied), and the process needs
 a clean restart to activate outcome resolution and the serialization
 fix (tracked in `HANDOFF.md`).
 
+## Operating-model shift + Milestone 17 (2026-07-16, operator directive)
+
+With milestones 1-16 complete, the mandate shifts from feature
+implementation to **continuous CTO-driven improvement**: specialist-agent
+roles (CTO/Research/Strategy/Backtest/Risk/Monitoring/QA/Performance)
+select the next highest-ROI milestone by bottleneck analysis rather than
+asking what to build next, stopping only for architectural decisions,
+credentials, production deployment, or destructive actions. Promotion
+gates are unchanged and never bypassed; Legacy remains the only
+production engine. **A daily morning CTO report is now standing
+practice** (`scripts/cto_report.py`, milestone 17b below).
+
+17. **Multi-symbol shadow collection (17a) + daily CTO report generator
+    (17b)** (2026-07-16): new `settings.SHADOW_SYMBOLS` (comma-separated,
+    default `""` -- byte-identical off) extends `run_paper.py`'s shadow
+    block to additionally fetch, resolve, and record shadow signals for
+    extra symbols (ETH/SOL/XRP intended) per pass, per-symbol
+    fault-isolated, surfaced under `summary["shadow"]["extra_symbols"]`.
+    On extra symbols no strategy is active, so all six registered
+    strategies (including `legacy` and `jade`) get shadow-evaluated
+    there -- multiplying evidence for Legacy's own scarce per-bucket
+    sample count. Trading logic never touches extra symbols. 9 new tests.
+    New `scripts/cto_report.py` + `app.portfolio.cto_report`: 8 fixed
+    report sections (completed work, evidence accumulated, strategy
+    rankings + shadow performance, selector dry-run bucket count, a
+    mechanical disclosed bottleneck rule, live risk checks, suggested
+    next milestone quoted from `ROADMAP.md`, completion % parsed from
+    `docs/ADAPTIVE_ARCHITECTURE.md` section 7), every section with an
+    "unavailable: <reason>" fallback -- never fabricates. Read-only DB
+    (`mode=ro`), ASCII-only, file-write-before-print. 22 new tests. Found
+    and fixed a real bug: `subprocess.run(..., text=True)` decodes `git
+    log` output as cp1252 on Windows, corrupting UTF-8 commit-message
+    characters before any sanitizer runs -- fixed with an explicit UTF-8
+    decode (`errors="replace"`); the second cp1252-decoding lesson on
+    this platform, after decision #54. First live run: 28 regime
+    snapshots (3 buckets), 0 shadow signals, 0 sufficient evidence cells
+    -> bottleneck = evidence accumulation; trader running; DB at head
+    `65aba13281ad`; 100.0% of the 16 currently-scoped section-7
+    milestones. **Full suite 602 -> 633 passed / 0 failed** (+31). Live
+    trader untouched during the build; restarting it with
+    `SHADOW_SYMBOLS=ETHUSDT,SOLUSDT,XRPUSDT` is a pending ops step
+    (tracked in `HANDOFF.md`). Full rationale:
+    `ENGINEERING_DECISIONS.md` #57.
+
 **Production-behavior note**: milestones 1-6 were purely additive/
 observational. Milestone 7 was the FIRST to change actual paper-trading
 sizing/rejection math (more conservative sizing in high volatility;
