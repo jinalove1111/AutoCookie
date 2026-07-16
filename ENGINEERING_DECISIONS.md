@@ -2993,3 +2993,232 @@ therefore route Legacy in 9/9 buckets today (8 by insufficient-data
 fallback, 1 by argmax) -- confirming shadow-mode recording (milestone
 11) is the right lever for filling the sparse buckets, not a further
 backtesting round on this same single asset/window.
+
+---
+
+## 55. Milestones 13-15: shadow-data status tooling, shadow outcome resolution, and a rolling per-regime evidence layer -- read-only-by-construction tooling, SL-first mirroring of the backtester's own convention, source-never-blended evidence, and a JSON-serialization bug the first live shadow signal would have hit
+
+**Decision** (2026-07-16): three additive milestones, all extending the
+milestone-11 shadow-observability track toward a real evidence base for
+`RollingPerformanceSelector` (section 4.3, `docs/ADAPTIVE_ARCHITECTURE.md`),
+plus one production bugfix found along the way.
+
+**(a) Milestone 13 -- shadow-data status tool.** New
+`scripts/shadow_status.py` (CLI) + `app/portfolio/shadow_status.py` (pure
+helpers: reuses milestone-12's `regime_bucket` convention, snapshot
+stats, per-(strategy, bucket) signal counts, and a "distance to the
+20-sample routability floor" report). The CLI opens its SQLite connection
+with a `mode=ro` URI, not merely "doesn't happen to write" -- a write
+attempt is provably refused by SQLite itself, not by the script's own
+discipline, which matters for a tool operators will run against the live
+DB while the paper trader has it open. Console output is ASCII-only,
+applying decision #54's cp1252 lesson pre-emptively rather than waiting
+to hit the same crash again. The report carries an explicit honesty
+note: raw signal counts are NECESSARY but not SUFFICIENT for
+routability -- what `RollingPerformanceSelector` actually needs is
+performance-EVALUATED samples (an outcome, not just a captured signal),
+which is exactly the gap milestone 14 closes. 18 tests. Live smoke the
+same day: 3 regime snapshots already accumulating, 0 shadow signals yet
+(shadow mode had only just been operator-enabled).
+
+**(b) Milestone 14a -- outcome-resolution schema.** New migration
+`65aba13281ad` (chained on `36cb62e9e2ac`): `ShadowSignal` gains
+`outcome` (nullable indexed String, `"tp"`/`"sl"`/`"expired"`, `NULL`
+means still open -- same key-absence-over-sentinel discipline as decision
+#54(b), applied to a column instead of a dict key), `resolved_at`, and
+`resolved_r` (`+rr` for a `"tp"` outcome, `-1.0` for `"sl"`, `NULL` for
+`"expired"` -- an expired signal has no realized R because nothing was
+simulated to conclusion). 8 tests, including the old-generation
+`migrate_existing` upgrade paths -- `test_db_bootstrap.py` and
+`test_shadow_observability_schema.py` both have their own maintenance
+comments requiring their pinned head revision / column-set assertions to
+move in lockstep with new migrations, and both were updated accordingly.
+
+**(c) Milestone 14b -- the resolver.** New
+`app/portfolio/shadow_resolver.py`:
+`resolve_open_shadow_signals(symbol, ltf_candles, now)` walks candles
+STRICTLY AFTER a signal's `captured_at`, and within any candle that
+touches both the stop and the target, resolves SL before TP -- this
+mirrors `BacktestEngine._simulate_trade`'s own documented conservative
+convention (cited directly in the resolver's docstring, not
+reinvented), so a shadow signal's simulated fill logic is not a second,
+divergent definition of "what happened" from the one this project
+already trusts for backtesting. `EXPIRY_HOURS = 168` (7 days) is
+disclosed as a chosen-not-tuned value, same discipline as every other
+new threshold in this project, and expires a signal to `"expired"` if
+neither SL nor TP is touched within that window. Wired into
+`run_paper.py`'s existing shadow block, behind the SAME
+`ENABLE_SHADOW_STRATEGY_SIGNALS` flag milestone 11 already gated (no new
+flag), fault-isolated (a resolution error cannot abort the paper pass),
+and ordered to run resolution BEFORE recording new signals in the same
+pass -- so a signal is never resolved in the same pass it was captured,
+which would otherwise let a same-candle TP/SL touch resolve against
+information the live system did not actually have "one pass ago." Summary
+surfaces under `summary["shadow"]["resolution"]`. 9 tests plus a
+real-temp-DB smoke test (an end-to-end `run_once` resolved a
+pre-inserted signal to `tp`/+2.0R). Disclosed caveat, carried in both the
+resolver's docstring and this record: shadow outcomes are simulated
+fills with no fees or slippage applied -- they are an OPTIMISTIC UPPER
+BOUND on what a live version of that strategy would have realized, not
+an unbiased estimate.
+
+**(d) The SQLite naive-datetime lesson** (documented here because both
+(c) and milestone 15 independently hit it): SQLAlchemy's `DateTime(timezone=True)`
+round-trips through SQLite as a NAIVE datetime on read -- SQLite has no
+native timezone-aware storage, so SQLAlchemy silently strips `tzinfo`
+coming back out, even though the value that went in was tz-aware. Candle
+timestamps (sourced from OKX, via `app.data`) stay tz-aware throughout.
+Comparing a naive `resolved_at`/`captured_at` against a tz-aware candle
+timestamp raises `TypeError: can't compare offset-naive and
+offset-aware datetimes`, not a silently wrong answer -- but both new
+modules needed their own explicit naive-UTC normalization helper to
+avoid hitting it at all. Recorded so a fourth module doesn't rediscover
+this by crashing.
+
+**(e) Milestone 15 -- rolling per-regime evidence layer.** New
+`app/portfolio/rolling_regime_performance.py`: `RegimeCellEvidence`
+dataclass + `collect_regime_evidence(session, window_days=30,
+min_samples=20)`, returning a dict keyed by `(strategy, bucket, source)`
+where `source` is `"shadow"` or `"live"`. **The two sources are
+deliberately never averaged together** -- this is the key design
+decision this milestone contributes: a shadow fill (simulated, fee-free,
+using candle data the strategy never had to survive slippage or partial
+fills against) and a live fill (real, fee-paying, actually executed) are
+different measurement instruments, not two samples of the same
+quantity, and pooling them would launder a systematically optimistic
+number into what looks like a single unbiased one. This layer reports
+both, separately, and leaves the SELECTOR (milestone 16) to decide
+precedence explicitly and visibly, rather than deciding it implicitly
+here where the choice would be invisible to anyone reading selection
+output. Shadow-side counts only RESOLVED `tp`/`sl` outcomes toward `n`
+(an `expired` or still-open signal is tallied separately as
+`n_excluded`, not silently dropped and not silently counted as if it
+were evidence). Live-side counts only closed trades that both carry a
+non-`NULL` `market_regime` AND a non-`NULL` `r_multiple` -- trades from
+before this platform's regime-tagging existed are skipped entirely, not
+folded into an `"untagged"` bucket the way milestone-12's backtest
+analytics do, since conflating "we don't know this trade's regime" with
+"this trade happened in some regime we're choosing not to distinguish"
+would understate the real per-regime sample sizes. 14 tests, all against
+hand-computed arithmetic fixtures (not assertions on the function's own
+output).
+
+**Status**: 18 (M13) + 8 (M14a) + 9 (M14b) + 14 (M15) tests, plus the
+bugfix regression test in (below) = roughly 50 new tests across this
+group. Full suite reached **602 passed / 0 failed** counting milestone
+16 (#56) together with this group (was 539 after milestone 12). Live
+paper trader ran untouched throughout; `AVAILABLE_STRATEGIES` and both
+production selectors are untouched by any of milestones 13-15.
+
+**Bugfix, found by milestone 14b's own smoke test, fixed the same day**:
+`shadow_recorder.record_shadow_pass()` wrote `dataclasses.asdict(signal)`
+straight into a JSON column. `TradeSignal.timestamp` is typed `str` in
+the dataclass definition but in production carries a real `datetime`
+object (the type hint has been aspirational, not enforced, since before
+this milestone) -- `json.dumps` cannot serialize a `datetime` and raises
+`TypeError` at flush time. **This was worse than an isolated recording
+failure**: the `raise` propagated from OUTSIDE the per-strategy
+try/except guard milestone 11 built specifically so one broken strategy
+couldn't take down shadow recording for the others -- so this bug
+aborted the ENTIRE shadow-recording pass, for every strategy, every
+time. **Latent-live severity**: `ENABLE_SHADOW_STRATEGY_SIGNALS` had
+been operator-enabled that same day (the milestone-13 smoke test found
+it already on), which means the very FIRST real shadow signal generated
+by the live paper trader would have hit this exact `TypeError` and been
+silently lost -- "silently" because the surrounding pass still completed
+normally from the trader's own perspective; only the shadow side would
+have gone dark. Fix: a recursive `_json_safe` sanitizer (datetime ->
+`isoformat()`, applied structurally so nested dict/list values are
+covered too) wraps both `signal_payload` and `market_regime` before they
+reach the JSON column. Verified by a regression test that reproduces the
+original crash (observed failing pre-fix against an unpatched copy of
+the function) and confirms it passes post-fix.
+
+---
+
+## 56. Milestone 16: `RollingPerformanceSelector` -- built and tested, deliberately NOT wired -- conservative gates on top of milestone 15's evidence layer, and why an unwired selector is still worth shipping
+
+**Decision** (2026-07-16): `app/strategy/selector.py` gains a
+module-level seam `select_for_bucket(bucket, evidence, available,
+min_samples)` plus a class `RollingPerformanceSelector` (conforms to the
+existing `StrategySelector` Protocol, implements `select_with_reason()`
+the same way `ConfigurableFallbackSelector` does) -- appended to the
+file; every existing class in it (`DefaultToLegacySelector`,
+`ConfigurableFallbackSelector`) is untouched. This is the
+`RollingPerformanceSelector` section 4.3 of
+`docs/ADAPTIVE_ARCHITECTURE.md` has described as "not built yet" since
+milestone 4 -- it is now built, consuming milestone 15's evidence layer
+directly, but it is **not** wired into `scripts/run_paper.py`; production
+selection is still `ConfigurableFallbackSelector`, unchanged.
+
+**The selection rule, each step a deliberate, disclosed gate** (documented
+in the class's own docstring, restated here for the record):
+
+1. `regime is None` -> `legacy`. No evidence layer has an opinion about
+   "no regime," so there is nothing to select against.
+2. Legacy's OWN live cell for this bucket must itself be sufficient
+   (`n >= min_samples`, default 20, milestone-15's own floor) before any
+   challenger is even considered. If it is not, the result is `legacy`
+   with reason `"fallback_legacy_baseline_unmeasured"` -- **a challenger
+   cannot beat a baseline that hasn't itself been measured yet**; "we
+   don't know if Legacy is good here" is not evidence that something
+   else is better, it is an absence of evidence in both directions.
+3. Each challenger strategy's cell is read with **live precedence**: use
+   its live cell if that cell is sufficient, otherwise fall back to its
+   shadow cell. A challenger is never allowed to cherry-pick shadow data
+   when live data already exists and disagrees with it -- live is always
+   preferred when both are available, per milestone 15's "different
+   measurement instruments" framing in decision #55(e).
+4. A challenger qualifies only if its expectancy_r is **strictly greater
+   than 0 AND strictly greater than Legacy's own expectancy_r** in this
+   bucket -- both conditions, not either. A challenger with positive but
+   sub-Legacy expectancy is not "good enough to diversify into," it is
+   simply worse.
+5. Among qualifying challengers, argmax by expectancy_r wins. A tie, or
+   no qualifying challenger, falls back to `legacy`.
+6. Any winning selection whose evidence came from a challenger's SHADOW
+   cell (not live) carries an explicit `"_shadow_evidence_optimistic"`
+   marker in its reason string -- so a caller inspecting selection
+   output is never left to assume shadow-sourced wins carry the same
+   confidence as a live-measured one; decision #55(e)'s fee-free-fills
+   caveat travels with the decision, not just with the evidence layer's
+   own documentation.
+
+**Disclosed limitation, not silently assumed away**: the floor-plus-
+strict-inequality rule above is explicitly NOT a statistical
+significance test (no confidence interval, no p-value, no correction for
+multiple comparisons across 9+ buckets) -- it is a minimum-sample
+tripwire plus a simple comparison, deferred exactly the way every other
+not-yet-built refinement in this project has been deferred: named
+honestly rather than either building it prematurely or pretending the
+simpler rule is equivalent to it.
+
+**Read-only verification tool**: new `scripts/selector_dry_run.py`
+(mirrors milestone 13's `mode=ro` discipline) evaluates all 9 regime
+buckets plus `"untagged"` against a real database and prints what
+`RollingPerformanceSelector` would choose without selecting anything
+live. Run against a scratch, head-migrated database, it reproduced the
+expected result -- `legacy` in all 10 buckets, each for the
+insufficient-live-baseline reason -- matching
+`docs/REGIME_PERFORMANCE_ANALYSIS.md`'s own prediction (decision #54)
+that a correctly built selector would route Legacy in 9/9 buckets on
+today's evidence. This is a real, running verification of that
+prediction, not a re-assertion of it.
+
+**Why it ships unwired**: nothing in milestones 13-16 changes what
+selector `scripts/run_paper.py` actually calls -- `AVAILABLE_STRATEGIES`
+and both production selectors (`DefaultToLegacySelector`,
+`ConfigurableFallbackSelector`) are byte-for-byte untouched. Wiring
+`RollingPerformanceSelector` into the live path is a future, explicit
+OPERATOR decision, gated on sufficient accumulated evidence (which does
+not yet exist in quantity -- this dry run's own result confirms that: 10
+of 10 buckets are still baseline-unmeasured) -- not a decision this
+documentation round or any single milestone is authorized to make
+unilaterally.
+
+**Status**: 14 new tests (rule-table coverage: each of the 6 steps
+above, argmax ties, the shadow-marker, the min_samples parameter).
+Combined with milestones 13-15 (decision #55) and the bugfix: full suite
+**602 passed / 0 failed** (was 539 after milestone 12). Live paper
+trader ran untouched throughout this entire round; production selection
+behavior is unchanged.

@@ -150,21 +150,82 @@ fixed along the way (Windows console encoding crash that would have
 silently discarded a completed run's results) -- see
 `ENGINEERING_DECISIONS.md` #54.
 
-**Natural next steps after milestone 12** (not commitments): the data
-path to a justified `RollingPerformanceSelector` is unchanged from what
-milestone 11 already established -- enabling `ENABLE_SHADOW_STRATEGY_
-SIGNALS` (an OPERATOR decision, not made this round) plus time, so the
-8 currently-insufficient buckets accumulate real regime-tagged
-signal/trade history at pass speed rather than backtest speed.
-**Cross-asset regime analysis is a possible future round but is NOT
-recommended right now** -- all four experimental strategies remain
-rejected (evidence round 1), this round found no regime carve-out that
-reverses that rejection, and spending compute on a second dimension of
-analysis for configs already shown to lose would be the same undirected
-grinding this project's operator directive already told it to stop
-doing. If shadow-mode data eventually fills the sparse buckets, THAT is
-the next evidence-generating step -- not a second backtest sweep of
-already-rejected strategies on a new asset.
+**Milestones 13-16 (2026-07-16): the build-out of
+`docs/ADAPTIVE_ARCHITECTURE.md`'s core evidence-to-selection chain is now
+COMPLETE.** Four milestones plus one production bugfix, closing every
+item section 7's roadmap table listed as not-yet-built:
+`scripts/shadow_status.py` (read-only shadow-data status tool,
+milestone 13); shadow outcome resolution -- migration `65aba13281ad` +
+`app.portfolio.shadow_resolver` (milestone 14), which also caught and
+fixed a real bug (a `datetime` written straight into a JSON column,
+crashing OUTSIDE the per-strategy error guard, latent-live since shadow
+mode had just been operator-enabled -- see `ENGINEERING_DECISIONS.md`
+#55); a rolling per-regime evidence layer keeping shadow and live
+evidence permanently separate (milestone 15,
+`app.portfolio.rolling_regime_performance`); and
+`RollingPerformanceSelector` itself, built and tested with conservative,
+disclosed gates (unmeasured-baseline fallback, live precedence over
+shadow, strict-inequality qualification, no significance testing) --
+milestone 16, `ENGINEERING_DECISIONS.md` #56. A read-only dry-run tool
+(`scripts/selector_dry_run.py`) confirmed the selector reproduces
+milestone 12's own prediction on a scratch database: `legacy` in all 10
+buckets today, baseline unmeasured. **63 new tests, full suite 602
+passed / 0 failed** (was 539). Live paper trader ran untouched
+throughout; `AVAILABLE_STRATEGIES` and both production selectors
+(`DefaultToLegacySelector`, `ConfigurableFallbackSelector`) remain
+completely untouched.
+
+**What remains is data and a decision, not more building.** With the
+chain now built, what's left is explicitly NOT further architecture
+work:
+- **(a) Data accumulation.** Shadow-signal collection continues to run
+  (`ENABLE_SHADOW_STRATEGY_SIGNALS`, operator-enabled) and now resolves
+  to real tp/sl/expired outcomes (milestone 14) instead of only
+  capturing signals -- this is the mechanism that fills the sparse
+  regime buckets, and it needs time, not new code.
+- **(b) Evidence review.** Once enough buckets clear the 20-sample
+  floor on both live and shadow sides, an operator (or a future
+  documentation/evidence round) reviews what
+  `scripts/selector_dry_run.py` actually reports against the live DB --
+  today it reports `legacy` everywhere, unmeasured.
+- **(c) The wiring decision itself.** Turning `RollingPerformanceSelector`
+  on in `scripts/run_paper.py` is a future, EXPLICIT operator decision --
+  requiring sufficient evidence per (b) plus explicit approval, exactly
+  the same discipline every other production-behavior change in this
+  project has followed (see the "Commit discipline" note at the end of
+  `docs/ADAPTIVE_ARCHITECTURE.md`). Nothing in milestones 13-16
+  authorizes making that call unilaterally.
+- **(d) Optional refinements, deliberately deferred.** Fees/slippage
+  modeling in shadow fills (closing decision #55(c)'s disclosed
+  "optimistic upper bound" caveat) and a real statistical significance
+  test in place of the current floor-plus-strict-inequality rule
+  (decision #56's disclosed non-significance-test caveat) are both named,
+  neither is scheduled -- building either before there's evidence volume
+  to justify the extra complexity would be exactly the kind of premature
+  work this project's operator directive already told it to avoid.
+
+**Pending ops step, tracked separately (not part of this documentation
+round, see `HANDOFF.md`)**: the live paper-trading DB is still one
+migration behind (`65aba13281ad` not yet applied), and the paper trader
+process needs a clean restart to actually activate outcome resolution
+and the JSON-serialization fix -- both are code-complete but only take
+effect once applied/restarted, same "code change vs. live effect" gap
+every prior milestone in this section has carried.
+
+**Natural next steps after milestone 12** (superseded by the above --
+retained for continuity): the data path to a justified
+`RollingPerformanceSelector` was unchanged from what milestone 11
+already established -- enabling `ENABLE_SHADOW_STRATEGY_SIGNALS` (an
+OPERATOR decision) plus time, so the 8 currently-insufficient buckets
+accumulate real regime-tagged signal/trade history at pass speed rather
+than backtest speed. **Cross-asset regime analysis remains a possible
+future round but is NOT recommended right now** -- all four experimental
+strategies remain rejected (evidence round 1), and spending compute on a
+second dimension of analysis for configs already shown to lose would be
+the same undirected grinding this project's operator directive already
+told it to stop doing. If shadow-mode data eventually fills the sparse
+buckets, THAT is the next evidence-generating step -- not a second
+backtest sweep of already-rejected strategies on a new asset.
 
 Full architecture review, gap analysis, and prioritized build order:
 `docs/ADAPTIVE_ARCHITECTURE.md`.

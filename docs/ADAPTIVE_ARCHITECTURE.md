@@ -318,6 +318,34 @@ spirit.
    trade history alone -- confirming milestone 11's shadow-mode
    recording (which accumulates at pass speed, not trade speed) as the
    faster path once enabled. See `ENGINEERING_DECISIONS.md` #54.
+
+   **Status update (milestones 13-16, 2026-07-16): the rest of this
+   evolution step is now BUILT.** `RollingPerformanceSelector` (item 1
+   above) exists, is tested, and consumes a real rolling evidence layer
+   (`app.portfolio.rolling_regime_performance.collect_regime_evidence()`,
+   milestone 15) fed by two independent, never-blended sources: live
+   trade history (`Trade.market_regime`/`r_multiple`, populated since
+   milestone 7) and resolved shadow signals (`ShadowSignal.outcome`,
+   milestone 14 -- outcome resolution wired into `run_paper.py` behind
+   the existing `ENABLE_SHADOW_STRATEGY_SIGNALS` flag, so shadow
+   evidence can now accumulate to a real tp/sl/expired outcome, not just
+   a captured signal). `scripts/shadow_status.py` (milestone 13) and
+   `scripts/selector_dry_run.py` (milestone 16) are read-only tools
+   (`mode=ro` SQLite) for checking data sufficiency and selector output
+   respectively, without touching anything live. A dry run on a scratch,
+   head-migrated database reproduced milestone 12's own prediction
+   exactly: `legacy` in all 10 buckets (9 regime + untagged), all via the
+   unmeasured-baseline fallback -- confirming the selector's logic is
+   sound but that sufficient evidence still does not exist yet. **The
+   selector remains unwired into `scripts/run_paper.py` by design** --
+   `AVAILABLE_STRATEGIES` and both production selectors
+   (`DefaultToLegacySelector`, `ConfigurableFallbackSelector`) are
+   untouched. What remains before this evolution step could be
+   considered complete in practice, not just in code: (i) time for
+   shadow/live data to accumulate past the 20-sample floor in more
+   buckets, (ii) an operator evidence review once it does, (iii) an
+   explicit operator decision to wire `RollingPerformanceSelector` in.
+   See `ENGINEERING_DECISIONS.md` #55, #56.
 2. **ML-based selection**: explicitly deferred, not scoped further here
    -- the operator named it as a future direction, not a current
    requirement, and building it before step 1 has real data to learn
@@ -442,6 +470,10 @@ does not depend on a LATER milestone to be safe/useful on its own.
 | 10 | **Evidence round 1** (backtest evaluation of the four milestone-8/9 experimental strategies vs. Legacy baseline) | #8 | ✅ DONE 2026-07-16 -- BTCUSDT 15m, 5 runs on identical candles. All four FAILED walk-forward; **none promoted**. `breakout` clearly dead; `volatility_expansion` least-bad (3/6 profitable periods). Full report: `docs/EXPERIMENTAL_STRATEGY_EVALUATION.md`. |
 | 11 | **Shadow-mode observability** (`regime_snapshots` + `shadow_signals` tables, `app.portfolio.shadow_recorder`) | #2, #3, #4 | ✅ DONE 2026-07-16 -- default-off (`ENABLE_SHADOW_STRATEGY_SIGNALS=False`); records a regime snapshot every paper pass plus what every non-active registered strategy would have signaled. Unblocks this section's (4.3) data requirement once enabled and given time to accumulate. See `ENGINEERING_DECISIONS.md` #53. |
 | 12 | **Regime-tagged backtesting + per-regime performance analytics + evidence round 2** (`BacktestEngine.run(tag_regimes=True)`, `app.backtesting.regime_analysis`, `scripts/analyze_regime_performance.py`) | #3, #8, #10 | ✅ DONE 2026-07-16 -- thesis unsupported on this evidence: BTCUSDT single-window backtest shows no regime bucket where an experimental strategy credibly beats Legacy (only bucket with n>=20 both sides: Legacy +$26.28 expectancy/PF 3.30 vs best experimental +$4.29/PF 1.23), and Legacy routes 9/9 buckets today (8 by insufficient-data fallback, 1 by argmax). See `ENGINEERING_DECISIONS.md` #54, full report `docs/REGIME_PERFORMANCE_ANALYSIS.md` (final). |
+| 13 | **Shadow-data status tool** (`scripts/shadow_status.py`, `app.portfolio.shadow_status`) | #11 | ✅ DONE 2026-07-16 -- read-only (`mode=ro` SQLite URI) report of snapshot stats, per-(strategy,bucket) shadow-signal counts, and distance to the 20-sample routability floor; discloses that signal counts alone are necessary-not-sufficient for routability. See `ENGINEERING_DECISIONS.md` #55(a). |
+| 14 | **Shadow outcome resolution** (migration `65aba13281ad`, `app.portfolio.shadow_resolver`) | #11 | ✅ DONE 2026-07-16 -- `ShadowSignal` gains `outcome`/`resolved_at`/`resolved_r`; `resolve_open_shadow_signals()` walks post-capture candles, SL-before-TP within a candle (mirrors `BacktestEngine._simulate_trade`), 7-day expiry, wired into `run_paper.py` behind the existing shadow flag. Simulated fills only, no fees/slippage. A production JSON-serialization bug (datetime in a JSON column, raise outside the per-strategy guard) was found and fixed in the same round. See `ENGINEERING_DECISIONS.md` #55(b)-(d). |
+| 15 | **Rolling per-regime evidence layer** (`app.portfolio.rolling_regime_performance`) | #14 | ✅ DONE 2026-07-16 -- `collect_regime_evidence()` returns per-(strategy, bucket, source) cells, shadow and live sources kept permanently separate (never averaged). See `ENGINEERING_DECISIONS.md` #55(e). |
+| 16 | **`RollingPerformanceSelector`** (`app.strategy.selector`, `scripts/selector_dry_run.py`) | #15 | ✅ DONE 2026-07-16, **built but NOT wired** -- unmeasured-baseline fallback, live-precedence, strict-inequality qualification, disclosed non-significance. Dry run against a scratch DB reproduced the predicted "legacy in all 10 buckets" result from milestone 12. Wiring into `run_paper.py` deferred to a future, evidence-gated operator decision. See `ENGINEERING_DECISIONS.md` #56. |
 
 **This session's scope**: all 9 milestones on this roadmap (1 through 8,
 plus 8.1) are now built and committed. Milestone 8 (new strategy modules)
