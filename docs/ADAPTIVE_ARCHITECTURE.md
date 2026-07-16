@@ -426,6 +426,8 @@ does not depend on a LATER milestone to be safe/useful on its own.
 | 7 | **Risk Engine extensions** (per-strategy disable hook, volatility-scaled sizing) | #3 (volatility scaling needs regime output), #6 (disable hook needs something to disable strategies) | ✅ DONE (commits b015785, 6ff2f6f) |
 | 8.1 | **Live paper-DB migration to schema head** (`app.database.migrate_existing`, fingerprint-detect + stamp + upgrade) | #2 | ✅ DONE (2026-07-16) -- see `ENGINEERING_DECISIONS.md` #51 |
 | 8 | **New strategy modules** (Trend Following, Range Trading, Breakout, Volatility Expansion) | #1 | ✅ DONE 2026-07-16 -- implemented AND quarantined in `EXPERIMENTAL_STRATEGIES` (`app.strategy.experimental`), zero backtest evidence yet, **NOT production candidates**. See `ENGINEERING_DECISIONS.md` #52. |
+| 10 | **Evidence round 1** (backtest evaluation of the four milestone-8/9 experimental strategies vs. Legacy baseline) | #8 | ✅ DONE 2026-07-16 -- BTCUSDT 15m, 5 runs on identical candles. All four FAILED walk-forward; **none promoted**. `breakout` clearly dead; `volatility_expansion` least-bad (3/6 profitable periods). Full report: `docs/EXPERIMENTAL_STRATEGY_EVALUATION.md`. |
+| 11 | **Shadow-mode observability** (`regime_snapshots` + `shadow_signals` tables, `app.portfolio.shadow_recorder`) | #2, #3, #4 | ✅ DONE 2026-07-16 -- default-off (`ENABLE_SHADOW_STRATEGY_SIGNALS=False`); records a regime snapshot every paper pass plus what every non-active registered strategy would have signaled. Unblocks this section's (4.3) data requirement once enabled and given time to accumulate. See `ENGINEERING_DECISIONS.md` #53. |
 
 **This session's scope**: all 9 milestones on this roadmap (1 through 8,
 plus 8.1) are now built and committed. Milestone 8 (new strategy modules)
@@ -436,7 +438,11 @@ consulted by either configured selector (`DefaultToLegacySelector`,
 `ConfigurableFallbackSelector`) and therefore invisible to paper/live
 trading. Promotion of any of the four into `AVAILABLE_STRATEGIES` requires
 real backtest/walk-forward evidence first -- the natural next step, not
-yet performed (see `ROADMAP.md`).
+yet performed (see `ROADMAP.md`). **Update 2026-07-16**: that evidence
+now exists (row 10 above) -- all four failed, none promoted. Row 11
+(shadow-mode observability) is a separate, additive track that starts
+accumulating the regime-tagged data this roadmap's section 4.3 needs,
+independent of any individual experimental strategy's fate.
 
 **Commit discipline for every milestone**: full backend test suite run
 and passing, paper trader health verified (still running, still

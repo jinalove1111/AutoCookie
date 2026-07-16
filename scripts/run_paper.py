@@ -81,6 +81,20 @@ individual iteration failures are reported inline but do not abort the loop
 
 Simplifications noted inline where a frozen contract dependency doesn't yet
 expose everything an ideal implementation would want (see comments below).
+
+Milestone 11b (2026-07-16, docs/ADAPTIVE_ARCHITECTURE.md sections 2.4/6,
+ENGINEERING_DECISIONS.md #53): opt-in shadow-mode observability, gated by
+`settings.ENABLE_SHADOW_STRATEGY_SIGNALS` (default False --
+`_maybe_record_shadow_pass` below is the sole call site, and it is a
+single `if` check away from doing nothing at all, so the False path is
+byte-identical to every prior milestone). When on, `run_once` records one
+`RegimeSnapshot` plus a `ShadowSignal` for every non-active strategy's
+would-be signal (`app.portfolio.shadow_recorder.record_shadow_pass`) at
+the END of its per-pass work -- AFTER the real trading logic for this
+pass is fully resolved (both the no-signal early-return and the full
+signal/risk/execute path call it right before their own `return`), and
+always inside its own try/except WARN so a broken shadow step can never
+affect a real trading outcome that already happened this pass.
 """
 
 from __future__ import annotations
@@ -127,6 +141,7 @@ from app.portfolio.positions import (
     load_circuit_breaker_state,
     save_circuit_breaker_state,
 )
+from app.portfolio.shadow_recorder import record_shadow_pass
 from app.portfolio.signals import SignalTracker
 from app.portfolio.trades import TradeTracker
 from app.regime.regime_detector import detect_market_regime
@@ -477,6 +492,64 @@ def _check_drawdown_and_maybe_trip(
         send_discord_alert(message)
 
 
+_UNSET = object()  # sentinel: distinguishes "no regime supplied" from a genuine `None` regime
+
+
+def _maybe_record_shadow_pass(
+    summary: dict[str, Any],
+    candles: list,
+    htf_candles: list,
+    regime: Any = _UNSET,
+) -> None:
+    """Milestone 11b shadow-mode integration point (see module docstring).
+    No-op unless `settings.ENABLE_SHADOW_STRATEGY_SIGNALS` is True -- the
+    False path below is exactly one `if` check, nothing else runs, so
+    `run_once`'s behavior/prints/exit-code are unchanged when the flag is
+    off (matching every other opt-in gate in this module, e.g.
+    `_maybe_move_to_breakeven`).
+
+    Called by `run_once` at the END of its per-pass work, on both the
+    no-signal early-return path and the full signal/risk/execute path --
+    never before either is fully resolved, so shadow work can never
+    influence (or be influenced by) a real trading decision this pass
+    already made. Wrapped entirely in its own try/except: any failure
+    (regime detection, persistence, an individual strategy raising inside
+    `record_shadow_pass`) is caught here, WARNed, and swallowed -- it must
+    never be the reason a paper-trading pass reports a failure or a
+    non-zero exit code.
+
+    `regime`: when the caller already computed a `MarketRegime` this pass
+    (the trade path's own position-sizing step, below, already does), it
+    is passed in and reused as-is -- including if it's `None` -- rather
+    than calling `detect_market_regime(candles)` a second time. Left at
+    the `_UNSET` sentinel (the no-signal path, which never reaches that
+    computation), a fresh regime is computed here instead.
+
+    Mutates `summary` in place, adding a `"shadow"` key (the
+    `record_shadow_pass` summary dict, or `None` if the shadow step itself
+    failed) -- only ever added when the flag is on; left entirely absent
+    when off, per this module's summary-dict convention of only adding
+    fields a given pass's configuration actually produced.
+    """
+    if not settings.ENABLE_SHADOW_STRATEGY_SIGNALS:
+        return
+
+    try:
+        active_strategy_name = "jade" if settings.USE_JADE_ENGINE else "legacy"
+        effective_regime = detect_market_regime(candles) if regime is _UNSET else regime
+        summary["shadow"] = record_shadow_pass(
+            settings.SYMBOL,
+            settings.DEFAULT_TIMEFRAME,
+            candles,
+            htf_candles,
+            effective_regime,
+            active_strategy_name,
+        )
+    except Exception as exc:
+        print(f"WARNING: shadow-mode recording failed ({exc}).")
+        summary["shadow"] = None
+
+
 def run_once(
     circuit_breaker: CircuitBreaker | PersistentCircuitBreaker | None = None,
 ) -> dict[str, Any]:
@@ -496,6 +569,9 @@ def run_once(
         "skipped_signal_generation": bool,  # True if the concurrency guard skipped
                                              # everything past the exit-check step
         "skipped_reason": str | None,       # why, when skipped_signal_generation is True
+        "shadow": dict | None,       # Milestone 11b: only present when
+                                      # settings.ENABLE_SHADOW_STRATEGY_SIGNALS is True --
+                                      # see _maybe_record_shadow_pass's docstring
       }
 
     When `circuit_breaker` is None (the default -- used by the no-args
@@ -744,6 +820,13 @@ def run_once(
 
     if signal is None:
         print("No signal generated this pass.")
+        # Milestone 11b: shadow-mode observability (see module docstring /
+        # _maybe_record_shadow_pass's docstring) -- no-op unless
+        # settings.ENABLE_SHADOW_STRATEGY_SIGNALS is True. Placed here, at
+        # this early return, so a no-signal pass still gets a RegimeSnapshot
+        # + shadow signals recorded rather than nothing at all -- the exact
+        # gap this milestone exists to close (see module docstring).
+        _maybe_record_shadow_pass(summary, candles, htf_candles)
         return summary
 
     summary["signal_found"] = True
@@ -1034,6 +1117,16 @@ def run_once(
     print(f"  executed          : yes (order_id={result.order_id})")
     print(f"  trade id          : {trade_id}")
     print(f"  reason            : {reason}")
+
+    # Milestone 11b: shadow-mode observability (see module docstring /
+    # _maybe_record_shadow_pass's docstring) -- no-op unless
+    # settings.ENABLE_SHADOW_STRATEGY_SIGNALS is True. Reuses this pass's
+    # already-computed `regime` (step 5, above -- same audit dict just
+    # persisted onto the real trade's `market_regime` column) rather than
+    # recomputing it a second time. Runs at the very end, after the real
+    # trade is fully persisted/notified/journaled, so shadow work can never
+    # influence anything about the trade that already happened this pass.
+    _maybe_record_shadow_pass(summary, candles, htf_candles, regime=regime)
     return summary
 
 

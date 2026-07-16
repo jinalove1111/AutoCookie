@@ -2814,3 +2814,82 @@ unchanged: `AVAILABLE_STRATEGIES` still exactly `{legacy, jade}`, the
 paper trader (Legacy engine) untouched and running throughout. Smoke
 check: `all_strategies()` -> `['breakout', 'jade', 'legacy',
 'range_trading', 'trend_following', 'volatility_expansion']`.
+
+---
+
+## 53. Milestone 11: shadow-mode observability -- per-pass `RegimeSnapshot` table plus non-active-strategy `ShadowSignal` recording, default-off
+
+**Decision** (2026-07-16): new tables `regime_snapshots` and
+`shadow_signals` (migration `36cb62e9e2ac`, down_revision
+`e3110e6a6b59`), new ORM models `RegimeSnapshot`/`ShadowSignal`
+(`app/database/models.py`), a new `app.portfolio.shadow_recorder.
+record_shadow_pass()`, and a new settings flag
+`ENABLE_SHADOW_STRATEGY_SIGNALS: bool = False` wired into `scripts/
+run_paper.py` at exactly two settled points of `run_once` -- the
+no-signal early return and the end of the full trade path (reusing the
+regime already computed there in both cases).
+
+**Motivation**: before this, regime data persisted ONLY on trade rows
+(`Trade.market_regime`), and Strategy Selection decisions only ever
+existed in stdout. A "no signal" pass -- the overwhelming majority of
+passes -- persisted nothing at all, so the regime-tagged dataset that
+`docs/ADAPTIVE_ARCHITECTURE.md` section 4.3's future
+`RollingPerformanceSelector` needs was only ever accumulating at TRADE
+speed, i.e. effectively zero rows to date.
+
+**(a) A per-pass `RegimeSnapshot` table instead of re-deriving regimes
+later from stored candles**: every enabled pass writes one row
+(`captured_at`/`symbol`/`timeframe`/`trend`/`volatility`/`breakout`/
+`mean_reversion`/`liquidity_sweep_environment`/`metrics` JSON). Rejected
+re-deriving regimes retroactively from historical candles -- this
+project's own precedent (`Trade.market_regime`) is to store the whole
+classification at the moment it was computed, not reconstruct it later
+from raw inputs that may not even be retained at the same resolution;
+the pass cadence itself is the honest sampling unit for this data.
+
+**(b) `shadow_signals` stores only actual would-be signals; `regime_
+snapshots` is the per-pass heartbeat**: row-volume discipline -- most
+passes produce no signal from any given strategy, and recording a row
+per (pass x strategy) regardless of outcome would bloat the table with
+no analytical value the regime snapshot doesn't already provide.
+
+**(c) The ACTIVE strategy is excluded from shadow evaluation**:
+`record_shadow_pass()` runs `all_strategies()` MINUS whichever strategy
+the Strategy Selection Engine actually selected for that pass -- its
+real signals/trades are already persisted via the existing trade/signal
+path, so including it in shadow evaluation would double-count. Each
+non-active strategy is evaluated in its own try/except so one broken
+strategy's exception never blocks recording for the others (errors are
+counted and returned, not raised).
+
+**(d) Wiring at two settled points of `run_once`, not every early-return
+branch**: the no-signal return and the end of the full trade path are
+the only two points where a regime has already been computed and the
+pass is about to conclude either way -- matching this project's existing
+"reuse what's already computed, don't recompute" discipline elsewhere in
+`run_paper.py`.
+
+**(e) Default-off (`ENABLE_SHADOW_STRATEGY_SIGNALS = False`)**: same
+opt-in-before-default-change discipline as decision #10. Flipping it in
+the live process is explicitly an OPERATOR decision, and takes effect
+only on the next trader restart -- the currently running paper-trading
+process keeps executing whatever code it already loaded, unaffected by
+a config-file edit alone (same caveat already documented for prior
+flags in this project's history).
+
+**Quarantine intact under every flag combination**: shadow mode only
+ASKS non-active strategies what they would have signaled; it never
+places an order, never influences risk gating or sizing, and never
+feeds back into `AVAILABLE_STRATEGIES` or either configured selector.
+`AVAILABLE_STRATEGIES`, `DefaultToLegacySelector`,
+`ConfigurableFallbackSelector`, and what actually trades are untouched
+regardless of whether `ENABLE_SHADOW_STRATEGY_SIGNALS` is on or off.
+
+**Status**: 16 new tests (13 in `test_shadow_observability_schema.py`, 3
+in `test_shadow_recorder.py`). `backend/tests/test_db_bootstrap.py`'s
+pinned migration head updated `e3110e6a6b59` -> `36cb62e9e2ac` per its
+own comment's mandate. Full suite 518/518 passing (was 505 after
+milestone 9). Verified with a real-temp-DB smoke script: flag ON writes
+rows and adds a `"shadow"` summary key; flag OFF writes zero rows, adds
+no key, and the rest of the summary is identical -- confirming the
+flag-off path is byte-identical to pre-milestone behavior.

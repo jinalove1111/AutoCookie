@@ -48,8 +48,9 @@ def test_fresh_sqlite_boots_via_real_alembic_migration(app_main):
     # Pinned to the current migration head. Update this alongside adding any
     # new migration (was "393afdf7fe67" prior to the adaptive-platform
     # performance-tracking migration "e3110e6a6b59", added for
-    # ENGINEERING_DECISIONS.md #44).
-    assert version == "e3110e6a6b59"
+    # ENGINEERING_DECISIONS.md #44; now "36cb62e9e2ac", the Milestone 11
+    # shadow-mode observability schema -- regime_snapshots/shadow_signals).
+    assert version == "36cb62e9e2ac"
     engine.dispose()
 
 

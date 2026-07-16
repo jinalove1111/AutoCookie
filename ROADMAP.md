@@ -82,34 +82,54 @@ either configured selector consults) is untouched, still exactly
 fee/slippage/walk-forward pipeline as production, before any promotion
 decision. See `ENGINEERING_DECISIONS.md` #52.
 
-**Natural next steps this unlocks** (not yet started, not commitments --
-the evidence-gated work milestone 9's tooling exists to enable):
-- **Backtest evaluation of the four experimental strategies**, via
-  `run_backtest.py --strategy trend_following|range_trading|breakout|
-  volatility_expansion`, across this project's standard methodology (the
-  4-asset -- BTC/ETH/SOL/XRP -- multi-period walk-forward scale already
-  used for every prior finding in this project). None of the four has
-  been run through the backtester even once as of this writing.
-  Promotion into `AVAILABLE_STRATEGIES` requires clearing the same bar
-  every other feature in this project has: in-sample selection,
-  held-out out-of-sample confirmation, and cross-asset validation before
-  being treated as a real candidate.
-- **Accumulate regime-tagged live paper data.** The Strategy Selection
-  Engine's evolution path (section 4.3 of `docs/ADAPTIVE_ARCHITECTURE.md`)
-  -- a `RollingPerformanceSelector` that picks a strategy by rolling,
-  per-regime performance evidence instead of always falling back to
-  Legacy -- remains blocked on real data: `market_regime`/`strategy_name`
-  are populated on new trades (milestones 6-7), but no strategy other than
-  Legacy has ever been live, so there is no regime-tagged history for any
-  other strategy to compare against. This accumulates naturally as paper
-  trading continues to run; no new code is required to start collecting
-  it, only time and continued operation.
-- **`RollingPerformanceSelector` stays explicitly blocked** until both of
-  the above exist -- real backtest evidence for at least one experimental
-  strategy, AND enough regime-tagged live/paper trade history (this
-  project's own established floor for trusting a result is 20+ trades,
-  `experiment_runner.MIN_TRADES_FOR_CONFIDENCE`) to make a per-regime
-  comparison meaningful rather than invented.
+**Milestone 10 (2026-07-16): evidence round 1 -- DONE, no promotions.**
+Ran all four milestone-9 experimental strategies through
+`run_backtest.py --strategy NAME` against the Legacy baseline, all five
+runs on identical BTCUSDT 15m candles (`--candles 3000 --periods 6
+--end-date 2026-07-10 --walk-forward`). Baseline PASSED walk-forward
+(+$3,400.62, 6/6 profitable periods); all four experimental strategies
+FAILED (`trend_following` -$1,009.78; `range_trading` -$2,321.08;
+`breakout` -$5,329.19, "clearly dead"; `volatility_expansion` -$892.45,
+least-bad of the four). **No promotions into `AVAILABLE_STRATEGIES`.**
+**Cross-asset/cross-year extension of this round is NOT warranted right
+now** -- three of the four strategies lost decisively on the one asset
+already tested, and the remaining `volatility_expansion` result, while
+least-bad, is still net-negative; spending a cross-asset round chasing a
+losing config would be the same undirected parameter-grinding this
+project's operator directive already told it to stop doing. If a future
+round happens, `volatility_expansion` is the one worth prioritizing.
+Full report: `docs/EXPERIMENTAL_STRATEGY_EVALUATION.md`.
+
+**Milestone 11 (2026-07-16): shadow-mode observability -- DONE,
+default-off.** New `regime_snapshots`/`shadow_signals` tables and
+`app.portfolio.shadow_recorder.record_shadow_pass()`, gated behind
+`ENABLE_SHADOW_STRATEGY_SIGNALS` (default `False`). This directly
+targets the regime-tagged-data blocker below. See
+`ENGINEERING_DECISIONS.md` #53.
+
+**Natural next steps this unlocks** (not yet started, not commitments):
+- **Enabling `ENABLE_SHADOW_STRATEGY_SIGNALS` is now the cheapest
+  available path to regime-tagged data.** Flipping the flag is an
+  OPERATOR decision (not made this round), and only takes effect on the
+  paper trader's NEXT restart -- the currently running process keeps
+  executing its already-loaded code regardless of a config-file edit.
+  Once enabled and running, it accumulates a `RegimeSnapshot` every pass
+  plus a `ShadowSignal` for every non-active strategy that would have
+  signaled, at pass speed rather than trade speed.
+- **`RollingPerformanceSelector` stays explicitly blocked.** Milestone
+  10 supplied one piece of evidence (all four experimental strategies
+  evaluated, none profitable) but not the other: enough regime-tagged
+  live/paper trade history (this project's own established floor for
+  trusting a result is 20+ trades, `experiment_runner.
+  MIN_TRADES_FOR_CONFIDENCE`) to make a per-regime comparison meaningful
+  rather than invented. `market_regime`/`strategy_name` are populated on
+  new TRADE rows (milestones 6-7), but no strategy other than Legacy has
+  ever been live, so there is still no regime-tagged trade history for
+  any other strategy to compare against -- milestone 11's shadow
+  recording is additive signal-level data, not a substitute for that
+  trade-level history. This accumulates naturally as paper trading
+  continues to run (and faster still once shadow mode is enabled); no
+  further new code is required, only an operator decision plus time.
 
 Full architecture review, gap analysis, and prioritized build order:
 `docs/ADAPTIVE_ARCHITECTURE.md`.

@@ -4,6 +4,67 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Adaptive platform milestones 10+11: evidence round 1 (no promotions) + shadow-mode observability (default-off)
+
+Two milestones landed in the same round (both 2026-07-16).
+
+**Milestone 11: shadow-mode observability.** Before this, regime data
+persisted only on trade rows (`Trade.market_regime`) and Strategy
+Selection decisions only existed in stdout -- a "no signal" pass (the
+overwhelming majority) persisted nothing, so the regime-tagged dataset
+`docs/ADAPTIVE_ARCHITECTURE.md` section 4.3's future
+`RollingPerformanceSelector` needs accumulated only at trade speed
+(effectively zero rows to date). New migration `36cb62e9e2ac`
+(down_revision `e3110e6a6b59`, additive): tables `regime_snapshots` (one
+row per paper pass when enabled) and `shadow_signals` (one row per
+signal a NON-active registered strategy would have generated), plus new
+ORM models `RegimeSnapshot`/`ShadowSignal` (`app/database/models.py`).
+New `app/portfolio/shadow_recorder.py`: `record_shadow_pass()` evaluates
+`all_strategies()` minus the active strategy, per-strategy try/except so
+one broken strategy never blocks the others. New `app/config.py` flag
+`ENABLE_SHADOW_STRATEGY_SIGNALS: bool = False` (default off), wired into
+`scripts/run_paper.py` at exactly two settled points of `run_once` (the
+no-signal early return and the end of the full trade path, reusing the
+already-computed regime) -- flag-off path verified byte-identical via a
+real-temp-DB smoke script. `backend/tests/test_db_bootstrap.py` pinned
+migration head updated `e3110e6a6b59` -> `36cb62e9e2ac`. 16 new tests
+(13 schema + 3 recorder). **518/518 full suite passing** (was 505).
+Quarantine intact: shadow mode only asks non-active strategies what they
+would have done; `AVAILABLE_STRATEGIES`, both production selectors, and
+what actually trades are untouched under every flag combination. Design
+rationale: `ENGINEERING_DECISIONS.md` #53.
+
+**Milestone 10: evidence round 1 (backtest evaluation of the four
+milestone-9 experimental strategies).** First backtest run of
+`trend_following`/`range_trading`/`breakout`/`volatility_expansion`
+against the Legacy baseline via the `--strategy` pipeline, all five runs
+on identical candles (BTCUSDT 15m, `--candles 3000 --periods 6
+--end-date 2026-07-10 --walk-forward`, standard fees/slippage):
+
+| config | trades | win rate | total PnL | profitable periods | worst DD | walk-forward |
+|---|---|---|---|---|---|---|
+| baseline (Legacy) | 111 | 75.68% | +$3,400.62 | 6/6 | 1.64% | PASSED |
+| trend_following | 146 | 26.03% | -$1,009.78 | 1/6 | 3.92% | FAILED |
+| range_trading | 258 | 17.83% | -$2,321.08 | 2/6 | 9.85% | FAILED |
+| breakout | 347 | 26.51% | -$5,329.19 | 0/6 | 12.10% | FAILED |
+| volatility_expansion | 246 | 34.55% | -$892.45 | 3/6 | 7.46% | FAILED |
+
+All sample sizes cleared this project's 20-trade evidence floor 5-17x
+over. `breakout` is "clearly dead -- do not extend without code-level
+review"; the other three are negative but not uniformly dead;
+`volatility_expansion` is least-bad (3/6 profitable periods, smallest
+loss) and the only one worth prioritizing if a future round happens.
+**No promotions** -- promotion needs cross-asset + cross-year +
+out-of-sample confirmation, none of which this round attempted. No code
+defects found; losing money is a valid evidence outcome. One
+operational note: OKX fetch failed 5x (timeouts) before succeeding for
+`trend_following`, network-layer only. Validates the platform thesis:
+the evidence pipeline + quarantine correctly rejected all four textbook
+rulesets while Legacy stayed protected throughout. Full report:
+`docs/EXPERIMENTAL_STRATEGY_EVALUATION.md`. Run artifacts in
+`scripts/reports/eval_m10_*` (gitignored by convention -- only the docs
+report is committed). Pure evidence round, no design decision recorded.
+
 ## [Unreleased] - Adaptive platform milestone 9: four new strategy-content modules, quarantined and evidence-pipeline-ready
 
 Four new `Strategy`-Protocol modules (`app/strategy/`) -- the platform's

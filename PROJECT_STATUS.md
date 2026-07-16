@@ -175,6 +175,35 @@ roadmap). **Milestones 1-7 built**:
     new strategy/registry tests + 2 new injection tests = 40 new tests.
     505/505 full suite passing. Full rationale:
     `ENGINEERING_DECISIONS.md` #52.
+10. **Evidence round 1** (2026-07-16): first backtest evaluation of the
+    four milestone-9 experimental strategies vs. the Legacy baseline,
+    via the `--strategy` pipeline, on identical BTCUSDT 15m candles
+    (`--candles 3000 --periods 6 --end-date 2026-07-10 --walk-forward`).
+    Baseline (Legacy): 111 trades, 75.68% win rate, +$3,400.62, 6/6
+    profitable periods, 1.64% worst drawdown, walk-forward PASSED. All
+    four experimental strategies FAILED walk-forward: `trend_following`
+    (146 trades, -$1,009.78, 1/6), `range_trading` (258 trades,
+    -$2,321.08, 2/6), `breakout` (347 trades, -$5,329.19, 0/6, "clearly
+    dead"), `volatility_expansion` (246 trades, -$892.45, 3/6,
+    least-bad). **No promotions** -- promotion requires cross-asset +
+    cross-year + out-of-sample confirmation, not attempted this round.
+    No code defects; losing money is a valid evidence outcome. Full
+    report: `docs/EXPERIMENTAL_STRATEGY_EVALUATION.md`.
+11. **Shadow-mode observability** (2026-07-16): new `regime_snapshots`
+    (one row per paper pass) and `shadow_signals` (one row per signal a
+    non-active registered strategy would have generated) tables
+    (migration `36cb62e9e2ac`), new ORM models `RegimeSnapshot`/
+    `ShadowSignal`, new `app.portfolio.shadow_recorder.
+    record_shadow_pass()`, wired into `scripts/run_paper.py` at the
+    no-signal early return and the end of the full trade path. New
+    settings flag `ENABLE_SHADOW_STRATEGY_SIGNALS: bool = False`
+    (**default off** -- not enabled in the live process; takes effect
+    only on the paper trader's next restart). Exists to start
+    accumulating the regime-tagged dataset `docs/ADAPTIVE_ARCHITECTURE.md`
+    section 4.3's future `RollingPerformanceSelector` needs, which to
+    date has accumulated at trade speed only (effectively zero rows). 16
+    new tests. **518/518 full suite passing** (was 505). Full rationale:
+    `ENGINEERING_DECISIONS.md` #53.
 
 **Production-behavior note**: milestones 1-6 were purely additive/
 observational. Milestone 7 was the FIRST to change actual paper-trading
@@ -183,11 +212,15 @@ rejecting signals from an auto-disabled strategy); milestone 7b adds an
 opt-in routing path that, in its default (off) configuration, changes
 nothing further. Milestone 9's four new strategy modules are quarantined
 and reachable only via `run_backtest.py --strategy`, so they change
-NOTHING about paper/live trading. All take effect only on the paper
-trader's next restart where applicable (code changes do not affect the
-already-running process, PID 24616, confirmed still running throughout
-every milestone). Legacy's own signal/entry/exit logic remains completely
-untouched.
+NOTHING about paper/live trading -- milestone 10 evidenced them (all
+failed, none promoted) without touching paper/live trading either.
+Milestone 11's shadow recording is default-off and, even once enabled,
+only observes -- it never places an order or influences selection. All
+take effect only on the paper trader's next restart where applicable
+(code changes do not affect the already-running process, PID 24616,
+confirmed still running throughout every milestone; the live process was
+NOT restarted this round). Legacy's own signal/entry/exit logic remains
+completely untouched.
 
 ## Profitability sprint (2026-07-12, operator-directed autonomous session)
 

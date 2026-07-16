@@ -124,6 +124,21 @@ class Settings(BaseSettings):
     # before flipping.
     USE_STRATEGY_SELECTOR: bool = False
 
+    # Shadow-mode strategy-signal observability (opt-in, default off --
+    # Milestone 11, 2026-07-16, docs/ADAPTIVE_ARCHITECTURE.md sections
+    # 2.4/6, ENGINEERING_DECISIONS.md #53). False (the default) preserves
+    # today's scripts/run_paper.py behavior EXACTLY -- nothing new runs,
+    # not even a regime computation, beyond the single flag check at the
+    # shadow block's entry. True makes every paper-trading pass record one
+    # `RegimeSnapshot` row and, for every registered strategy
+    # (`app.strategy.experimental.all_strategies()`) EXCEPT whichever one
+    # is actually active this pass, a `ShadowSignal` row whenever that
+    # strategy would have produced a signal on this pass's real candles.
+    # Observability only: this NEVER trades and NEVER gates a real
+    # decision -- see `app.portfolio.shadow_recorder`'s module docstring
+    # for the "quarantine intact" discipline this preserves.
+    ENABLE_SHADOW_STRATEGY_SIGNALS: bool = False
+
     @field_validator("TRADING_MODE")
     @classmethod
     def validate_trading_mode(cls, value: str) -> str:

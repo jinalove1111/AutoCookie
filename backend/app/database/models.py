@@ -232,3 +232,70 @@ class StrategyPerformanceSnapshot(Base):
     recovery_factor: Mapped[float] = mapped_column(Float, nullable=False)
     is_disabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     disabled_reason: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+
+
+# --------------------------------------------------------------------------
+# regime_snapshots / shadow_signals — shadow-mode observability (Milestone
+# 11, 2026-07-16, docs/ADAPTIVE_ARCHITECTURE.md sections 2.4/6). Motivation:
+# regime data was previously persisted only on `Trade.market_regime`
+# (milestone 2/5) and Strategy Selection Engine decisions only existed in
+# process stdout -- most paper passes produce NO trade at all, so
+# regime-tagged analysis accumulated only at trade speed, not pass speed.
+# These two tables give every paper pass a persisted, per-pass record
+# regardless of whether a trade resulted. Schema-only: wiring (writing to
+# these tables from the paper trading loop, behind a default-off flag) is
+# milestone 11b, not this change.
+# --------------------------------------------------------------------------
+class RegimeSnapshot(Base):
+    """One row per market-regime classification performed during a paper
+    pass, independent of whether a signal/trade resulted. `metrics` stores
+    the FULL `MarketRegime.metrics` audit dict (see
+    `app.regime.regime_detector.MarketRegime`), the same "store the whole
+    classification, not just a label" principle `Trade.market_regime`
+    already follows -- trend/volatility/breakout/mean_reversion/
+    liquidity_sweep_environment are promoted to real columns for fast
+    per-regime rollups, mirroring `MarketRegime`'s own field shape.
+    """
+
+    __tablename__ = "regime_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True, server_default=func.now()
+    )
+    symbol: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    timeframe: Mapped[str] = mapped_column(String(16), nullable=False)
+    trend: Mapped[str] = mapped_column(String(32), nullable=False)
+    volatility: Mapped[str] = mapped_column(String(32), nullable=False)
+    breakout: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    mean_reversion: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    liquidity_sweep_environment: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    metrics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
+class ShadowSignal(Base):
+    """One row per shadow signal actually generated (a no-signal pass
+    writes nothing here -- `RegimeSnapshot` is the per-pass record; this
+    table is per-signal). `market_regime` carries the `MarketRegime`
+    classification active at signal time (same full-dict principle as
+    `Trade.market_regime`); `signal_payload` carries the full
+    `app.strategy.signal_engine.TradeSignal` asdict, minus whatever is
+    already promoted to its own column below, for audit.
+    """
+
+    __tablename__ = "shadow_signals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True, server_default=func.now()
+    )
+    symbol: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    strategy_name: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    strategy_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    direction: Mapped[str] = mapped_column(String(8), nullable=False)
+    entry_price: Mapped[float] = mapped_column(Float, nullable=False)
+    stop_loss: Mapped[float] = mapped_column(Float, nullable=False)
+    take_profit: Mapped[float] = mapped_column(Float, nullable=False)
+    rr: Mapped[float] = mapped_column(Float, nullable=False)
+    market_regime: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    signal_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
