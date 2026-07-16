@@ -235,6 +235,38 @@ then, the evidence-accumulation bottleneck the first CTO report
 disclosed (0 sufficient cells) stands unchanged, and no further
 architecture work is scheduled ahead of it.
 
+**Research round 1 -- DONE (2026-07-16), all top-3 recommendations
+implemented as Milestone 18.** `docs/RESEARCH_ROUND_1.md` (committed,
+final) surveyed established quant technique against this platform's four
+actual open problems; its top-3 recommendations were all adopted and
+shipped the same day (see `ENGINEERING_DECISIONS.md` #58,
+`CHANGELOG.md`), while HMM regime-switching was rejected (trade
+scarcity, not classifier noise, is the evidenced bottleneck) and the
+heavyweight statistical tests were deferred (at n=20-60 they agree with
+the existing 20-sample floor). Consequences for this backlog:
+- **The execution-delay gate (`run_backtest.py --delay-check`) is now a
+  STANDARD promotion-gate check for all future candidates** -- any
+  strategy/config seeking promotion runs it alongside `--walk-forward`,
+  early, before cross-asset/cross-year effort is spent on a candidate
+  that would die on one candle of delay (the exact failure that killed
+  the `structure_tp` candidate, `docs/ROBUSTNESS_REPORT.md` test 2).
+- **The ATR stop-distance floor (`settings.MIN_STOP_ATR_MULT`, default
+  0.0 = disabled) is built and awaiting A/B evaluation** -- enabling it
+  changes trade acceptance, so a future backtest round comparing
+  candidate floor values against the baseline is the natural next
+  evidence step before it is ever turned on in paper trading; do not
+  flip it above 0.0 without that evidence.
+- **Shadow evidence quality is upgraded**: resolution model v2
+  (1-candle-delayed fills, fees, slippage -- migration `6b085b904777`)
+  is live as of the same-day trader restart, and
+  `collect_regime_evidence` counts only v2 rows toward `n` -- the
+  evidence now accumulating toward any future
+  `RollingPerformanceSelector` wiring decision no longer rests on the
+  zero-fee/zero-delay assumptions already proven decision-relevant.
+- **Pending item: performance profiling analysis** -- measurements were
+  captured, but the analysis was interrupted by the session usage limit;
+  it resumes next session.
+
 **Natural next steps after milestone 12** (superseded by the above --
 retained for continuity): the data path to a justified
 `RollingPerformanceSelector` was unchanged from what milestone 11

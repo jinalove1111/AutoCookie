@@ -354,6 +354,50 @@ practice** (`scripts/cto_report.py`, milestone 17b below).
     (tracked in `HANDOFF.md`). Full rationale:
     `ENGINEERING_DECISIONS.md` #57.
 
+18. **Research round 1's top-3 adopted: delay-check promotion gate (18a),
+    RiskManager ATR stop-distance floor (18b), realistic shadow-fill
+    resolution v2 (18c)** (2026-07-16): implements the three adopted
+    recommendations of `docs/RESEARCH_ROUND_1.md` (the Research
+    department's survey of established quant technique vs. this
+    platform's four open problems -- which also REJECTED HMM
+    regime-switching, since this platform's own analysis shows trade
+    scarcity, not classifier noise, is the bottleneck, and deferred the
+    heavyweight statistical tests as premature at n=20-60).
+    **18a**: `scripts/run_backtest.py --delay-check` --
+    `delay_robustness_report()` compares a zero-delay run vs.
+    `entry_delay_candles=1` on identical fetched candles; passes only if
+    `pf_retention >= 0.5` (disclosed-not-tuned; the reference failure,
+    `docs/ROBUSTNESS_REPORT.md` test 2, retained 0.03) AND no
+    profitable-to-unprofitable sign flip; zero trades or an undefined
+    baseline PF yield `passed=None` "insufficient data," never a fake
+    pass; composable with `--strategy`/`--walk-forward`. 12 tests.
+    **18b**: `RiskManager.evaluate()` gains caller-computed
+    `stop_distance_atr_mult`/`min_stop_atr_mult` (decision #49 pattern),
+    rejection reason `"stop_distance_below_atr_floor"`, boundary
+    mirroring `MIN_RR` (at the floor passes, strictly below rejects),
+    and a missing measurement never rejects. **`settings.
+    MIN_STOP_ATR_MULT` exists, default `0.0` = DISABLED** -- enabling it
+    changes trade acceptance and requires A/B backtest evidence first.
+    Root cause addressed: the dead candidate's 0.17-0.23%-of-price stops
+    (Wilder-convention literature: 1.5-3.0x ATR). 6 tests.
+    **18c**: migration `6b085b904777` adds
+    `shadow_signals.resolution_model` (nullable; `NULL` = legacy
+    optimistic rows, permanently distinguishable); the resolver now
+    fills at the NEXT candle's open after capture (1-candle delay),
+    applies adverse slippage and both-leg fees from `paper_broker`'s
+    real constants, and recomputes `resolved_r` from the actual fill
+    (sl can be worse than -1R; gap-through-stop resolved honestly;
+    gap-past-TP excluded as a missed entry rather than credited).
+    `collect_regime_evidence` counts only
+    `resolution_model="v2_realistic_fills"` rows toward `n` --
+    **shadow evidence is now v2 realistic** (fee/slippage/delay-
+    adjusted), no longer the fee-free optimistic upper bound.
+    **Full suite 652/652 passed / 0 failed** at commit time. Committed
+    as `4fe7496` without its docs round (session-limit boundary; docs
+    completed after the reset). Same-day ops: live DB migrated to head
+    `6b085b904777`, trader restarted with v2 active + 4-symbol shadow
+    collection. Full rationale: `ENGINEERING_DECISIONS.md` #58.
+
 **Production-behavior note**: milestones 1-6 were purely additive/
 observational. Milestone 7 was the FIRST to change actual paper-trading
 sizing/rejection math (more conservative sizing in high volatility;

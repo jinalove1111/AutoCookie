@@ -3316,3 +3316,130 @@ milestone 17a, 22 from milestone 17b). Live trader ran untouched during
 the entire build; a restart with `SHADOW_SYMBOLS` set is a pending,
 orchestrator-handled operational step that comes after commit, not part
 of this code change (see `HANDOFF.md`).
+
+---
+
+## 58. Milestone 18: `docs/RESEARCH_ROUND_1.md`'s top-3 recommendations adopted -- delay-check promotion gate (18a), RiskManager ATR stop-distance floor (18b), realistic shadow-fill resolution v2 (18c)
+
+**Decision** (2026-07-16): the Research department was tasked with
+surveying established quant-trading technique against this platform's
+four actual open problems, not a wishlist -- see `docs/RESEARCH_ROUND_1.md`
+(committed, final). All top-3 recommendations were adopted and
+implemented this milestone; each traces to a PROVEN failure mode already
+observed on this platform, not a hypothetical one. **The research
+discipline itself is worth recording**: the same round explicitly
+REJECTED HMM/Markov-switching regime detection (real literature support,
+but this platform's own `docs/REGIME_PERFORMANCE_ANALYSIS.md` already
+diagnosed the bottleneck as trade-rate scarcity, not classifier noise --
+a more persistent classifier would not increase Legacy's trade rate) and
+DEFERRED the heavyweight statistical-comparison machinery (Deflated
+Sharpe Ratio, Probability of Backtest Overfitting/CSCV, White's Reality
+Check, Hansen's SPA test) as premature -- at this platform's actual
+n=20-60 sample sizes, those techniques mostly agree with the existing
+simple n>=20-floor-plus-strict-inequality rule, so building them now
+would add real complexity for a bar the platform hasn't approached yet.
+Evidence-over-hype working as designed: real citations, real constraints,
+real "no" answers where the evidence didn't support a "yes."
+
+**18a: `scripts/run_backtest.py --delay-check` -- execution-delay
+robustness as a standard, repeatable promotion-gate check.** New
+`delay_robustness_report(baseline_result, delayed_result,
+max_pf_degradation=0.5)`: runs the SAME candles/config twice --
+zero-delay and `entry_delay_candles=1` -- and compares. Passes only if
+BOTH hold: `pf_retention >= 0.5` (disclosed-not-tuned -- chosen only as
+"materially more forgiving than what the known failure case actually
+produced"; the reference failure, `docs/ROBUSTNESS_REPORT.md` test 2,
+retained only ~0.03, i.e. kept 3% of its baseline profit factor) AND no
+profitable-to-unprofitable sign flip (checked independently, so a run
+that exactly meets the retention threshold but flips sign still fails --
+proven by a dedicated test that isolates sign-flip as the sole failure
+cause). **Honest-edges discipline**: zero trades on either side, or an
+undefined baseline PF (every baseline trade broke exactly even, a 0/0
+ratio), yields `passed=None` with `insufficient_data=True` -- never a
+fake pass, never a crash. Composable with `--strategy`/`--walk-forward`:
+when both flags are set, a combined promotion-gate summary reports
+walk-forward and delay-check as two independent gates plus one overall
+verdict. 12 new tests.
+
+**18b: `RiskManager.evaluate()` gains a minimum stop-distance-as-ATR-
+multiple floor.** New optional parameters `stop_distance_atr_mult: float
+| None = None` / `min_stop_atr_mult: float = 0.0`, following decision
+#49's established pattern exactly: `RiskManager` never reads `settings`
+for this threshold and never computes ATR itself -- the CALLER computes
+`abs(entry - stop) / atr` and passes it in, plus its own chosen floor
+(typically `settings.MIN_STOP_ATR_MULT`). Rejection reason
+`"stop_distance_below_atr_floor"`. **Boundary convention deliberately
+mirrors the existing `MIN_RR` gate**: exactly at the floor PASSES,
+strictly below REJECTS -- one consistent boundary rule across both risk
+gates rather than two different conventions a future reader would have
+to remember separately. **Missing measurement never rejects**: if
+`min_stop_atr_mult > 0.0` but the caller could not compute ATR (e.g.
+insufficient candle history), the gate WARNS-and-allows rather than
+rejecting -- missing data is not evidence of a tight stop, the same
+best-effort-observability discipline already used elsewhere in this
+codebase (e.g. shadow-mode signal recording). `settings.MIN_STOP_ATR_MULT`
+defaults to `0.0`, which DISABLES the gate and preserves prior
+`evaluate()` behavior exactly, including for signals with very tight
+stops. **Enabling this gate changes trade acceptance and requires its own
+A/B backtest evidence before flipping above 0.0 in paper trading** --
+same "implemented is not evidenced" discipline as `USE_JADE_ENGINE`/
+`ENABLE_BREAKEVEN`. **Root cause addressed, not just the symptom**: this
+directly targets what `docs/ROBUSTNESS_REPORT.md` mechanistically traced
+the platform's only fully cross-asset/cross-year-validated candidate's
+execution-delay failure to -- an average stop distance of only
+0.17-0.23% of entry price, tighter than routine single-candle price
+movement, versus the Wilder-convention literature's standard practice of
+sizing stops at 1.5-3.0x ATR. 6 new tests.
+
+**18c: realistic shadow-fill resolution (v2), closing the fee-free/
+zero-delay optimism gap in shadow evidence.** New migration
+`6b085b904777` (down-revision `65aba13281ad`) adds
+`shadow_signals.resolution_model` (nullable `String(32)`, purely
+additive). `NULL` is the PERMANENT, honest label for every row resolved
+under the old (milestone 14b) optimistic instant-fill model -- it is
+never backfilled, because doing so would misrepresent one measurement
+regime as another. Non-NULL rows carry the resolver's
+`RESOLUTION_MODEL` constant (`"v2_realistic_fills"`) at the moment they
+were resolved, leaving room for a future `"v3_..."` value the same
+additive way. **The v2 resolver** (`app.portfolio.shadow_resolver`) now:
+entry fills at the NEXT candle's open after `captured_at` (a 1-candle
+delay, mirroring `docs/ROBUSTNESS_REPORT.md` test 2's own methodology),
+adjusted by adverse-direction slippage; both entry and exit legs pay fees
+using `paper_broker.py`'s real, already-in-use constants (not new
+invented values); `resolved_r` is recomputed from the ACTUAL fill rather
+than the originally recorded signal price. Concretely: on a stop hit,
+`fee_cost = FEE_RATE * (fill_entry + stop_loss)`,
+`resolved_r = -(risk + fee_cost) / risk` -- always strictly worse than
+-1.0R since `fee_cost > 0`, whether an ordinary intra-candle stop touch
+or an entry-candle gap-through (a gap-through-stop is resolved honestly
+as worse than -1R, never floored at exactly -1R). On a TP hit,
+`fee_cost = FEE_RATE * (fill_entry + take_profit)`,
+`resolved_r = (abs(take_profit - fill_entry) - fee_cost) / risk`. A
+gap-past-TP-before-fill case is excluded as a missed entry
+(`outcome="expired"`, `resolved_r=None`) rather than optimistically
+credited as a win the platform was never actually filled into -- counted
+separately in the resolver's summary (`missed_entries`, a subset of
+`expired`) so it's distinguishable from an ordinary time-based expiry.
+**`collect_regime_evidence()` (milestone 15) now counts ONLY rows with
+`resolution_model == "v2_realistic_fills"` toward `n`** -- old
+(`NULL`) rows and rows resolved under any other model are excluded from
+`n` and counted in `n_excluded` instead, so the two measurement regimes
+(optimistic upper bound vs. fee/slippage/delay-adjusted) are never
+silently blended into one evidence pool, the same pooling-discipline
+principle that module's own docstring already established for
+shadow-vs-live blending. The disclosed shadow-optimism caveat itself
+softens accordingly, from "simulated fee-free instant fills" to
+"simulated but fee/slippage/delay-adjusted fills" for every v2-resolved
+row going forward.
+
+**Status**: full suite **652/652 passed / 0 failed** at commit time
+(18a 12 tests + 18b 6 tests + 18c's migration/resolver/evidence-layer
+tests). Committed as `4fe7496` WITHOUT this documentation round -- a
+session-limit boundary forced securing the verified code first (two
+sub-agents were killed mid-flight by the limit; the orchestrator ran the
+full QA gate itself and committed to avoid losing the work). This entry
+closes that docs debt. **Same-day ops** (tracked in `HANDOFF.md`/
+`ROADMAP.md`, not part of this code change): the live paper-trading DB
+was migrated to head `6b085b904777`, and the trader was restarted with
+the v2 resolution model active plus 4-symbol shadow collection
+(milestone 17a's `SHADOW_SYMBOLS`) running.

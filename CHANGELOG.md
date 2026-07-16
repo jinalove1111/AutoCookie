@@ -4,6 +4,63 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Adaptive platform milestone 18: research round 1's top-3 adopted -- delay-check promotion gate, RiskManager ATR stop-distance floor, realistic shadow-fill resolution (v2)
+
+2026-07-16. Implements the top-3 recommendations of
+`docs/RESEARCH_ROUND_1.md` (committed) -- the Research department's
+survey of established quant technique against this platform's four
+actual open problems. All three adopted items trace to a PROVEN failure
+mode already observed on this platform. The same round also REJECTED
+HMM regime-switching (this platform's own analysis shows trade scarcity,
+not classifier noise, is the bottleneck) and deferred the heavyweight
+statistical tests (at n=20-60 they agree with the existing 20-sample
+floor) -- evidence-over-hype working as designed.
+
+**Milestone 18a: `run_backtest.py --delay-check`.** New
+`delay_robustness_report()` compares a zero-delay run vs. an
+`entry_delay_candles=1` run on IDENTICAL fetched candles: passes only if
+`pf_retention >= 0.5` (disclosed-not-tuned; the reference failure,
+`docs/ROBUSTNESS_REPORT.md` test 2, retained only 0.03) AND no
+profitable-to-unprofitable sign flip. Honest edges: zero trades or an
+undefined baseline PF yield `passed=None` "insufficient data" -- never a
+fake pass. Composable with `--strategy`/`--walk-forward` (combined
+promotion-gate summary when both gates run). 12 new tests.
+
+**Milestone 18b: RiskManager ATR stop-distance floor.** `evaluate()`
+gains caller-computed `stop_distance_atr_mult` + `min_stop_atr_mult`
+(decision #49 pattern -- RiskManager computes nothing itself); rejection
+reason `"stop_distance_below_atr_floor"`; boundary convention mirrors
+`MIN_RR` (exactly at the floor passes, strictly below rejects); a
+missing measurement never rejects (missing data is not evidence of a
+tight stop). New `settings.MIN_STOP_ATR_MULT`, default `0.0` = DISABLED
+-- enabling changes trade acceptance and requires A/B backtest evidence
+first (implemented-is-not-evidenced discipline). Root cause addressed:
+the dead candidate's 0.17-0.23%-of-price stops (Wilder-convention
+literature: 1.5-3.0x ATR). 6 new tests.
+
+**Milestone 18c: realistic shadow fills (v2).** Migration `6b085b904777`
+adds `shadow_signals.resolution_model` (String, nullable; `NULL` =
+legacy optimistic rows, permanently distinguishable, never backfilled).
+The resolver now: fills entries at the NEXT candle's open after
+`captured_at` (1-candle delay), applies adverse slippage plus both-leg
+fees from `paper_broker`'s real imported constants, and recomputes
+`resolved_r` from the ACTUAL fill -- an sl can now be worse than -1R
+(gap-through-stop resolved honestly), and a gap-past-TP is excluded as a
+missed entry rather than optimistically credited (counted separately in
+the summary). `collect_regime_evidence` counts ONLY
+`resolution_model="v2_realistic_fills"` rows toward `n` (old rows go to
+`n_excluded`), so the two measurement regimes never mix. The disclosed
+optimism caveat softens to "simulated but fee/slippage/delay-adjusted."
+
+**Totals**: full suite **652/652 passed / 0 failed** at commit time.
+Committed as `4fe7496` without its docs round -- a session-limit
+boundary killed two sub-agents mid-flight, so the orchestrator ran the
+QA gate itself (652/652) and committed to secure the work; this docs
+round completes the debt after the reset. **Same-day ops**: the live DB
+was migrated to head `6b085b904777` and the trader restarted with v2
+resolution active plus 4-symbol shadow collection. Full rationale:
+`ENGINEERING_DECISIONS.md` #58.
+
 ## [Unreleased] - Operating-model shift to continuous CTO-driven improvement, plus adaptive platform milestone 17: multi-symbol shadow collection and daily CTO reporting
 
 2026-07-16. Adaptive-platform milestones 1-16 are complete; the operator
