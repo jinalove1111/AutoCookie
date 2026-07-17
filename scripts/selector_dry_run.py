@@ -130,6 +130,52 @@ def _connect_readonly_session(db_path: Path) -> Session:
     return Session(bind=engine, autoflush=False, autocommit=False, future=True)
 
 
+def _ensure_unrelated_write_engine_importable() -> None:
+    """Root-cause workaround for a real production failure (2026-07-17):
+    `collect_regime_evidence` -> `_collect_shadow` LAZILY imports
+    `app.portfolio.shadow_resolver` (only for its `RESOLUTION_MODEL`
+    constant) -> `app.portfolio.trades` -> `app.database.session`, whose
+    MODULE-LEVEL statement `create_engine(settings.DATABASE_URL, ...)`
+    raises `sqlalchemy.exc.ArgumentError: Could not parse SQLAlchemy URL
+    from given URL string` whenever `settings.DATABASE_URL` is unset
+    (`app/config.py`'s documented default is `""`) -- reproduced directly
+    against this project's real `paper_validation.db` when this script is
+    invoked from a shell with no `DATABASE_URL` configured (no
+    `backend/.env`, no exported env var).
+
+    This is UNRELATED to this script's own read-only DB connection
+    (`_connect_readonly_session` above, which never imports
+    `app.config.settings` / `app.database.session` at all, per this
+    module's own read-only discipline) -- it is purely a side effect of
+    an incidental lazy import three hops deep inside
+    `collect_regime_evidence`.
+
+    `create_engine()` itself never opens a connection (SQLAlchemy engines
+    are lazy) -- setting a syntactically-valid, self-contained placeholder
+    HERE, and ONLY when `DATABASE_URL` is unset, lets that one unrelated
+    module-level statement succeed without ever touching a real file and
+    without overriding an operator-configured value (an empty string is
+    pydantic-settings' documented "not configured" default, never a real
+    value an operator deliberately set).
+
+    Copied (not imported) from `scripts/cto_report.py`'s
+    `_ensure_unrelated_write_engine_importable` -- same fix, same root
+    cause, same lazy-import chain, hit here independently because this
+    script calls `collect_regime_evidence` too. Not imported cross-script
+    because `cto_report.py` sits conceptually ABOVE this one (its own
+    module docstring cites this script's read-only discipline as
+    precedent, not the other way around) and pulls in a much heavier
+    import surface (`app.portfolio.cto_report`, `app.portfolio.shadow_status`,
+    `subprocess`, report composition) that this script's minimal,
+    single-purpose, read-only-audit discipline has no other reason to
+    depend on.
+    """
+    from app.config import settings
+
+    if not settings.DATABASE_URL:
+        settings.DATABASE_URL = "sqlite://"
+
+
 def _render_table(rows: list[tuple[str, str, str]]) -> str:
     """`rows`: `(bucket, selected_name, reason)` tuples. Plain ASCII table
     (no non-ASCII glyphs anywhere) -- same Windows cp1252 console lesson
@@ -177,6 +223,7 @@ def main() -> int:
         return 1
 
     try:
+        _ensure_unrelated_write_engine_importable()
         evidence = collect_regime_evidence(
             session, window_days=args.window_days, min_samples=min_samples
         )
