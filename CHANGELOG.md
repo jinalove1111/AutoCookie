@@ -4,6 +4,70 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Adaptive platform milestone 24: cross-year evidence round on Legacy's own delay fragility -- STRUCTURAL, plus a MAX_TRADES_PER_DAY discovery
+
+2026-07-17. Full report: `docs/LEGACY_DELAY_ROBUSTNESS.md` (cite, don't
+duplicate here). **The question**: milestone 20b found the production
+Legacy baseline itself fails the 1-candle (15-minute) delay gate on the
+2026 window (PF 5.024 -> 0.117, retention 0.023, sign flip) -- a single
+window in a single year. The house cross-year discipline (already
+applied to break-even, partial TP, the tuned defaults, and the unified
+candidate before any of them were treated as settled) requires testing
+the time axis before a finding is labeled structural. This round applies
+that same discipline to the platform's own headline finding rather than
+exempting it: is the delay fragility structural, or a 2026-regime
+artifact?
+
+**Method**: one pre-declared run, the same standard BTC 2025 anchor
+every prior cross-year round uses (`--symbol BTCUSDT --timeframe 15m
+--candles 3000 --periods 6 --end-date 2025-07-10 --walk-forward
+--delay-check`), one config, no parameters tuned. Reproduced the known
+BTC-2025 baseline profile to the cent ($1,714.56, 6/6 profitable, 35.4%
+second-half retention) -- confirming apples-to-apples comparability
+before trusting the delay numbers.
+
+**Result**: baseline PF 4.593 -> delayed PF 0.068, retention **0.015**
+(vs. 2026's 0.023), sign flip YES, delay gate FAILED; walk-forward FAILED
+on the already-documented BTC-2025 degradation (correctly attributed as
+known context, not a new finding of this round).
+
+**VERDICT: STRUCTURAL.** Legacy's delay fragility fails the gate in
+BOTH tested years, and slightly worse in 2025 (retention 0.015 vs 0.023)
+despite a materially different regime (65 vs 111 trades, degrading
+walk-forward vs passing). The regime-dependent hypothesis is falsified:
+if the 2026 collapse were regime-specific, a regime this different should
+have moved retention materially toward the 0.5 criterion, not further
+away from it. `docs/ADAPTIVE_ARCHITECTURE.md` gate #4's requirement note
+upgrades from "observed in the 2026 window" to "structural property of
+the Legacy strategy family, confirmed across two independent years
+(2025, 2026) on BTCUSDT" -- the requirement's substance is unchanged, its
+justification is now cross-year. Caveats: one asset (BTCUSDT only),
+15-minute delay granularity, two Jan-Jul windows, 2024 still untested.
+
+**Second finding (first real yield from milestone 23's rejection
+instrumentation)**: 2025's low trade count (65 vs 111 in 2026) is NOT a
+signal drought -- the entry pipeline generated 869 raw signals, of which
+804 (92.5%) were rejected, and every single rejection cites the same
+reason: `trades_today 2 reached MAX_TRADES_PER_DAY 2`, the only rejection
+reason that fired anywhere in the run. Legacy's apparent selectivity in
+this window is substantially a `MAX_TRADES_PER_DAY=2` effect, not signal
+scarcity -- meaning the regime-bucket evidence starvation previously
+attributed to "Legacy trades too selectively" (`docs/
+REGIME_PERFORMANCE_ANALYSIS.md`) needs that same qualifier. Recorded as
+an insight, not a recommendation: `MAX_TRADES_PER_DAY` is a risk-limit
+constant, and any change to it is an operator-gated production-behavior
+decision, not something this round proposes.
+
+**Operational validation**: wall time ~11 minutes for the full 2025
+round (fetch + baseline + delayed + walk-forward passes) vs. ~3h05m for
+the equivalent pre-milestone-22 2026 run -- the milestone 19 + milestone
+22 performance work validated in real production use, not just isolated
+benchmarks.
+
+Full evidence, per-period tables, and the pre-declared decision rule:
+`docs/LEGACY_DELAY_ROBUSTNESS.md`. Rationale: `ENGINEERING_DECISIONS.md`
+#62.
+
 ## [Unreleased] - Adaptive platform milestones 22-23: FVG mitigation-scan quadratic term eliminated (performance round 2, corrected deferral) + risk-rejection observability
 
 2026-07-17. Two milestones, both closing gaps decision #60 left open.

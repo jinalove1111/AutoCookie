@@ -3809,3 +3809,87 @@ the whole sample's risk-gate picture in a single line.
 **Status**: full suite **690/690 passed / 0 failed** at commit time.
 Purely additive -- no behavior change to which trades happen, in
 backtest or anywhere else.
+
+---
+
+## 62. Milestone 24: the cross-year discipline applied to the platform's own headline finding -- Legacy's delay fragility is STRUCTURAL, plus the MAX_TRADES_PER_DAY discovery
+
+**Decision context**: milestone 20b found that production Legacy itself
+fails the 1-candle (15-minute) execution-delay gate on the standard 2026
+window (PF 5.024 -> 0.117, retention 0.023, sign flip) -- a genuinely
+uncomfortable finding about the project's ONLY production engine. Every
+other finding this project has elevated to "settled" status (break-even's
+cross-asset-then-cross-time coin flip, partial TP's -32.6%/-32.1%
+reproduction, the tuned defaults' BTC-2025 spot-check) was required to
+clear a cross-year check before being trusted as more than a
+single-window artifact. This decision record is about applying that same
+bar to the platform's own headline finding, not exempting it because the
+alternative -- running the check and risking a WORSE number -- would be
+more comfortable to skip. The discipline was applied uniformly.
+
+**Method**: one pre-declared run, the identical standard 2025 BTC anchor
+every prior cross-year round in this project has used, one config, no
+parameters tuned, no code touched (`docs/LEGACY_DELAY_ROBUSTNESS.md` has
+the full methodology and every number; cited, not duplicated here). The
+run first reproduced the known BTC-2025 baseline profile to the cent
+($1,714.56, 6/6 profitable periods, 35.4% second-half walk-forward
+retention) before the delay numbers were trusted -- comparability
+verified, not assumed. That walk-forward FAIL is the pre-existing,
+already-documented BTC-2025 degradation, correctly attributed as known
+context and not a new finding of this round.
+
+**Result and verdict**: 2025 baseline PF 4.593 -> delayed PF 0.068,
+retention 0.015 (WORSE than 2026's 0.023), sign flip, delay gate FAILED.
+**STRUCTURAL** -- fails both tested years, and fails slightly worse in
+the year with a materially different regime (65 trades, degrading
+walk-forward vs. 111 trades, passing walk-forward in 2026). The
+regime-dependent hypothesis -- that the 2026 collapse was an artifact of
+that window's specific conditions -- is falsified: a regime this
+different moved retention the WRONG direction (0.023 -> 0.015) if the
+hypothesis were true. `docs/ADAPTIVE_ARCHITECTURE.md` gate #4's
+requirement note is updated from "observed in the 2026 window" to
+"structural property of the Legacy strategy family, confirmed across two
+independent years (2025, 2026) on BTCUSDT" -- the requirement itself
+(verified low-latency execution as a hard prerequisite) does not change;
+only its justification strengthens from single-window to cross-year.
+Caveats carried forward honestly: one asset (BTCUSDT only, no ETH/SOL/XRP
+delay evidence exists), 15-minute delay granularity (cannot resolve
+sub-15-minute failure points), and 2024 remains untested -- "structural"
+here means "not explained by the 2026 regime," not "proven in all
+possible regimes."
+
+**Second finding, and why it is recorded but not acted on**: milestone
+23's risk-rejection instrumentation (decision #61(b)) got its first real
+use in an evidence round here, and it changed the read on 2025's low
+trade count. Of 869 raw signals generated in the 2025 window, 804
+(92.5%) were rejected, and every rejection reason that fired anywhere in
+the log was the same one: `trades_today 2 reached MAX_TRADES_PER_DAY 2`.
+2025's thin trade count (65 vs. 2026's 111) is therefore not evidence of
+a quiet signal regime -- the entry pipeline generates signals far faster
+than the daily cap lets them through. This has a direct implication for
+`docs/REGIME_PERFORMANCE_ANALYSIS.md`'s prior framing of "Legacy trades
+too selectively" as the cause of 8/9 evidence-starved regime buckets:
+that framing is now known to be substantially a `MAX_TRADES_PER_DAY=2`
+effect rather than a property of the signal-generation logic itself.
+**Why this is recorded as an insight and NOT a recommendation to raise
+the cap**: `MAX_TRADES_PER_DAY` is a risk-limit constant, not a
+signal-quality parameter -- changing it changes real trading behavior
+(position frequency, aggregate risk exposure) in a way that would need
+the same A/B-evidence-before-enabling discipline this project applies to
+every other risk-affecting change (`MIN_STOP_ATR_MULT`, `ENABLE_BREAKEVEN`,
+etc.), and it is explicitly an operator-gated decision since it trades
+off evidence throughput against a deliberately chosen risk ceiling. This
+round observes and discloses the effect; it does not propose touching
+the cap.
+
+**Operational validation, worth recording on its own**: the full 2025
+round (fetch + baseline + delayed + walk-forward passes) completed in
+~11 minutes, against ~3h05m for the equivalent pre-milestone-22 2026 run
+-- the milestone 19 (`detect_order_block` reverse-scan) and milestone 22
+(FVG mitigation-scan) performance work is now validated by a real
+production-scale evidence round completing at the expected fast speed,
+not just isolated micro-benchmarks.
+
+**Status**: evidence collection only, read-only, no orders, no writes to
+`backend/paper_validation.db`, no code touched. Full report and every
+number: `docs/LEGACY_DELAY_ROBUSTNESS.md`.

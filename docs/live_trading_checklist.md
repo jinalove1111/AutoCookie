@@ -21,13 +21,19 @@ approval alone -- **verified low-latency (sub-candle, ideally
 seconds-scale) execution infrastructure is a hard prerequisite**,
 measured signal-to-fill latency, not assumed. `docs/ATR_FLOOR_EVALUATION.md`
 found that the production Legacy strategy's backtested edge did not
-survive a 15-minute entry delay on the tested BTCUSDT window (profit
+survive a 15-minute entry delay on the tested 2026 BTCUSDT window (profit
 factor 5.024 -> 0.117, profit-to-loss sign flip, under one 15m candle of
-delay) -- the edge lives inside a sub-15-minute execution window on that
-evidence. Paper-trading fills that ignore latency will systematically
-overstate live performance for this strategy family. Do not clear gate
-#4 on backtest/paper numbers alone; measured live signal-to-fill latency
-must be part of the evidence.
+delay). This is now a **structural property of the Legacy strategy
+family, confirmed across two independent years (2025, 2026) on BTCUSDT**
+(`docs/LEGACY_DELAY_ROBUSTNESS.md`, milestone 24): the 2025 window failed
+the same gate slightly worse (retention 0.015 vs. 0.023) despite a
+materially different trading regime, falsifying the possibility that the
+2026 collapse was a regime-specific artifact -- the edge lives inside a
+sub-15-minute execution window on this evidence, not just in one year's
+conditions. Paper-trading fills that ignore latency will systematically
+overstate live performance for this strategy family, in every regime
+tested so far. Do not clear gate #4 on backtest/paper numbers alone;
+measured live signal-to-fill latency must be part of the evidence.
 
 ## Failure Behaviors
 

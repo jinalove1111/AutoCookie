@@ -382,6 +382,36 @@ prints a per-period rejection line whenever a period rejects anything,
 plus an always-printed aggregate line across `--periods`. 690/690 at
 commit. See `ENGINEERING_DECISIONS.md` #61(b).
 
+**Milestone 24 -- CLOSED (2026-07-17).** Full evidence: `docs/
+LEGACY_DELAY_ROBUSTNESS.md` (cite, don't duplicate here); rationale:
+`ENGINEERING_DECISIONS.md` #62. Applied the house cross-year discipline
+(already used for break-even, partial TP, and the tuned defaults) to
+milestone 20b's own 2026 delay-gate finding, rather than exempting it.
+One pre-declared run, the standard BTC 2025 anchor (6x3000 candles,
+`--end-date 2025-07-10`, `--walk-forward --delay-check`), reproducing
+the known BTC-2025 baseline to the cent before trusting the delay
+numbers. **Result**: baseline PF 4.593 -> delayed PF 0.068, retention
+0.015 (worse than 2026's 0.023), sign flip, delay gate FAILED;
+walk-forward FAILED on the already-documented BTC-2025 degradation
+(correctly attributed, not new). **VERDICT: STRUCTURAL** -- fails both
+tested years, slightly worse in 2025 despite a materially different
+regime (65 vs 111 trades); the regime-dependent hypothesis is falsified.
+`docs/ADAPTIVE_ARCHITECTURE.md` gate #4's requirement note upgrades to
+"structural property, confirmed across two independent years (2025,
+2026) on BTCUSDT" -- the requirement's substance is unchanged. **Second
+finding**: milestone 23's rejection instrumentation, used for the first
+time in an evidence round, found 2025's low trade count (65 vs 111) is
+not signal scarcity -- 869 raw signals, 804 (92.5%) rejected, 100% of
+fired reasons `trades_today 2 reached MAX_TRADES_PER_DAY 2`. The
+regime-bucket evidence starvation previously attributed to "Legacy
+trades too selectively" is substantially a `MAX_TRADES_PER_DAY=2`
+effect -- recorded as an insight, not acted on (see "Near-term" below
+for the conditions under which this becomes an operator decision).
+**Operational validation**: ~11 minutes wall time vs. ~3h05m for the
+equivalent pre-milestone-22 run, confirming the milestone 19/22
+performance work in production-scale use. Read-only -- no orders, no DB
+writes, no code touched.
+
 **Natural next steps after milestone 12** (superseded by the above --
 retained for continuity): the data path to a justified
 `RollingPerformanceSelector` was unchanged from what milestone 11
@@ -794,6 +824,14 @@ resumes whenever that's picked back up.
 2. **Extend cross-year testing to 2024** — only 2025/2026 tested so far
    on any asset; a 2024 window (further back, `--end-date` already
    supports it) would be a genuinely third, independent macro period.
+   **Optional, cheap follow-up flagged by milestone 24**: a
+   `--walk-forward --delay-check` run on the same 2024 BTCUSDT anchor
+   would extend the now-STRUCTURAL delay-fragility finding
+   (`docs/LEGACY_DELAY_ROBUSTNESS.md`) from a two-year to a three-year
+   evidence base at near-zero incremental cost (~11 minutes per the
+   milestone 24 timing) — not required (two independent years already
+   meets this project's cross-year evidence bar), but a natural
+   completeness item if this section is picked back up.
 3. **Break-even and Breaker Block: stop looking for a "final verdict" at
    all — treat "no reliable direction across assets OR time" as the
    actual, settled conclusion.** Both now show sign flips or
@@ -825,6 +863,24 @@ resumes whenever that's picked back up.
 6. ~~**Equal-highs/equal-lows liquidity detection**~~ — MOVED to
    "CURRENT PRIORITY" section at the top of this file (item #5); no
    longer near-term/deferred as of the 2026-07-11 operator directive.
+7. **`MAX_TRADES_PER_DAY` evidence-throughput question — flagged, NOT a
+   task, operator decision only if ever raised.** Milestone 24
+   (`docs/LEGACY_DELAY_ROBUSTNESS.md`, `ENGINEERING_DECISIONS.md` #62)
+   found the 2025 BTCUSDT window's thin trade count is substantially a
+   `trades_today 2 reached MAX_TRADES_PER_DAY 2` effect (804 of 869 raw
+   signals rejected, 92.5%, for that reason alone), not a signal
+   drought — meaning this same cap is also plausibly a major
+   contributor to the evidence-starved regime buckets
+   `docs/REGIME_PERFORMANCE_ANALYSIS.md` and the shadow-mode work
+   (milestones 11/13/15/17) have been trying to fill by other means
+   (multi-symbol shadow collection, longer accumulation time). This is
+   explicitly NOT a recommendation to raise the cap -- it is a
+   risk-limit constant, and any change to it is an operator-gated
+   production-behavior decision requiring the same A/B-evidence-first
+   discipline as `MIN_STOP_ATR_MULT`/`ENABLE_BREAKEVEN`, not a CTO-mode
+   decision. Recorded here only so the connection between "evidence
+   throughput problem" and "deliberately chosen risk ceiling" isn't
+   lost if the operator ever wants to revisit it.
 
 ## Phase 2 (deferred, out of scope for Phase 1 — do not implement yet)
 
