@@ -117,6 +117,14 @@ def test_run_below_min_candles_returns_empty_result_without_calling_engines():
     assert result.total_pnl == 0.0
     assert result.max_drawdown == 0.0
     assert result.trades == []
+    # Milestone 23 (ENGINEERING_DECISIONS.md #60): default-populated even
+    # on this short-circuit path, never a missing key.
+    assert result.risk_rejections == {
+        "total_signals": 0,
+        "approved": 0,
+        "rejected": 0,
+        "by_reason": {},
+    }
 
 
 def test_run_produces_a_real_trade_with_real_signal_and_risk_engines():
@@ -1381,3 +1389,90 @@ def test_run_min_stop_atr_mult_accepts_trade_with_stop_at_or_above_atr_floor():
     )
 
     assert result.total_trades == 1
+
+
+# --- risk_rejections observability (Milestone 23, 2026-07-17,
+# ENGINEERING_DECISIONS.md #60) --------------------------------------------
+
+
+class _FakeRejectingRiskDecision:
+    """Minimal RiskDecision-shaped stand-in with caller-controlled reasons."""
+
+    def __init__(self, reasons: list[str]):
+        self.approved = False
+        self.reasons = reasons
+
+
+class _FakeRejectingRiskManager:
+    """Always rejects, alternating between a single-reason and a
+    two-reason decision on successive calls -- lets a test prove
+    `by_reason` tallies EVERY reason on a multi-reason decision (not just
+    the first), and that the total across reasons can exceed `rejected`
+    when decisions carry more than one reason each (matching
+    `RiskManager.evaluate()`'s real "no short-circuiting" behavior).
+    """
+
+    def __init__(self):
+        self.call_count = 0
+
+    def evaluate(self, signal, trades_today=0, daily_pnl_percent=0.0, weekly_pnl_percent=0.0):
+        self.call_count += 1
+        if self.call_count % 2 == 1:
+            return _FakeRejectingRiskDecision(["reasonA", "reasonB"])
+        return _FakeRejectingRiskDecision(["reasonA"])
+
+
+def test_run_risk_rejections_counts_total_signals_and_tallies_every_reason():
+    """A fixed signal fires on every step and is rejected every time (never
+    opens a trade, so the loop advances one candle at a time for its full
+    length) -- `total_signals`/`rejected` must equal the number of steps,
+    `approved` must stay 0, and `by_reason` must tally EACH reason on
+    EVERY rejected decision (reasonA on all 4 calls, reasonB only on the
+    2 odd calls) using RiskDecision's own reason strings verbatim.
+    """
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=110.0, direction="long")
+    signal_engine = _FakeSignalEngineFixedSignal(signal)
+    # MIN_CANDLES - 1 (loop start index) .. MIN_CANDLES + 2 inclusive == 4 steps.
+    ltf_candles = _flat_ltf_candles(MIN_CANDLES + 3)
+
+    result = BacktestEngine().run(
+        ltf_candles, [], signal_engine, _FakeRejectingRiskManager(), account_balance=10000.0
+    )
+
+    assert result.total_trades == 0
+    assert result.risk_rejections == {
+        "total_signals": 4,
+        "approved": 0,
+        "rejected": 4,
+        "by_reason": {"reasonA": 4, "reasonB": 2},
+    }
+
+
+def test_run_risk_rejections_never_rejects_matches_existing_trade_behavior():
+    """An always-approving risk manager (the existing `_FakeRiskManager`
+    used throughout this file) must produce `rejected == 0`, an empty
+    `by_reason`, and `total_signals == approved` -- and, critically, the
+    resulting trade must be byte-for-byte identical to what this same
+    fixture produces without this milestone's changes (see
+    `test_run_wires_real_settings_risk_per_trade_percent_into_trade_size`),
+    proving this is purely additive observability, not a behavior change.
+    """
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=110.0, direction="long")
+    signal_engine = _FakeSignalEngineFixedSignal(signal)
+    ltf_candles = _flat_ltf_candles(MIN_CANDLES + 1)
+
+    result = BacktestEngine().run(
+        ltf_candles, [], signal_engine, _FakeRiskManager(), account_balance=10000.0
+    )
+
+    assert result.total_trades == 1
+    expected_size = calculate_position_size(
+        10000.0, settings.RISK_PER_TRADE_PERCENT, 100.0, 95.0
+    )
+    assert result.trades[0]["size"] == expected_size
+    assert result.risk_rejections == {
+        "total_signals": 1,
+        "approved": 1,
+        "rejected": 0,
+        "by_reason": {},
+    }

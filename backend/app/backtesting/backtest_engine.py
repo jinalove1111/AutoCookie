@@ -75,6 +75,18 @@ PARTIAL_TP_PORTION = 0.5
 # no-op iterations, not fix or prevent any correctness issue.
 
 
+def _empty_risk_rejections() -> dict:
+    """Default-populated shape for `BacktestResult.risk_rejections` (Milestone
+    23, 2026-07-17, ENGINEERING_DECISIONS.md #60): used both as the
+    dataclass field's `default_factory` (so ANY `BacktestResult` --
+    including the below-`MIN_CANDLES` early return, which never runs the
+    walk-forward loop at all -- always has this key with a consistent,
+    zero-populated shape, never a missing key or `None`) and as `run()`'s
+    own starting accumulator.
+    """
+    return {"total_signals": 0, "approved": 0, "rejected": 0, "by_reason": {}}
+
+
 @dataclass
 class BacktestResult:
     """Holds the outcome of a single backtest run."""
@@ -84,6 +96,22 @@ class BacktestResult:
     total_pnl: float
     max_drawdown: float
     trades: list = field(default_factory=list)
+    # Milestone 23 (2026-07-17, ENGINEERING_DECISIONS.md #60): purely
+    # additive risk-gate observability -- closes the gap where a runner
+    # "could not report how many signals the risk gate rejected or why"
+    # (docs/ATR_FLOOR_EVALUATION.md). Never influences which trades happen;
+    # it only counts what `risk_manager.evaluate()` already decided. Shape:
+    # `{"total_signals": int, "approved": int, "rejected": int, "by_reason":
+    # dict[str, int]}` -- `total_signals` is every non-`None` signal that
+    # reached a risk-evaluation call this run (== `approved + rejected`,
+    # since every such signal is evaluated exactly once); `by_reason` tallies
+    # `RiskDecision.reasons` strings verbatim (a rejected decision can carry
+    # more than one reason -- see `RiskManager.evaluate()`'s "no
+    # short-circuiting" docstring -- so `sum(by_reason.values()) >=
+    # rejected`, not necessarily `==`). Default-populated (see
+    # `_empty_risk_rejections`), never a missing key, so a consumer can
+    # always read it without a `getattr`/`None` guard.
+    risk_rejections: dict = field(default_factory=_empty_risk_rejections)
 
 
 def _get(obj: Any, key: str, default: Any = None) -> Any:
@@ -402,6 +430,19 @@ class BacktestEngine:
         ATR-scaled stop floor fix the execution-delay fragility
         `docs/ROBUSTNESS_REPORT.md` test 2 found?).
 
+        Risk-gate rejection observability (Milestone 23, 2026-07-17,
+        ENGINEERING_DECISIONS.md #60): purely additive -- see
+        `BacktestResult.risk_rejections`'s own docstring for the exact
+        shape. Every step whose signal is non-`None` (i.e. reaches a
+        `risk_manager.evaluate()` call) increments `total_signals`; that
+        call's `approved`/`rejected` outcome increments the matching
+        counter; a rejected decision's `reasons` (verbatim strings, as
+        returned by `RiskManager.evaluate()` -- see
+        `app.risk.risk_manager.RiskDecision`) each increment `by_reason`.
+        This never changes which trades happen or any existing field --
+        it only observes the SAME `risk_decision` this method already
+        computes and branches on.
+
         Walk-forward, expanding window, one trade open at a time (no
         overlap): starts at index MIN_CANDLES - 1 so LTF signal generation
         always has history. At each LTF step `i`, the HTF slice passed to
@@ -439,6 +480,7 @@ class BacktestEngine:
         trades_today = 0
         current_day: str | None = None
         htf_cursor = -1
+        risk_rejections = _empty_risk_rejections()
 
         i = MIN_CANDLES - 1
         while i < len(ltf_candles):
@@ -485,6 +527,8 @@ class BacktestEngine:
                 i += 1
                 continue
 
+            risk_rejections["total_signals"] += 1
+
             day_start, day_end = _day_bounds(ltf_timestamp)
             week_start, week_end = _week_bounds(ltf_timestamp)
             daily_pnl_percent = (
@@ -526,7 +570,14 @@ class BacktestEngine:
                     daily_pnl_percent=daily_pnl_percent,
                     weekly_pnl_percent=weekly_pnl_percent,
                 )
-            if not getattr(risk_decision, "approved", False):
+            if getattr(risk_decision, "approved", False):
+                risk_rejections["approved"] += 1
+            else:
+                risk_rejections["rejected"] += 1
+                for reason in getattr(risk_decision, "reasons", None) or []:
+                    risk_rejections["by_reason"][reason] = (
+                        risk_rejections["by_reason"].get(reason, 0) + 1
+                    )
                 i += 1
                 continue
 
@@ -618,6 +669,7 @@ class BacktestEngine:
             total_pnl=total_pnl,
             max_drawdown=calculate_max_drawdown(equity_curve),
             trades=trades,
+            risk_rejections=risk_rejections,
         )
 
     def _simulate_trade(

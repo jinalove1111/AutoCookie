@@ -22,7 +22,9 @@ if str(_SCRIPTS_DIR) not in sys.path:
 import run_backtest as run_backtest_module  # noqa: E402
 from run_backtest import (  # noqa: E402
     _parse_args,
+    aggregate_risk_rejections,
     delay_robustness_report,
+    format_risk_rejection_line,
     run_backtest,
     split_into_periods,
     walk_forward_report,
@@ -328,3 +330,74 @@ def test_run_backtest_default_min_stop_atr_mult_is_zero(monkeypatch):
     run_backtest([], [])
 
     assert captured["min_stop_atr_mult"] == 0.0
+
+
+# --- format_risk_rejection_line / aggregate_risk_rejections (Milestone 23,
+# 2026-07-17, ENGINEERING_DECISIONS.md #60) --------------------------------
+
+
+def _rej(total_signals: int, approved: int, rejected: int, by_reason: dict) -> dict:
+    """Minimal stand-in matching BacktestResult.risk_rejections's shape."""
+    return {
+        "total_signals": total_signals,
+        "approved": approved,
+        "rejected": rejected,
+        "by_reason": by_reason,
+    }
+
+
+def test_format_risk_rejection_line_no_rejections_reads_as_none():
+    line = format_risk_rejection_line(_rej(5, 5, 0, {}))
+    assert line == "signals 5, approved 5, rejected 0, top reasons: none"
+
+
+def test_format_risk_rejection_line_sorts_reasons_by_count_descending():
+    by_reason = {"rare_reason": 1, "common_reason": 10, "mid_reason": 5}
+    line = format_risk_rejection_line(_rej(16, 0, 16, by_reason))
+    assert line == (
+        "signals 16, approved 0, rejected 16, top reasons: "
+        "common_reason (10), mid_reason (5), rare_reason (1)"
+    )
+
+
+def test_format_risk_rejection_line_respects_top_n_limit():
+    by_reason = {"a": 4, "b": 3, "c": 2, "d": 1}
+    line = format_risk_rejection_line(_rej(10, 0, 10, by_reason), top_n=2)
+    assert line == "signals 10, approved 0, rejected 10, top reasons: a (4), b (3)"
+
+
+def test_format_risk_rejection_line_missing_by_reason_key_does_not_crash():
+    # Defensive: a caller-supplied dict missing "by_reason" entirely must
+    # still render (as "none"), not raise a KeyError.
+    line = format_risk_rejection_line({"total_signals": 3, "approved": 3, "rejected": 0})
+    assert line == "signals 3, approved 3, rejected 0, top reasons: none"
+
+
+def test_aggregate_risk_rejections_sums_across_periods_including_by_reason():
+    period1 = SimpleNamespace(risk_rejections=_rej(10, 8, 2, {"rr_too_low": 2}))
+    period2 = SimpleNamespace(risk_rejections=_rej(6, 4, 2, {"rr_too_low": 1, "stop_missing": 1}))
+
+    aggregate = aggregate_risk_rejections([period1, period2])
+
+    assert aggregate == {
+        "total_signals": 16,
+        "approved": 12,
+        "rejected": 4,
+        "by_reason": {"rr_too_low": 3, "stop_missing": 1},
+    }
+
+
+def test_aggregate_risk_rejections_empty_results_list_is_all_zero():
+    aggregate = aggregate_risk_rejections([])
+    assert aggregate == {"total_signals": 0, "approved": 0, "rejected": 0, "by_reason": {}}
+
+
+def test_aggregate_risk_rejections_missing_attribute_treated_as_zero_not_a_crash():
+    # Defensive fallback for a caller-supplied stand-in without
+    # risk_rejections at all (every real BacktestResult always has it).
+    missing = SimpleNamespace(total_pnl=0.0)
+    normal = SimpleNamespace(risk_rejections=_rej(3, 3, 0, {}))
+
+    aggregate = aggregate_risk_rejections([missing, normal])
+
+    assert aggregate == {"total_signals": 3, "approved": 3, "rejected": 0, "by_reason": {}}

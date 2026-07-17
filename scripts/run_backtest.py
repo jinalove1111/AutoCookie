@@ -503,6 +503,74 @@ def _fmt_optional_float(value: float | None) -> str:
     return f"{value:.3f}"
 
 
+def format_risk_rejection_line(risk_rejections: dict, top_n: int = 3) -> str:
+    """Pure, network-free formatting helper (Milestone 23, 2026-07-17,
+    ENGINEERING_DECISIONS.md #60): renders a `BacktestResult.risk_rejections`
+    dict (see `app.backtesting.backtest_engine.BacktestResult`'s docstring
+    for the exact shape -- `{"total_signals", "approved", "rejected",
+    "by_reason"}`) into a single compact line: "signals X, approved Y,
+    rejected Z, top reasons: reason1 (n1), reason2 (n2), ...".
+
+    Closes the observability gap recorded in ENGINEERING_DECISIONS.md #60
+    (docs/ATR_FLOOR_EVALUATION.md): during the ATR-floor evidence round the
+    runner could not report how many signals the risk gate rejected or why.
+
+    `top_n` (default 3): only the `top_n` most-frequent rejection reasons
+    are shown, sorted by count descending (ties broken by dict insertion
+    order, i.e. first-seen-first-shown -- Python dicts preserve insertion
+    order, and `by_reason` is built by `BacktestEngine.run()` in the walk-
+    forward's own chronological order) -- keeps the line readable even
+    when a run accumulates many distinct dynamic reason strings (e.g. the
+    RR-below-floor / loss-limit-breach reasons in
+    `app.risk.risk_manager.RiskManager.evaluate()` embed the actual
+    numeric values, so they are not a small fixed vocabulary). `by_reason`
+    empty (no rejections, or a run that never populated it) renders as
+    "top reasons: none" -- never a crash, never a misleading empty string.
+    """
+    total_signals = risk_rejections.get("total_signals", 0)
+    approved = risk_rejections.get("approved", 0)
+    rejected = risk_rejections.get("rejected", 0)
+    by_reason = risk_rejections.get("by_reason") or {}
+    top = sorted(by_reason.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+    reasons_str = ", ".join(f"{reason} ({count})" for reason, count in top) if top else "none"
+    return (
+        f"signals {total_signals}, approved {approved}, rejected {rejected}, "
+        f"top reasons: {reasons_str}"
+    )
+
+
+def aggregate_risk_rejections(results: list) -> dict:
+    """Sum `risk_rejections` (see `format_risk_rejection_line`'s docstring
+    for the shape) across a sequence of `BacktestResult`s -- each period in
+    `--periods > 1` runs completely independently (fresh account balance,
+    no shared state, same convention as `split_into_periods`'s own
+    docstring), so this is a plain per-field sum, including a per-key sum
+    for `by_reason` (a reason seen in multiple periods gets its counts
+    added together, not overwritten). Missing/absent `risk_rejections` on
+    any result (defensive -- every real `BacktestResult` always has this
+    key, see its own docstring, but this stays honest about not assuming a
+    caller-supplied stand-in does too) is treated as all-zero/empty rather
+    than raising.
+    """
+    total_signals = 0
+    approved = 0
+    rejected = 0
+    by_reason: dict[str, int] = {}
+    for result in results:
+        rr = getattr(result, "risk_rejections", None) or {}
+        total_signals += rr.get("total_signals", 0)
+        approved += rr.get("approved", 0)
+        rejected += rr.get("rejected", 0)
+        for reason, count in (rr.get("by_reason") or {}).items():
+            by_reason[reason] = by_reason.get(reason, 0) + count
+    return {
+        "total_signals": total_signals,
+        "approved": approved,
+        "rejected": rejected,
+        "by_reason": by_reason,
+    }
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -977,6 +1045,13 @@ def main() -> int:
         print(f"  win_rate      : {result.win_rate * 100:.2f}%")
         print(f"  total_pnl     : {result.total_pnl:.2f}")
         print(f"  max_drawdown  : {result.max_drawdown * 100:.2f}%")
+        # Risk-gate rejection summary (Milestone 23, 2026-07-17,
+        # ENGINEERING_DECISIONS.md #60): only printed when this period
+        # actually rejected at least one signal, keeping quiet
+        # (zero-rejection) runs quiet -- see format_risk_rejection_line's
+        # docstring.
+        if result.risk_rejections.get("rejected", 0) > 0:
+            print(f"  risk rejections: {format_risk_rejection_line(result.risk_rejections)}")
 
     # --- 3. Aggregate summary across periods (only meaningful/printed when
     # periods > 1 -- otherwise identical to the single-run output above) ---
@@ -995,6 +1070,13 @@ def main() -> int:
             "a strategy profitable in only some periods is NOT validated, "
             "regardless of the aggregate total."
         )
+        # Risk-gate rejection summary (Milestone 23, 2026-07-17,
+        # ENGINEERING_DECISIONS.md #60): unlike the per-period line above,
+        # always printed here (regardless of whether any rejections
+        # occurred) -- this is the one place a reader gets the whole
+        # sample's risk-gate picture in a single line.
+        aggregate_rejections = aggregate_risk_rejections(results)
+        print(f"  risk rejections   : {format_risk_rejection_line(aggregate_rejections)}")
 
     # --- 3b. Execution-delay robustness gate (opt-in via --delay-check,
     # Milestone 18a, 2026-07-16, docs/RESEARCH_ROUND_1.md recommendation
