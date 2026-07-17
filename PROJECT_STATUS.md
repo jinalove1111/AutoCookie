@@ -444,6 +444,47 @@ practice** (`scripts/cto_report.py`, milestone 17b below).
     insufficient. **Status: code complete in the working tree, not yet
     committed.** Full rationale: `ENGINEERING_DECISIONS.md` #59.
 
+20. **ATR stop-distance floor made A/B-testable, then REJECTED on
+    evidence; Legacy production baseline found delay-fragile**
+    (2026-07-16/17): **20a** wired the milestone 18b `RiskManager` ATR
+    stop-distance floor for A/B testing --
+    `BacktestEngine.run(min_stop_atr_mult=...)` +
+    `run_backtest.py --min-stop-atr`, ATR computed from the signal's
+    own no-lookahead slice, disabled path proven byte-identical (a
+    fake `RiskManager` that raises on unexpected kwargs exercises the
+    unflagged path). 7 new tests. **20b** ran the pre-declared evidence
+    round on the standard BTCUSDT 15m anchor (6x3000 candles,
+    `--end-date 2026-07-10`, walk-forward + delay-check every config;
+    full numbers in `docs/ATR_FLOOR_EVALUATION.md`, final): baseline
+    (floor off) 111 trades, +$3,400.62, 6/6 profitable, walk-forward
+    PASSED -- but delay-check FAILED (PF 5.024->0.117, retention 0.023,
+    profit-to-loss sign flip). `--min-stop-atr 1.5` (literature-range,
+    pre-declared): 60 trades (-46%), +$1,113.35 (-67%), 3/6 profitable,
+    walk-forward FAILED, delay retention only 0.079 (still 6x below the
+    0.5 pass bar), sign flip remained. 2.0x deliberately NOT run -- CTO
+    early stop per this project's dead-config discipline (1.5x tripled
+    retention while destroying consistency and profit, no plausible path
+    to 0.5). **VERDICT: the floor is REJECTED as a delay-robustness fix
+    -- `settings.MIN_STOP_ATR_MULT` stays `0.0` (disabled) everywhere,
+    not enabled in paper trading, not recommended for promotion.** It
+    "traded less, worse," not "traded the same, safer" -- the exact
+    negative result `docs/RESEARCH_ROUND_1.md` section 4c pre-committed
+    to recording honestly. **Headline finding**: production Legacy
+    itself fails the 1-candle delay gate on this window -- previously
+    unknown (`docs/ROBUSTNESS_REPORT.md` test 2 only delay-tested the
+    already-killed `structure_tp` candidate). Severity caveat: 1 candle
+    = 15 minutes on this anchor, 3x harsher than the original 5-minute
+    test -- read as "the edge lives inside a sub-15-minute execution
+    window," not a seconds-scale live-latency failure; walk-forward
+    validity is unchanged, this is an execution-latency requirement, not
+    a strategy invalidation. Consequence: `docs/live_trading_checklist.md`
+    gate #4 now requires verified low-latency execution infrastructure
+    as an explicit hard prerequisite. **Full suite 669/669 passed / 0
+    failed**. 20b is read-only evidence collection -- no orders placed,
+    no writes to `backend/paper_validation.db`. Full rationale:
+    `ENGINEERING_DECISIONS.md` #60, full evidence:
+    `docs/ATR_FLOOR_EVALUATION.md`.
+
 **Production-behavior note**: milestones 1-6 were purely additive/
 observational. Milestone 7 was the FIRST to change actual paper-trading
 sizing/rejection math (more conservative sizing in high volatility;
@@ -527,7 +568,7 @@ section for ideas explicitly out of scope until these 4 gates clear.
 | 1. Backtest | ✅ Complete — 4 assets x 2026, BTCUSDT also x 2025. Controlled parameter sweep complete, 4 tuned defaults adopted (+66.7% PnL vs. old defaults on BTC 2026) |
 | 2. Walk-forward validation | ✅ CLOSED under BOTH the old and new (tuned) defaults — 24/24 periods profitable across all 4 assets each time, PnL improved on every asset under the new defaults (BTC +66.7%, ETH +4.6%, SOL +32.6%, XRP +39.0%) |
 | 3. Paper trading | ✅ Pipeline complete and running (`scripts/run_paper.py`), no real capital. Risk controls hardened (circuit breaker now auto-resets) |
-| 4. Small live validation | ❌ Not started — requires operator-issued API keys + staged approval + real balance integration (`PLACEHOLDER_ACCOUNT_BALANCE` explicitly deferred here, operator decision) |
+| 4. Small live validation | ❌ Not started — requires operator-issued API keys + staged approval + real balance integration (`PLACEHOLDER_ACCOUNT_BALANCE` explicitly deferred here, operator decision). **Hardened 2026-07-17 (milestone 20, `docs/ATR_FLOOR_EVALUATION.md`)**: verified low-latency execution infrastructure (measured signal-to-fill latency, not assumed) is now an explicit prerequisite -- Legacy's backtested edge on the tested BTCUSDT window did not survive a 15-minute entry delay (PF 5.024->0.117, sign flip); walk-forward validity is unchanged, this is an execution-latency requirement, not a strategy invalidation |
 
 ## One-paragraph summary
 

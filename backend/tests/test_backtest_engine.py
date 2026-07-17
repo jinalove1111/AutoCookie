@@ -1286,3 +1286,98 @@ def test_run_tag_regimes_true_on_strategy_injection_path_also_tags():
     # The engine really did reach the strategy-injection path with real
     # (non-empty) history, not just the immediately-firing fixed signal.
     assert len(strategy.calls) >= 1
+
+
+# --- min_stop_atr_mult: Milestone 20a ATR stop-distance floor (A/B-evidence) ---
+#
+# `_flat_ltf_candles` (open=100, high=110, low=99, close=105 on every candle)
+# gives a hand-computable, CONSTANT ATR once >= 15 candles (average_true_
+# range's lookback=14, needs lookback+1 candles) are in view: every candle
+# after the first has True Range = max(high-low, |high-prev_close|,
+# |low-prev_close|) = max(110-99=11, |110-105|=5, |99-105|=6) = 11, so the
+# 14-period simple-moving-average ATR is exactly 11.0 for any window drawn
+# entirely from this fixture.
+#
+# ATR-is-None (too-short history at signal time) is documented here as
+# UNREACHABLE through `run()`, not tested: `BacktestEngine.MIN_CANDLES` is
+# 31, so the walk-forward loop's first-ever signal opportunity is at index
+# `MIN_CANDLES - 1 == 30`, i.e. `average_true_range(ltf_candles[:31])` sees
+# 31 candles -- always comfortably >= `average_true_range`'s own minimum of
+# `lookback + 1 == 15`. `average_true_range`'s own None-return path (too few
+# candles) already has direct unit coverage in test_strategy_utils.py; there
+# is no way to reach it from inside `run()`'s loop without also violating
+# `MIN_CANDLES`'s own floor, which `run()` rejects before the loop even
+# starts (see test_run_below_min_candles_returns_empty_result_without_
+# calling_engines above).
+
+
+def test_run_min_stop_atr_mult_zero_is_unchanged_behavior():
+    """min_stop_atr_mult=0.0 (the default) must be byte-for-byte identical
+    to not passing the parameter at all -- and, critically, must not pass
+    ANY new keyword argument to risk_manager.evaluate() at all. Proven here
+    by using `_FakeRiskManager`, whose `evaluate()` signature does not even
+    accept `stop_distance_atr_mult`/`min_stop_atr_mult` -- a `TypeError`
+    would fail this test immediately (not just an assertion mismatch) if
+    the gate were ever wired to pass those kwargs unconditionally.
+    """
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=110.0, direction="long", rr=2.0)
+    ltf_candles = _flat_ltf_candles(MIN_CANDLES + 1)
+
+    result_default = BacktestEngine().run(
+        ltf_candles, [], _FakeSignalEngineFixedSignal(signal), _FakeRiskManager(),
+        account_balance=10000.0,
+    )
+    result_explicit_zero = BacktestEngine().run(
+        ltf_candles, [], _FakeSignalEngineFixedSignal(signal), _FakeRiskManager(),
+        account_balance=10000.0, min_stop_atr_mult=0.0,
+    )
+
+    assert result_default.trades == result_explicit_zero.trades
+
+
+def test_run_min_stop_atr_mult_rejects_trade_with_stop_tighter_than_atr_floor():
+    """min_stop_atr_mult=1.0 with a stop 5 wide against a hand-computed
+    ATR of 11.0 (stop_distance_atr_mult = 5/11 ~= 0.4545, below the 1.0
+    floor) must be REJECTED by the real RiskManager -- the loop reaches
+    the risk check every step (fixed signal fires every step) but never
+    opens a trade.
+    """
+    signal = _FakeSignal(
+        entry_price=100.0, stop_loss=95.0, take_profit=110.0, direction="long", rr=2.0
+    )
+    ltf_candles = _flat_ltf_candles(MIN_CANDLES + 1)
+
+    result = BacktestEngine().run(
+        ltf_candles,
+        [],
+        _FakeSignalEngineFixedSignal(signal),
+        RiskManager(),
+        account_balance=10000.0,
+        min_stop_atr_mult=1.0,
+    )
+
+    assert result.total_trades == 0
+
+
+def test_run_min_stop_atr_mult_accepts_trade_with_stop_at_or_above_atr_floor():
+    """Same fixture/ATR (11.0) and same min_stop_atr_mult=1.0 floor, but a
+    stop 11 wide (stop_distance_atr_mult = 11/11 = 1.0, exactly AT the
+    floor -- boundary convention per RiskManager.evaluate()'s docstring:
+    exactly at the floor PASSES) must be ACCEPTED, proving the gate isn't
+    simply rejecting every trade once enabled.
+    """
+    signal = _FakeSignal(
+        entry_price=100.0, stop_loss=89.0, take_profit=122.0, direction="long", rr=2.0
+    )
+    ltf_candles = _flat_ltf_candles(MIN_CANDLES + 1)
+
+    result = BacktestEngine().run(
+        ltf_candles,
+        [],
+        _FakeSignalEngineFixedSignal(signal),
+        RiskManager(),
+        account_balance=10000.0,
+        min_stop_atr_mult=1.0,
+    )
+
+    assert result.total_trades == 1

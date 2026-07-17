@@ -12,6 +12,7 @@ from app.backtesting.performance import calculate_max_drawdown, calculate_win_ra
 from app.config import settings
 from app.regime.regime_detector import detect_market_regime
 from app.risk.position_sizing import calculate_position_size
+from app.strategy.utils import average_true_range
 
 if TYPE_CHECKING:
     # Import guarded behind TYPE_CHECKING (not a runtime import) so this
@@ -196,6 +197,7 @@ class BacktestEngine:
         atr_stop_multiplier: float | None = None,
         strategy: "Strategy | None" = None,
         tag_regimes: bool = False,
+        min_stop_atr_mult: float = 0.0,
     ) -> "BacktestResult":
         """Replays historical LTF candles (with a time-aligned, no-lookahead
         HTF slice at each step) through the Strategy Engine and Risk Engine
@@ -363,6 +365,43 @@ class BacktestEngine:
         a consumer can distinguish "untagged run" from "tagged run, no
         classification available" purely by key absence vs. presence.
 
+        `min_stop_atr_mult` (default `0.0`, opt-in -- Milestone 20a,
+        2026-07-16, the A/B-evidence round that decides whether the
+        Milestone 18b ATR stop-distance floor may ever be enabled: the
+        gate itself (`stop_distance_atr_mult`/`min_stop_atr_mult`) has
+        existed in `app.risk.risk_manager.RiskManager.evaluate()` since
+        18b, but nothing in the backtest path could exercise it until
+        now -- it was implemented but never evidenced. `min_stop_atr_mult
+        <= 0.0` (the default): the gate stays disabled and
+        `risk_manager.evaluate()` is called with EXACTLY the same
+        arguments as before this parameter existed -- byte-identical for
+        every existing caller, including test fakes/mocks whose
+        `evaluate()` signature doesn't even accept the new keywords.
+        `min_stop_atr_mult > 0.0`: at each signal that reaches the risk
+        check, ATR is measured EXACTLY ONCE via
+        `average_true_range(ltf_candles[: i + 1])`
+        (`app.strategy.utils.average_true_range`, lookback 14) -- the
+        SAME no-lookahead slice (`ltf_candles[: i + 1]`) the signal
+        itself was generated from at this step; no new candle fetch, no
+        history beyond what is already in scope. `stop_distance_atr_mult`
+        is then `abs(signal.entry_price - signal.stop_loss) / atr` when
+        `atr` is a positive number and both prices are present, else
+        `None` -- the `None` case (too little history for
+        `average_true_range`'s own `lookback + 1` minimum, or a signal
+        missing a price) mirrors `RiskManager.evaluate()`'s documented
+        WARN-and-allow semantics for a missing measurement (see that
+        method's own docstring): it is never itself evidence of a tight
+        stop, never a rejection on its own. Both values are passed
+        straight through to `risk_manager.evaluate(...,
+        stop_distance_atr_mult=..., min_stop_atr_mult=...)`, which
+        performs the actual accept/reject decision -- this parameter only
+        supplies the caller-computed measurement that gate's docstring
+        requires; `BacktestEngine` itself has no opinion on what floor is
+        reasonable. Designed to be composed with `scripts/run_backtest.py`'s
+        `--delay-check` (the whole point of this milestone: does a wider,
+        ATR-scaled stop floor fix the execution-delay fragility
+        `docs/ROBUSTNESS_REPORT.md` test 2 found?).
+
         Walk-forward, expanding window, one trade open at a time (no
         overlap): starts at index MIN_CANDLES - 1 so LTF signal generation
         always has history. At each LTF step `i`, the HTF slice passed to
@@ -455,12 +494,38 @@ class BacktestEngine:
                 _realized_pnl_in_window(trades, week_start, week_end) / starting_balance
             ) * 100
 
-            risk_decision = risk_manager.evaluate(
-                signal,
-                trades_today=trades_today,
-                daily_pnl_percent=daily_pnl_percent,
-                weekly_pnl_percent=weekly_pnl_percent,
-            )
+            if min_stop_atr_mult > 0.0:
+                # Milestone 20a ATR stop-distance floor (default-off, see
+                # `min_stop_atr_mult`'s docstring above): measured EXACTLY
+                # ONCE per signal, from the identical no-lookahead slice
+                # (`ltf_candles[: i + 1]`) the signal itself was generated
+                # from -- no new fetch, no extra history.
+                atr = average_true_range(ltf_candles[: i + 1])
+                entry_price = getattr(signal, "entry_price", None)
+                stop_loss = getattr(signal, "stop_loss", None)
+                stop_distance_atr_mult = (
+                    abs(entry_price - stop_loss) / atr
+                    if atr is not None
+                    and atr > 0
+                    and entry_price is not None
+                    and stop_loss is not None
+                    else None
+                )
+                risk_decision = risk_manager.evaluate(
+                    signal,
+                    trades_today=trades_today,
+                    daily_pnl_percent=daily_pnl_percent,
+                    weekly_pnl_percent=weekly_pnl_percent,
+                    stop_distance_atr_mult=stop_distance_atr_mult,
+                    min_stop_atr_mult=min_stop_atr_mult,
+                )
+            else:
+                risk_decision = risk_manager.evaluate(
+                    signal,
+                    trades_today=trades_today,
+                    daily_pnl_percent=daily_pnl_percent,
+                    weekly_pnl_percent=weekly_pnl_percent,
+                )
             if not getattr(risk_decision, "approved", False):
                 i += 1
                 continue

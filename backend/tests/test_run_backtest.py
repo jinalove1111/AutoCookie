@@ -19,8 +19,11 @@ _SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "scripts"
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
+import run_backtest as run_backtest_module  # noqa: E402
 from run_backtest import (  # noqa: E402
+    _parse_args,
     delay_robustness_report,
+    run_backtest,
     split_into_periods,
     walk_forward_report,
 )
@@ -259,3 +262,69 @@ def test_delay_robustness_report_custom_max_pf_degradation_threshold():
     assert report["pf_retention"] == pytest.approx(0.5)
     assert report["passed"] is False
     assert report["criteria"]["max_pf_degradation"] == 0.9
+
+
+# --- --min-stop-atr CLI flag threading (Milestone 20a) -------------------
+
+
+def test_parse_args_min_stop_atr_defaults_to_zero_disabled():
+    args = _parse_args([])
+    assert args.min_stop_atr == 0.0
+
+
+def test_parse_args_min_stop_atr_parses_a_float_value():
+    args = _parse_args(["--min-stop-atr", "1.5"])
+    assert args.min_stop_atr == pytest.approx(1.5)
+
+
+def test_run_backtest_threads_min_stop_atr_mult_into_engine(monkeypatch):
+    """run_backtest() must forward min_stop_atr_mult straight through to
+    BacktestEngine.run(..., min_stop_atr_mult=...) -- proven here with a
+    fake BacktestEngine (no real candles/network needed) that just
+    captures the kwargs it was called with, following this project's
+    existing "follow the flag threading, not the strategy internals"
+    convention for CLI-plumbing tests.
+    """
+    captured: dict = {}
+
+    class _FakeResult:
+        total_trades = 0
+        win_rate = 0.0
+        total_pnl = 0.0
+        max_drawdown = 0.0
+        trades: list = []
+
+    class _FakeEngine:
+        def run(self, *args, **kwargs):
+            captured.update(kwargs)
+            return _FakeResult()
+
+    monkeypatch.setattr(run_backtest_module, "BacktestEngine", _FakeEngine)
+
+    run_backtest([], [], min_stop_atr_mult=1.5)
+
+    assert captured["min_stop_atr_mult"] == 1.5
+
+
+def test_run_backtest_default_min_stop_atr_mult_is_zero(monkeypatch):
+    """Omitting min_stop_atr_mult (every existing caller) must thread 0.0
+    (disabled) through, unchanged."""
+    captured: dict = {}
+
+    class _FakeResult:
+        total_trades = 0
+        win_rate = 0.0
+        total_pnl = 0.0
+        max_drawdown = 0.0
+        trades: list = []
+
+    class _FakeEngine:
+        def run(self, *args, **kwargs):
+            captured.update(kwargs)
+            return _FakeResult()
+
+    monkeypatch.setattr(run_backtest_module, "BacktestEngine", _FakeEngine)
+
+    run_backtest([], [])
+
+    assert captured["min_stop_atr_mult"] == 0.0

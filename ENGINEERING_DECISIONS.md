@@ -3547,3 +3547,109 @@ because 22% is a round number worth chasing on its own.
 **Status**: full suite **653/653 passed / 0 failed** (652 baseline from
 milestone 18, +1 permanent property test). Code complete in the working
 tree as of this entry; not yet committed (tracked in `HANDOFF.md`).
+
+---
+
+## 60. Milestone 20: the ATR stop-distance floor A/B-tested and REJECTED -- the A/B-first discipline vindicated, and the Legacy production baseline itself found delay-fragile
+
+**Decision** (2026-07-16/17): milestone 18b built `RiskManager.evaluate()`'s
+`min_stop_atr_mult` gate but shipped it default-`0.0` (disabled),
+explicitly deferring enablement until A/B backtest evidence existed --
+"implemented is not evidenced" (decision precedent already established
+for `use_breakeven`/`use_partial_tp`/`use_breaker_block`). **20a** made
+that gate A/B-testable: `BacktestEngine.run()` gained a
+`min_stop_atr_mult` parameter and `scripts/run_backtest.py` gained
+`--min-stop-atr`, computing ATR from the signal's own no-lookahead
+slice (never a forward-looking window) and threading it into the same
+caller-computed `RiskManager.evaluate()` contract milestone 18b built.
+The disabled path (no flag passed) was proven byte-identical, not just
+assumed: a test using a fake `RiskManager` that raises `TypeError` on
+unexpected kwargs was run through the unflagged path, so the new
+kwargs leaking into the disabled path would have failed the suite, not
+just silently changed behavior. 7 new tests, full suite **669/669**.
+
+**20b ran the A/B evidence round the gate was built for, and the floor
+FAILED.** Methodology and full numbers: `docs/ATR_FLOOR_EVALUATION.md`
+(final; cite, do not duplicate here). Identical BTCUSDT 15m anchor
+(6x3000 candles, `--end-date 2026-07-10`, walk-forward + delay-check on
+every config). **Baseline** (floor off, i.e. current production
+behavior): 111 trades, +$3,400.62, 6/6 profitable periods, walk-forward
+PASSED -- but delay-check FAILED (PF 5.024 -> 0.117 under one candle of
+delay, retention 0.023, profit-to-loss sign flip). **1.5x floor**
+(`docs/RESEARCH_ROUND_1.md` section 4a's literature-convention range,
+pre-declared before any run): 60 trades (-46%), +$1,113.35 (-67%), only
+3/6 profitable periods, walk-forward now FAILED, delay retention only
+moved to 0.079 (still 6x below the 0.5 pass criterion), sign flip
+remained. **2.0x was deliberately NOT run** -- an early stop, made by
+the CTO after 1.5x's result was in, per this project's established
+"don't burn compute on clearly-dead configs" discipline (same discipline
+`docs/EXPERIMENTAL_STRATEGY_EVALUATION.md` section 4 already used
+once). Reasoning for the stop: 1.5x moved retention 0.023 -> 0.079 while
+simultaneously destroying walk-forward consistency and cutting net
+profit by two-thirds; a strictly stricter 2.0x floor rejects strictly
+more signals via the same mechanism, and there is no plausible path
+from 0.079 to the 0.5 criterion that doesn't first explain why more of
+a mechanism that is already making things worse would reverse rather
+than deepen the result. The stop is recorded explicitly, including its
+consequence (2.0x remains formally untested), rather than smoothed over.
+
+**Verdict: ATR stop-distance floor REJECTED as a delay-robustness fix.
+`settings.MIN_STOP_ATR_MULT` stays `0.0` (disabled) everywhere -- not
+enabled in paper trading, not recommended for promotion.** Measured
+against this project's keep-rule (must materially improve delay
+retention / remove the sign flip AND not materially degrade net
+profit/PF/drawdown), the floor failed both halves at once: delay
+retention stayed 6x below the pass bar with the sign flip intact, while
+net profit fell 67%, PF fell 53%, and walk-forward flipped PASS ->
+FAIL. The floor's only observable effect was rejecting ~46% of signals
+-- it thinned the trade population rather than selecting for
+delay-robust entries; the ATR-scaled-stops-survive-one-candle
+hypothesis from `docs/RESEARCH_ROUND_1.md` #2 is falsified on this
+evidence. This is exactly the negative result section 4c of that
+document pre-committed to recording honestly rather than quietly
+adjusting the threshold to force a pass -- **the A/B-first discipline
+built into 18b is vindicated**: a literature-backed, plausible-sounding
+fix was rejected by its own pre-declared evidence before it ever touched
+production, exactly what deferring enablement behind evidence is for.
+
+**The headline finding is not about the ATR floor at all: production
+Legacy itself fails the delay gate on this window.** The baseline row
+above -- 6/6 profitable, walk-forward PASSED, the platform's only
+production engine -- collapses under a single candle of execution delay
+(PF 5.024 -> 0.117, sign flip, delay-check FAILED). This was previously
+unknown: `docs/ROBUSTNESS_REPORT.md` test 2 delay-tested only the
+(already-killed) `structure_tp` candidate; this is the first time the
+Milestone 18a delay gate has been run against Legacy itself. Delay
+fragility is therefore a property of the shared entry pipeline on this
+window, not a defect isolated to one candidate. **Severity caveat,
+stated plainly and not softened**: this anchor is 15m, so 1 candle of
+delay = 15 minutes -- three times harsher than the 5-minute delay that
+killed `structure_tp`. This does NOT show Legacy loses money at
+realistic (seconds-scale) execution latency; what it does show is that
+Legacy's backtested edge on this window lives entirely inside a
+sub-15-minute execution window. Consequence for `docs/live_trading_checklist.md`
+gate #4 (small live validation): verified low-latency execution
+infrastructure -- measured signal-to-fill latency, not assumed -- is now
+an explicit hard prerequisite, not an implicit assumption.
+
+**Ops/process notes worth recording**: (1) an instrumentation gap --
+`run_backtest.py`'s current output does not print how many signals the
+floor rejected; the 111->60 trade-count drop is the observable proxy,
+not a direct count, noted rather than inferred. (2) Wall-clock timing is
+new evidence for the Fix B performance backlog (milestone 19's
+deferred item): baseline run ~3h05m, 1.5x run ~1h17m, both far over the
+~5-15 min/config estimate -- `--delay-check` triples engine passes
+(three full runs per config), and 1.5x's ~2.4x faster wall time despite
+identical candle counts suggests runtime scales with trade-management
+volume, not just candle count. (3) One background-task harness kill
+(a first baseline attempt, launched as a harness background task, was
+killed by the task runner after ~1h with no output) was worked around by
+launching the successful runs as detached OS processes. (4) The live
+paper trader was killed once by that same harness cleanup and was
+relaunched immediately on latest source (including Milestone 21
+alerting) -- unrelated to the evaluation itself, noted for continuity.
+
+**Status**: 20a code-complete in the working tree, full suite
+**669/669 passed / 0 failed**. 20b is a read-only evidence round --
+no orders placed, no writes to `backend/paper_validation.db`. Full
+evidence: `docs/ATR_FLOOR_EVALUATION.md` (final).

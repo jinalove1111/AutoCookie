@@ -168,6 +168,7 @@ def run_backtest(
     atr_stop_multiplier: float | None = None,
     strategy: Any = None,
     tag_regimes: bool = False,
+    min_stop_atr_mult: float = 0.0,
 ) -> Any:
     """Replay `ltf_candles`/`htf_candles` once through the real
     Strategy/Risk/Backtest engines.
@@ -195,6 +196,15 @@ def run_backtest(
     does. Default `False` preserves the exact prior behavior (no
     `"market_regime"` key at all on trade dicts) for every existing
     caller.
+
+    `min_stop_atr_mult` (default `0.0`, Milestone 20a, 2026-07-16):
+    threaded straight through to `BacktestEngine.run(...,
+    min_stop_atr_mult=...)` -- see that parameter's own docstring for
+    the full A/B-evidence rationale (this is the caller-side plumbing
+    only; `BacktestEngine` does the actual ATR measurement and
+    `RiskManager` the actual accept/reject decision). Default `0.0`
+    preserves the exact prior behavior (gate disabled, identical
+    `risk_manager.evaluate()` call) for every existing caller.
     """
     return BacktestEngine().run(
         ltf_candles,
@@ -219,6 +229,7 @@ def run_backtest(
         atr_stop_multiplier=atr_stop_multiplier,
         strategy=strategy,
         tag_regimes=tag_regimes,
+        min_stop_atr_mult=min_stop_atr_mult,
     )
 
 
@@ -755,6 +766,29 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--min-stop-atr",
+        dest="min_stop_atr",
+        type=float,
+        default=0.0,
+        help=(
+            "Minimum stop-distance-as-ATR-multiple floor (opt-in, default "
+            "0.0 = disabled, Milestone 20a, 2026-07-16). Threaded straight "
+            "through to BacktestEngine.run(..., min_stop_atr_mult=...) -- "
+            "the ATR-floor gate has existed in RiskManager.evaluate() "
+            "since Milestone 18b (docs/RESEARCH_ROUND_1.md recommendation "
+            "#2) but this flag is what makes it exercisable in a "
+            "backtest, so it can finally be evidenced instead of only "
+            "implemented -- the gate stays default-off everywhere until "
+            "that evidence exists. Designed to be COMBINED with "
+            "--delay-check: that is the whole point of this milestone -- "
+            "does a wider, ATR-scaled stop floor fix the execution-delay "
+            "fragility docs/ROBUSTNESS_REPORT.md test 2 found? Run the "
+            "same --symbol/--timeframe/--candles/--periods with and "
+            "without this flag (and with --delay-check) and compare; "
+            "0.0 (default) reproduces today's behavior exactly."
+        ),
+    )
+    parser.add_argument(
         "--end-date",
         default=None,
         help=(
@@ -849,6 +883,10 @@ def main() -> int:
     print(f"Partial take-profit: {'ENABLED' if args.partial_tp else 'disabled'}")
     print(f"Strict confluence (sweep AND choch): {'ENABLED' if args.strict_confluence else 'disabled'}")
     print(f"Regime tagging: {'ENABLED' if args.tag_regimes else 'disabled'}")
+    print(
+        "ATR stop-distance floor (min_stop_atr_mult): "
+        f"{args.min_stop_atr if args.min_stop_atr > 0.0 else 'disabled'}"
+    )
     print(f"Fetched {len(candles)} candles for {args.symbol}/{args.timeframe}.")
     if len(candles) < total_requested:
         print(
@@ -923,6 +961,7 @@ def main() -> int:
                 use_jade_engine=args.jade_engine,
                 strategy=strategy_obj,
                 tag_regimes=args.tag_regimes,
+                min_stop_atr_mult=args.min_stop_atr,
             )
         except Exception as exc:  # unexpected engine failure is a genuine failure
             print(f"ERROR: backtest engine raised an exception on period {period_num}: {exc}")
@@ -982,6 +1021,7 @@ def main() -> int:
                 use_jade_engine=args.jade_engine,
                 strategy=strategy_obj,
                 entry_delay_candles=0,
+                min_stop_atr_mult=args.min_stop_atr,
             )
             delayed_result = run_backtest(
                 candles,
@@ -996,6 +1036,7 @@ def main() -> int:
                 use_jade_engine=args.jade_engine,
                 strategy=strategy_obj,
                 entry_delay_candles=1,
+                min_stop_atr_mult=args.min_stop_atr,
             )
         except Exception as exc:  # unexpected engine failure is a genuine failure
             print(f"ERROR: backtest engine raised an exception during --delay-check: {exc}")

@@ -307,6 +307,43 @@ the existing 20-sample floor). Consequences for this backlog:
     before trusting any measured speedup. Any future performance round
     should follow this same sequence rather than starting from
     intuition about what "looks slow."
+  - **New performance-backlog evidence (milestone 20b, 2026-07-16/17):
+    `--delay-check` triples engine passes** (three full runs per
+    config -- zero-delay, `entry_delay_candles=1`, plus the walk-forward
+    scan) and wall-clock timing came in far over estimate on both
+    milestone-20 configs (baseline ~3h05m, `--min-stop-atr 1.5` ~1h17m,
+    against a ~5-15 min/config estimate). This strengthens the case for
+    Fix B below whenever a future round needs `--delay-check` combined
+    with `--walk-forward` at this project's standard 3000-candle/6-period
+    scale -- not itself a reason to schedule Fix B on its own, per the
+    condition already stated.
+
+**Milestone 20 -- CLOSED (2026-07-16/17).** Full evidence:
+`docs/ATR_FLOOR_EVALUATION.md` (final); rationale: `ENGINEERING_DECISIONS.md`
+#60; cite, don't duplicate here. **20a** made the milestone 18b ATR
+stop-distance floor A/B-testable (`BacktestEngine.run(min_stop_atr_mult=
+...)` + `run_backtest.py --min-stop-atr`, disabled path proven
+byte-identical), 7 new tests, 669/669. **20b** ran the pre-declared
+evidence round (BTCUSDT 15m, 6x3000, `--end-date 2026-07-10`,
+walk-forward + delay-check every config): baseline (floor off) 111
+trades/+$3,400.62/6/6 profitable/walk-forward PASSED but delay-check
+FAILED (PF 5.024->0.117, retention 0.023, sign flip); `--min-stop-atr
+1.5` 60 trades (-46%)/+$1,113.35 (-67%)/3/6 profitable/walk-forward
+FAILED/retention 0.079 (still 6x below the 0.5 pass bar)/sign flip
+remains; 2.0x deliberately NOT run (CTO early stop, dead-config
+discipline -- no plausible path from 0.079 to 0.5). **VERDICT: the
+floor is REJECTED as a delay-robustness fix -- `settings.
+MIN_STOP_ATR_MULT` stays `0.0` everywhere, not enabled in paper trading,
+not recommended for promotion.** This closes the "ATR stop-distance
+floor... awaiting A/B evaluation" item flagged under milestone 18 above
+-- the evaluation ran, and the answer is no. **Headline finding:
+production Legacy itself fails the 1-candle (15-minute) delay gate on
+this window** -- previously unknown, read as "the edge lives inside a
+sub-15-minute execution window," not a seconds-scale live-latency
+failure (see "Phase 1 gate status" and "Explicitly NOT started" below
+for the gate #4 consequence). No further ATR-floor work is scheduled;
+future work on delay fragility should target the entry pipeline's
+shared delay sensitivity, not this specific floor.
 
 **Natural next steps after milestone 12** (superseded by the above --
 retained for continuity): the data path to a justified
@@ -399,7 +436,7 @@ resume per the original operator directive; separately, Phase 1 gate #3
 | 1. Backtest | ✅ Complete, extensively validated | 4 assets (BTC/ETH/SOL/XRP) x 2026, BTCUSDT also x 2025 — see "Done" below and `CHANGELOG.md`. Every core rule in `docs/strategy_coverage_audit.md` is now implemented, tested, and (where ever ambiguous) resolved with A/B evidence — zero remaining HIGH-priority items, see that doc's summary. **Controlled parameter sweep complete** (`docs/parameter_sweep_report.md`): 4 tuned defaults adopted (`_RR` 2.0->2.5, `_STOP_BUFFER` 0.001->0.0015, `_LOOKBACK` 10->15, `_IMPULSE_MULT` 1.5->1.8), all cleared in-sample + out-of-sample + cross-asset + cross-year validation, +66.7% PnL on the standard BTC 2026 methodology with walk-forward still passing cleanly |
 | 2. Walk-forward validation | ✅ CLOSED — PASSED on all 4 assets under BOTH the old AND the new (tuned) defaults | `run_backtest.py --walk-forward` — explicit PASS/FAIL criteria (profitable-period ratio, max losing streak, degradation trend). Old defaults: 24/24 periods profitable across BTC/ETH/SOL/XRP. New (tuned) defaults, re-confirmed 2026-07-11: **also 24/24 periods profitable across all 4 assets**, 0 losing streaks anywhere, no degradation in any asset, PnL improved on every asset vs. the old defaults (BTC +66.7%, ETH +4.6%, SOL +32.6%, XRP +39.0%, total +33.3%) |
 | 3. Paper trading | ✅ Pipeline complete and running | `scripts/run_paper.py` — real open/close/PnL against live OKX data, no real capital. Break-even wired in (off by default, permanently — see research findings). Risk controls (RR floor, daily/weekly loss limits, circuit breaker, position sizing) all real and enforced. Circuit breaker now auto-resets once a fresh daily/weekly check clears (previously a documented gap — a trip halted trading permanently with no operator-facing reset path) |
-| 4. Small live validation | ❌ Not started, intentionally gated | Requires operator-issued API keys + staged approval — explicit stop condition, not a CTO-mode decision. **Scope decision (operator, 2026-07-11)**: replacing `settings.PLACEHOLDER_ACCOUNT_BALANCE` (fixed $10,000 constant used for position sizing and loss-limit math) with a real, live-queried exchange balance is explicitly deferred to THIS gate, not built during Phase 1 paper trading — paper trading has no real capital regardless, so the placeholder is honest and sufficient until real capital is actually at risk |
+| 4. Small live validation | ❌ Not started, intentionally gated | Requires operator-issued API keys + staged approval — explicit stop condition, not a CTO-mode decision. **Scope decision (operator, 2026-07-11)**: replacing `settings.PLACEHOLDER_ACCOUNT_BALANCE` (fixed $10,000 constant used for position sizing and loss-limit math) with a real, live-queried exchange balance is explicitly deferred to THIS gate, not built during Phase 1 paper trading — paper trading has no real capital regardless, so the placeholder is honest and sufficient until real capital is actually at risk. **Hardened 2026-07-17 (milestone 20, `docs/ATR_FLOOR_EVALUATION.md`)**: verified low-latency (sub-candle, ideally seconds-scale) execution infrastructure — measured signal-to-fill latency, not assumed — is now an explicit prerequisite of this gate. Legacy's backtested edge on the tested BTCUSDT window did not survive a 15-minute (1-candle) entry delay (PF 5.024→0.117, sign flip); walk-forward validity is unchanged, this adds an execution-latency requirement, it does not invalidate the strategy |
 
 ## Done (this session, night CTO mode)
 
@@ -795,10 +832,15 @@ Documented here so they aren't lost, not started.
   operator-issued OKX API keys with withdrawal
   disabled, (d) a small live-capital limit agreed with the operator, (e)
   step-by-step operator approval at each stage per
-  `docs/live_trading_checklist.md`. None of this proceeds without the
-  operator present — API credential provisioning and live-trading
-  approval are both explicit stop conditions, not something a CTO-mode
-  session decides alone.
+  `docs/live_trading_checklist.md`, **(f) verified low-latency
+  (sub-candle, ideally seconds-scale) execution infrastructure — measured
+  signal-to-fill latency, not assumed (added 2026-07-17, milestone 20:
+  `docs/ATR_FLOOR_EVALUATION.md` found Legacy's backtested edge on the
+  tested BTCUSDT window did not survive a 15-minute entry delay, PF
+  5.024→0.117 with a profit-to-loss sign flip)**. None of this proceeds
+  without the operator present — API credential provisioning and
+  live-trading approval are both explicit stop conditions, not something
+  a CTO-mode session decides alone.
 - **Paper trading Breaker Block or Partial TP** — NOT planned currently.
   Breaker Block's backtest result is now slightly negative (was
   neutral); Partial TP's is negative on two independent samples. Neither

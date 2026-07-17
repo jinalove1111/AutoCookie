@@ -4,6 +4,66 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Adaptive platform milestone 20: ATR stop-distance floor wired for A/B testing and REJECTED on evidence -- Legacy production baseline itself found delay-fragile
+
+2026-07-16/17. **20a (wiring, code).** `BacktestEngine.run()` gains a
+`min_stop_atr_mult` parameter and `scripts/run_backtest.py` gains
+`--min-stop-atr`, making the milestone 18b `RiskManager` ATR
+stop-distance floor A/B-testable for the first time. ATR is computed
+from the signal's own no-lookahead slice. The disabled path (flag
+omitted) is proven byte-identical: a fake-`RiskManager`-that-raises-on-
+unexpected-kwargs test exercises the unflagged path, so any leakage of
+the new kwargs into disabled behavior would fail the suite outright, not
+just silently change results. 7 new tests.
+
+**20b (evidence round).** Full report: `docs/ATR_FLOOR_EVALUATION.md`
+(final). Identical BTCUSDT 15m anchor (6x3000 candles,
+`--end-date 2026-07-10`, walk-forward + delay-check on every config).
+**Baseline** (floor off): 111 trades, +$3,400.62, 6/6 profitable
+periods, walk-forward PASSED -- delay-check FAILED (PF 5.024 -> 0.117,
+retention 0.023, sign flip). **`--min-stop-atr 1.5`**: 60 trades (-46%),
++$1,113.35 (-67%), 3/6 profitable, walk-forward FAILED, delay retention
+only 0.079 (still 6x below the 0.5 pass criterion), sign flip remains,
+delay-check FAILED. **2.0x deliberately NOT run** -- CTO early stop per
+the project's dead-config discipline: 1.5x tripled retention
+(0.023->0.079) while destroying consistency and profit, with no
+plausible path to 0.5.
+
+**VERDICT: ATR stop-distance floor REJECTED as a delay-robustness fix.**
+It "trades less, worse," not "trades the same, safer": -46% signals,
+-67% PnL, -53% PF, walk-forward PASS->FAIL, with the delay retention
+still 6x below criterion and the sign flip intact. `settings.
+MIN_STOP_ATR_MULT` stays `0.0` (disabled) everywhere -- not enabled in
+paper trading, not recommended for promotion. This is the honest
+negative result `docs/RESEARCH_ROUND_1.md` section 4c pre-committed to
+recording rather than quietly tuning around.
+
+**HEADLINE FINDING: production Legacy itself fails the 1-candle delay
+gate on this window** -- previously unknown (`docs/ROBUSTNESS_REPORT.md`
+test 2 only delay-tested the already-killed `structure_tp` candidate).
+Delay fragility is a property of the shared entry pipeline on this
+window, not one candidate's defect. Severity caveat: 1 candle = 15
+minutes on this 15m anchor, 3x harsher than the original 5-minute test
+-- this does NOT prove failure at seconds-scale live latency; the honest
+statement is that Legacy's backtested edge here lives inside a
+sub-15-minute execution window. Consequence: verified low-latency
+execution infrastructure is now an explicit hard prerequisite for
+`docs/live_trading_checklist.md` gate #4.
+
+**Ops notes**: an instrumentation gap (the runner doesn't print
+rejected-signal counts, so the 111->60 trade drop is the observable
+proxy, not a direct count); wall-clock timing evidence for the Fix B
+performance backlog (baseline ~3h05m, 1.5x run ~1h17m -- `--delay-check`
+triples engine passes, both far over the ~5-15 min/config estimate); one
+harness background-task kill worked around with detached OS processes;
+the live paper trader was killed once by the same cleanup and relaunched
+immediately on latest source (including Milestone 21 alerting).
+
+**Totals**: full suite **669/669 passed / 0 failed**. 20b is read-only
+evidence collection -- no orders placed, no writes to
+`backend/paper_validation.db`. Full rationale: `ENGINEERING_DECISIONS.md`
+#60, full evidence: `docs/ATR_FLOOR_EVALUATION.md`.
+
 ## [Unreleased] - Adaptive platform milestone 19: backtester quadratic-scan fix -- reverse-scan early-exit in detect_order_block, bit-identical verified, 2.3x measured speedup
 
 2026-07-16. Closes the "performance profiling analysis" item left pending
