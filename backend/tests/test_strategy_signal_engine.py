@@ -6,14 +6,17 @@ sub-detector -- nothing here is mocked.
 
 from __future__ import annotations
 
+import random
 from datetime import datetime, timezone
 
 import pytest
 
 from app.strategy.bias import detect_htf_bias
+from app.strategy.fvg import detect_fair_value_gap
 from app.strategy.market_structure import find_previous_swing_high
 from app.strategy.premium_discount import calculate_premium_discount
-from app.strategy.signal_engine import SignalEngine, TradeSignal
+from app.strategy.signal_engine import SignalEngine, TradeSignal, _select_unmitigated_fvg_zones
+from app.strategy.utils import is_zone_mitigated
 
 
 def candle(open_: float, high: float, low: float, close: float, ts: str) -> dict:
@@ -605,3 +608,149 @@ def test_generate_signal_use_jade_engine_ignores_legacy_only_parameters():
 
     assert plain.entry_price == with_legacy_flags.entry_price
     assert plain.take_profit == with_legacy_flags.take_profit
+
+
+# ---------------------------------------------------------------------------
+# Milestone 22 (2026-07-17, Performance round 2): `_select_unmitigated_fvg_zones`
+# replaced the OLD "eagerly mitigation-filter every FVG zone (both types),
+# then let `build_entry_model` pick the highest-index type match" scan with a
+# type-filtered, newest-to-oldest early-exit scan -- `is_zone_mitigated` was
+# 22.2% of a 3000-candle walk-forward's runtime (~350 calls/step, one per
+# historical FVG zone) before this change; see
+# `_select_unmitigated_fvg_zones`'s own docstring in signal_engine.py for the
+# full argmax-identity proof. `_select_unmitigated_fvg_zones_reference` below
+# is the ORIGINAL eager-scan-both-types logic, kept verbatim as an
+# independent ground truth -- do not "clean up" or optimize it. The
+# acceptance criterion is BIT-IDENTICAL output (as observed through
+# `build_entry_model`'s own zone-selection rule, mirrored by
+# `_winning_fvg_zone` below); if this test ever fails, the module
+# implementation must NOT be "fixed" to make it pass -- it means the
+# performance change altered behavior and must be reverted.
+# ---------------------------------------------------------------------------
+
+
+def _select_unmitigated_fvg_zones_reference(ltf_candles: list) -> list[dict]:
+    """Verbatim copy of the pre-Milestone-22 `signal_engine.generate_signal`
+    FVG-zone computation: every FVG zone (bullish AND bearish) surviving
+    `detect_fair_value_gap`, eagerly filtered for mitigation with no
+    awareness of which `type` `build_entry_model` will actually want.
+    """
+    return [
+        zone
+        for zone in detect_fair_value_gap(ltf_candles)
+        if not is_zone_mitigated(ltf_candles, zone["index"] + 2, zone["top"], zone["bottom"])
+    ]
+
+
+def _winning_fvg_zone(fvg_zones: list[dict], wanted_type: str) -> dict | None:
+    """Mirrors `entry_model.build_entry_model`'s own zone-selection logic
+    verbatim (its `matching_fvgs`/`fvg_zone` lines) -- the actual downstream
+    consumer this optimization must remain compatible with, not a
+    reimplementation being tested against itself. `entry_model.py` is
+    untouched by this change; this is duplicated here only so the property
+    test can observe what a `fvg_zones` list ultimately RESOLVES TO without
+    a full `build_entry_model` call (which also gates on bias/sweep/choch,
+    orthogonal to what's under test here).
+    """
+    matching = [z for z in fvg_zones if z["type"] == wanted_type]
+    return max(matching, key=lambda z: z["index"]) if matching else None
+
+
+def _random_fvg_candle(rng: random.Random, mode: str, prev_close: float) -> dict:
+    """Generate one synthetic candle under a given adversarial `mode` --
+    same generator shape as test_strategy_order_block.py's Milestone 19
+    property test, reused here (independently, not imported, so this file
+    stays self-contained) because it already reliably produces both
+    genuine 3-candle FVGs (via occasional large directional runs) and
+    genuine later retests/mitigations (via ordinary random-walk overlap).
+    """
+    o = prev_close
+
+    if mode == "doji":
+        c = o
+    elif mode == "all_bull":
+        c = o + rng.uniform(0.01, 5.0)
+    elif mode == "all_bear":
+        c = o - rng.uniform(0.01, 5.0)
+    elif mode == "flat":
+        c = o + rng.uniform(-0.05, 0.05)
+    elif mode == "trending_runs":
+        # Short directional runs (3-8 candles) separated by reversals --
+        # deliberately more likely to produce clean, un-retraced FVGs
+        # immediately followed by a retest of an OLDER one than pure
+        # random-walk "mixed" mode does.
+        direction = 1 if (int(prev_close * 100) // 7) % 2 == 0 else -1
+        c = o + direction * rng.uniform(0.5, 4.0)
+    else:  # "mixed" -- default, includes occasional large impulsive moves
+        delta = rng.uniform(-3.0, 3.0)
+        if rng.random() < 0.1:
+            delta *= 10
+        c = o + delta
+
+    high = max(o, c) + abs(rng.uniform(0, 1.0 if mode != "flat" else 0.05))
+    low = min(o, c) - abs(rng.uniform(0, 1.0 if mode != "flat" else 0.05))
+    return {"open": o, "high": high, "low": low, "close": c}
+
+
+def _random_fvg_series(rng: random.Random, length: int, mode: str) -> list[dict]:
+    candles = []
+    price = 100.0
+    for _ in range(length):
+        c = _random_fvg_candle(rng, mode, price)
+        candles.append(c)
+        price = c["close"]
+    return candles
+
+
+def test_select_unmitigated_fvg_zones_matches_reference_eager_scan_property():
+    """5,200 randomized synthetic candle series (seeded for determinism),
+    varied lengths 5-400, covering adversarial modes (all-same-color runs,
+    doji-heavy, flat/no-gap, short trending runs, and ordinary mixed
+    random walk) and both zone types on every case: the new type-filtered
+    reverse-scan-with-early-exit must resolve to the EXACT SAME winning
+    zone (or both None) as the old eager-scan-both-types-then-filter
+    logic, as observed through `build_entry_model`'s own selection rule.
+    """
+    rng = random.Random(220717)  # seeded for determinism
+    modes = ["mixed", "all_bull", "all_bear", "doji", "flat", "trending_runs"]
+    num_cases = 5200
+    mismatches = []
+
+    for case_idx in range(num_cases):
+        length = rng.randint(5, 400)
+        mode = modes[case_idx % len(modes)]
+        candles = _random_fvg_series(rng, length, mode)
+
+        reference_zones = _select_unmitigated_fvg_zones_reference(candles)
+
+        for wanted_type in ("bullish", "bearish"):
+            expected = _winning_fvg_zone(reference_zones, wanted_type)
+
+            actual_zones = _select_unmitigated_fvg_zones(candles, wanted_type)
+            actual = _winning_fvg_zone(actual_zones, wanted_type)
+
+            if actual != expected:
+                mismatches.append((case_idx, length, mode, wanted_type, expected, actual))
+
+    assert not mismatches, f"{len(mismatches)} mismatches (showing first 3): {mismatches[:3]}"
+
+
+def test_select_unmitigated_fvg_zones_returns_empty_list_on_neutral_bias():
+    """`bias` values other than "bullish"/"bearish" (i.e. "neutral", the
+    only other value `detect_htf_bias` ever returns) must short-circuit to
+    `[]` without scanning anything -- `build_entry_model` returns `None`
+    on that condition before its `fvg` parameter is ever touched, so this
+    is unobservable downstream, but the contract is still asserted
+    directly here.
+    """
+    rng = random.Random(220717001)
+    candles = _random_fvg_series(rng, 200, "mixed")
+    assert _select_unmitigated_fvg_zones(candles, "neutral") == []
+
+
+def test_select_unmitigated_fvg_zones_returns_at_most_one_zone():
+    rng = random.Random(220717002)
+    for case_idx in range(200):
+        candles = _random_fvg_series(rng, rng.randint(5, 300), "mixed")
+        for wanted_type in ("bullish", "bearish"):
+            assert len(_select_unmitigated_fvg_zones(candles, wanted_type)) <= 1

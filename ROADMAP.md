@@ -285,16 +285,41 @@ the existing 20-sample floor). Consequences for this backlog:
   (`--candles 3000 --periods 6`) now take ~17 minutes instead of ~40**.
   Full suite 653/653. See `ENGINEERING_DECISIONS.md` #59,
   `CHANGELOG.md`.
-  - **Fix B (incremental zone-mitigation caching for `is_zone_mitigated`,
-    the remaining ~22% of runtime) is DEFERRED-WITH-CONDITIONS, not
-    scheduled.** It needs cross-walk-forward-step state inside a
-    `SignalEngine` that is currently stateless by design -- a materially
-    higher-risk change than a pure algorithmic rewrite of one detector's
-    scan direction. Revisit ONLY if the 2.3x already delivered proves
-    insufficient for a future evidence round's actual needs (e.g. a
-    round that needs >3000-candle windows or many more period splits
-    than this project's current standard scale) -- not on a fixed
-    schedule and not because 22% is a round number worth chasing on its
+  - **Fix B -- CLOSED 2026-07-17 (Milestone 22), the deferral assumption
+    CORRECTED, not just fulfilled as originally scoped.** The assumption
+    above ("needs cross-walk-forward-step state inside a stateless
+    `SignalEngine`") turned out to be wrong: consumer-semantics analysis
+    of `entry_model.build_entry_model` found it only ever uses the
+    highest-index FVG zone matching `bias` (`wanted_type` provably
+    collapses to `bias`), so an M19-style fused reverse scan with early
+    exit sufficed -- no stateful caching was ever required. New
+    `signal_engine._select_unmitigated_fvg_zones` +
+    `fvg.find_latest_unmitigated_fvg_zone` eliminate the quadratic term
+    the same way Milestone 19 eliminated `detect_order_block`'s.
+    `is_zone_mitigated` calls dropped 965,864->11,141 (~87x fewer); the
+    FVG-mitigation chain fell from 22.2% to 1.68% of runtime; n=1000
+    1.81x / n=2000 2.36x measured wall-clock. Verified via the same M19
+    battery (two independent 5,200-case property tests against verbatim
+    reference copies, plus a real-data golden run across all 4 flag
+    combinations); the three-namespace-binding trap that complicated
+    Milestone 19's verification does NOT recur here (grep-confirmed only
+    one namespace binds the touched code). **Combined with Milestone 19,
+    full-scale evidence rounds (`--candles 3000 --periods 6`) are now
+    roughly 5x faster than the pre-Milestone-19 baseline.** Full suite
+    692/692; code complete in the working tree, not yet committed. Full
+    report: `docs/PERFORMANCE_M22.md`; rationale:
+    `ENGINEERING_DECISIONS.md` #61(a).
+  - **Remaining hotspots, recorded as future-round candidates, NOT
+    scheduled**: `find_swing_highs`/`find_swing_lows` (consumed by
+    multiple detectors -- bias, premium/discount, liquidity sweep, regime
+    detection -- with no single dominant caller yet identified) and the
+    `cf()` OHLCV accessor (already flagged in Milestone 19 as a large
+    constant factor in self-time, proportionally larger now that both
+    prior dominant costs have shrunk around it). Per this project's own
+    established discipline (the same condition Milestone 19 attached to
+    the since-closed Fix B): revisit **only if a future evidence round's
+    actual wall-clock cost justifies the work** -- not on a fixed
+    schedule, and not because either is a large-looking percentage on its
     own.
   - **The profiling methodology, not a specific committed script, is the
     reusable artifact for future performance rounds.** This round's
@@ -344,6 +369,18 @@ failure (see "Phase 1 gate status" and "Explicitly NOT started" below
 for the gate #4 consequence). No further ATR-floor work is scheduled;
 future work on delay fragility should target the entry pipeline's
 shared delay sensitivity, not this specific floor.
+
+**Milestone 23 -- CLOSED (2026-07-17, committed `3e508d8`).** Closes the
+instrumentation gap milestone 20b's ops notes flagged (the runner could
+not report how many signals the risk gate rejected, or why -- the
+111->60 trade-count drop under `--min-stop-atr 1.5` was an inferred
+proxy, not a direct count). `BacktestResult.risk_rejections`
+(`{total_signals, approved, rejected, by_reason}`) is purely
+observational -- counts the same `risk_decision` the engine already
+computes, never changes control flow. `scripts/run_backtest.py` now
+prints a per-period rejection line whenever a period rejects anything,
+plus an always-printed aggregate line across `--periods`. 690/690 at
+commit. See `ENGINEERING_DECISIONS.md` #61(b).
 
 **Natural next steps after milestone 12** (superseded by the above --
 retained for continuity): the data path to a justified

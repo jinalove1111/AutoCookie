@@ -485,6 +485,61 @@ practice** (`scripts/cto_report.py`, milestone 17b below).
     `ENGINEERING_DECISIONS.md` #60, full evidence:
     `docs/ATR_FLOOR_EVALUATION.md`.
 
+22. **Performance round 2: FVG mitigation-scan quadratic term eliminated,
+    Milestone 19's Fix B deferral CORRECTED** (2026-07-17): Milestone 19
+    deferred "Fix B" (incremental zone-mitigation caching for
+    `is_zone_mitigated`, 22.2% of runtime after round 1's own fix) on the
+    assumption that closing it required cross-walk-forward-step state
+    inside a stateless-by-design `SignalEngine`. That assumption is now
+    corrected -- consumer-semantics analysis found `entry_model.
+    build_entry_model` only ever uses the highest-index FVG zone matching
+    `bias` (`wanted_type` provably collapses to `bias` for the only two
+    values that proceed past its early return), so an M19-style fused
+    reverse scan with early exit sufficed; no stateful caching was
+    needed. New `signal_engine._select_unmitigated_fvg_zones` (neutral
+    bias short-circuits to `[]`) delegates to new `fvg.
+    find_latest_unmitigated_fvg_zone` -- newest-to-oldest, fusing gap
+    detection, type filtering, and mitigation checking with an early
+    exit. `detect_fair_value_gap()` itself is untouched; its other two
+    consumers (`entry_point_engine`, `htf_ltf_confluence`) still need the
+    full zone list, confirmed by grepping every call site. **Verified**
+    via the same M19 battery: two independent 5,200-case property tests
+    against verbatim reference copies of the old logic (0 mismatches,
+    now permanent regression tests) and a real-data golden run across
+    the same 4 flag combinations M19 used (deep-equal 4/4). M19's
+    three-namespace-binding trap does NOT recur here -- only one
+    namespace binds the touched functions, grep-verified. **Measured**:
+    `is_zone_mitigated` calls 965,864->11,141 (~87x fewer), FVG chain
+    22.2%->1.68% of runtime, n=1000 1.81x / n=2000 2.36x wall-clock.
+    Combined with M19, full-scale evidence rounds are now roughly **5x
+    faster than the pre-M19 baseline**. New dominant costs
+    (`find_swing_highs`/`find_swing_lows`, the `cf()` accessor) are
+    recorded as future-round candidates, not chased this round. Full
+    suite **692/692 passed / 0 failed**. **Status: code complete in the
+    working tree, not yet committed.** Full report:
+    `docs/PERFORMANCE_M22.md`. Full rationale:
+    `ENGINEERING_DECISIONS.md` #61(a).
+
+23. **Risk-rejection observability** (2026-07-17, committed `3e508d8`):
+    `BacktestResult` gains `risk_rejections`
+    (`{total_signals, approved, rejected, by_reason}`) -- purely
+    observational, closing the instrumentation gap decision #60 flagged:
+    the milestone 20b ATR-floor evidence round could observe the 111->60
+    trade-count drop but could not report how many signals the risk gate
+    itself rejected or why. Counts the same `risk_decision`
+    `BacktestEngine.run()` already computes and branches on; never
+    changes control flow or which trades happen. Since
+    `RiskManager.evaluate()` does not short-circuit on the first failing
+    check, a single rejected signal can increment multiple `by_reason`
+    keys -- `sum(by_reason.values()) >= rejected` by design, not a bug.
+    Default-populated on every path (including the below-`MIN_CANDLES`
+    early return) via a shared factory, so no consumer needs a
+    `getattr`/`None` guard. `scripts/run_backtest.py` prints a per-period
+    rejection line only when that period's `rejected > 0`, plus one
+    aggregate line across `--periods` that always prints. **Full suite
+    690/690 passed / 0 failed** at commit time. Full rationale:
+    `ENGINEERING_DECISIONS.md` #61(b).
+
 **Production-behavior note**: milestones 1-6 were purely additive/
 observational. Milestone 7 was the FIRST to change actual paper-trading
 sizing/rejection math (more conservative sizing in high volatility;

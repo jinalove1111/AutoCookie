@@ -3653,3 +3653,159 @@ alerting) -- unrelated to the evaluation itself, noted for continuity.
 **669/669 passed / 0 failed**. 20b is a read-only evidence round --
 no orders placed, no writes to `backend/paper_validation.db`. Full
 evidence: `docs/ATR_FLOOR_EVALUATION.md` (final).
+
+---
+
+## 61. Milestone 22: Fix B's deferral assumption corrected by consumer-semantics analysis (FVG mitigation-scan quadratic term eliminated); Milestone 23: risk-rejection observability, purely additive
+
+**(a) Milestone 22 (2026-07-17).** Decision #59 deferred "Fix B"
+(incremental zone-mitigation caching for `is_zone_mitigated()`, the
+~22% of runtime `is_zone_mitigated` accounted for after #59's own fix)
+on the stated assumption that closing it required maintaining
+cross-walk-forward-step STATE inside a `SignalEngine` that is currently
+stateless by design -- judged materially higher-risk than #59's own
+pure algorithmic rewrite of one detector's scan direction. This round
+found that assumption **wrong, not just outdated**: no stateful caching
+was needed at all. The round-1 reasoning was an honest architectural
+guess made without inspecting the actual consumer (#59's own scope was
+`order_block.py`, not the FVG call site) -- not a mistake in judgment
+given what was known at the time, but a gap that closer reading of the
+consumer closed.
+
+**The discovery**: `entry_model.build_entry_model` only ever extracts
+ONE fact from the FVG zone list `SignalEngine` hands it --
+`matching_fvgs = [z for z in fvg if z["type"] == wanted_type];
+fvg_zone = max(matching_fvgs, key=lambda z: z["index"])`, the
+highest-index zone whose `type` matches `wanted_type`. `wanted_type` is
+provably identical to `bias` itself: `build_entry_model` returns `None`
+before `wanted_type` is ever derived unless `bias in ("bullish",
+"bearish")`, and for those two surviving values `wanted_type` collapses
+to exactly `bias` (`direction == "long"` iff `bias == "bullish"`). The
+OLD code in `signal_engine.py`, unaware of this, eagerly ran
+`is_zone_mitigated` on EVERY historical FVG zone of BOTH types, every
+walk-forward step -- 965,864 calls in the round-1 profiling run, 22.2%
+of total runtime -- just to build a list `build_entry_model` would
+immediately collapse to a single argmax pick.
+
+**The transform**: new `app.strategy.signal_engine.
+_select_unmitigated_fvg_zones(ltf_candles, bias)` short-circuits neutral
+bias to `[]` immediately (`build_entry_model` returns `None` on that
+path before ever touching its `fvg` parameter, so the skipped zones are
+provably unobservable), and for `"bullish"`/`"bearish"` delegates to new
+`app.strategy.fvg.find_latest_unmitigated_fvg_zone(candles,
+wanted_type)` -- a single reverse scan (newest candle first) that fuses
+gap detection, type filtering, and mitigation checking with an early
+exit at the first match. This is the identical deferral-inversion
+pattern #59 established for `detect_order_block`, applied one function
+deeper in the call graph: `detect_fair_value_gap`'s loop body at a given
+`i` reads only `candles[i-1]`/`[i]`/`[i+1]` -- no running total, no
+cross-iteration state -- so the SET of qualifying `i` values and each
+one's `type`/`top`/`bottom` is independent of scan direction. Visiting
+`i` newest-to-oldest therefore finds the exact same zones
+`detect_fair_value_gap` would, merely in reverse discovery order, so the
+first hit that matches `wanted_type` and passes `is_zone_mitigated` is,
+by construction, the same zone the old eager-detect-then-filter-then-
+argmax pipeline would have selected. `detect_fair_value_gap` itself is
+left completely UNTOUCHED -- its other two consumers
+(`entry_point_engine.py`, `htf_ltf_confluence.py`) need the full ordered
+zone list for their own different consumption patterns; every call site
+was grepped to confirm neither is affected.
+
+**Why the M19 playbook generalized rather than needing a new one**: the
+lesson decision #59 left behind ("verify what a caller actually
+consumes from an eagerly-computed result before assuming a hot path
+needs new state or a fancier algorithm") applied here without
+modification -- the only new step was reading `build_entry_model`'s own
+consumption of the FVG list closely enough to notice the argmax
+collapse, the same category of work that made #59's own reverse-scan
+possible for `order_block.py`.
+
+**Verification, the same bar #59 set**: two independent property tests
+(5,200 seeded synthetic candle series each) -- `test_strategy_fvg.py`
+checks `find_latest_unmitigated_fvg_zone` against a verbatim reference
+of `detect_fair_value_gap` + eager `is_zone_mitigated` filtering;
+`test_strategy_signal_engine.py` checks `_select_unmitigated_fvg_zones`
+against a verbatim reference of the old inline `signal_engine.py`
+logic -- 0 mismatches on both, now permanent regression tests. A golden
+run on anchored real BTC data across the same 4 flag combinations #59
+used (default / `use_breaker_block` / `use_structure_tp` /
+`use_jade_engine`) -- old-vs-new trade lists deep-equal 4/4. The
+namespace-binding trap that caught out #59's golden run (three modules
+binding `detect_order_block` at import) was checked here too and found
+NOT to recur: grepping every importer of the touched functions shows
+only `signal_engine.py` binds `_select_unmitigated_fvg_zones`/
+`find_latest_unmitigated_fvg_zone` -- a strictly simpler namespace
+picture than #59's three-way monkeypatch requirement, not assumed
+identical just because the shape of the fix rhymed.
+
+**Measured**: n=1000 1.693s -> 0.933s (1.81x), n=2000 7.484s -> 3.172s
+(2.36x); `is_zone_mitigated` call count 965,864 -> 11,141 (~87x fewer
+calls); the FVG-mitigation chain is now 1.68% of total runtime (down
+from 22.2%), and `detect_fair_value_gap`'s own forward scan no longer
+appears anywhere in this path's hot loop. **New dominant costs**:
+`find_swing_highs`/`find_swing_lows` and the `cf()` OHLCV accessor --
+out of this round's scope, recorded here as the natural next-round
+candidate rather than chased opportunistically. Combined with #59's
+2.3x, full-scale evidence rounds (`--candles 3000 --periods 6`) are now
+roughly **5x faster than the pre-M19 baseline**.
+
+**Status**: full suite **692/692 passed / 0 failed**. Code complete in
+the working tree as of this entry; not yet committed (tracked in
+`HANDOFF.md`). Full report: `docs/PERFORMANCE_M22.md`.
+
+**(b) Milestone 23 (2026-07-17, committed `3e508d8`).**
+`BacktestResult` gains `risk_rejections: dict =
+field(default_factory=_empty_risk_rejections)`, shape
+`{total_signals, approved, rejected, by_reason}`. **Purely
+observational**: `BacktestEngine.run()` already computes and branches on
+a `risk_decision` from `RiskManager.evaluate()` for every non-`None`
+signal; this milestone only counts what that call already decided -- it
+never changes control flow, which trades happen, or any existing field.
+`total_signals` increments on every non-`None` signal that reaches a
+risk-evaluation call (`== approved + rejected`, since each such signal
+is evaluated exactly once); a rejected decision's `reasons` (verbatim
+`RiskDecision.reasons` strings) each increment their own `by_reason`
+key.
+
+**Why `sum(by_reason.values()) >= rejected` is the correct invariant,
+not `==`, by design**: `RiskManager.evaluate()` deliberately does not
+short-circuit on the first failing check (documented in its own
+docstring) -- a single rejected signal can fail multiple independent
+gates at once (e.g. RR-below-floor AND a loss-limit breach in the same
+evaluation), and every reason it returns is tallied. A multi-reason
+rejection therefore legitimately increments more than one `by_reason`
+key for one `rejected` increment. `aggregate_risk_rejections()` (which
+sums `risk_rejections` across `--periods` runs) preserves this same
+relationship rather than forcing equality.
+
+**Why default-populated on every path, including the below-`MIN_CANDLES`
+early return**: `_empty_risk_rejections()` is both the dataclass field's
+`default_factory` and `run()`'s own starting accumulator, so every
+`BacktestResult` -- including ones that never reach the walk-forward
+loop at all -- carries the identical zero-populated shape. A consumer
+can always read `result.risk_rejections["total_signals"]` without a
+`getattr`/`None` guard, the same "always audit-able, never a missing
+key" discipline this project already applies to `MarketRegime.metrics`
+and other structured outputs.
+
+**Why this milestone, and why now**: closes the instrumentation gap
+decision #60 named explicitly -- during the ATR-floor evidence round
+(milestone 20b), the runner could observe the 111->60 trade-count drop
+under `--min-stop-atr 1.5` but could not report how many signals the
+risk gate itself rejected or why, forcing that round to treat the
+trade-count delta as an inferred proxy rather than a direct count.
+Every future evidence round now reports a direct, itemized count.
+
+**Runner behavior** (`scripts/run_backtest.py`):
+`format_risk_rejection_line()` renders a compact "signals X, approved Y,
+rejected Z, top reasons: ..." line (top 3 reasons by count, ties broken
+by first-seen order, "top reasons: none" when `by_reason` is empty --
+never a crash, never a misleading empty string). Per-period lines print
+only when that period's `rejected > 0` (quiet runs stay quiet); the
+aggregate line across `--periods` always prints regardless of whether
+any rejections occurred, giving the reader one guaranteed place to see
+the whole sample's risk-gate picture in a single line.
+
+**Status**: full suite **690/690 passed / 0 failed** at commit time.
+Purely additive -- no behavior change to which trades happen, in
+backtest or anywhere else.

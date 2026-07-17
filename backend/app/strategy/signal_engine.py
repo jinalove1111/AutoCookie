@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from .bias import detect_htf_bias
 from .entry_model import build_entry_model
 from .exit_point_engine import find_exit_targets
-from .fvg import detect_fair_value_gap
+from .fvg import find_latest_unmitigated_fvg_zone
 from .jade_trade_plan import build_trade_plan
 from .liquidity import detect_liquidity_sweep
 from .market_structure import (
@@ -25,6 +25,69 @@ from .session_liquidity import _ASIAN_SESSION, _LONDON_SESSION
 from .utils import average_true_range, cf, is_zone_mitigated
 
 _SESSION_WINDOWS = {"asian": _ASIAN_SESSION, "london": _LONDON_SESSION}
+
+
+def _select_unmitigated_fvg_zones(ltf_candles: list, bias: str) -> list[dict]:
+    """Return the (at most one) FVG zone `build_entry_model` will actually
+    use, computed with far less work than eagerly detecting/filtering
+    every zone in history.
+
+    PERFORMANCE (2026-07-17, Performance round 2 / Milestone 22 -- see
+    ENGINEERING_DECISIONS.md and the M19 precedent
+    `order_block.detect_order_block`'s reverse-scan early-exit):
+    profiling a 3000-candle walk-forward (see docs/PERFORMANCE_M22.md)
+    found `is_zone_mitigated` at 22.2% of total runtime, called ~350
+    times per step -- one call per FVG zone `detect_fair_value_gap`
+    returned (O(n) zones), because the OLD code here eagerly filtered
+    EVERY zone (both bullish and bearish) for mitigation before handing
+    the whole list to `build_entry_model`.
+
+    `build_entry_model` (entry_model.py) only ever extracts ONE fact from
+    that list: `matching_fvgs = [z for z in fvg if z["type"] ==
+    wanted_type]; fvg_zone = max(matching_fvgs, key=lambda z:
+    z["index"])` -- the HIGHEST-index zone whose `type` matches
+    `wanted_type`. `wanted_type` is provably identical to `bias` itself:
+    `build_entry_model` returns `None` before `wanted_type` is ever
+    derived unless `bias in ("bullish", "bearish")`, and for those two
+    surviving values `wanted_type = "bullish" if direction == "long"
+    else "bearish"` collapses to exactly `bias` (`direction == "long"`
+    iff `bias == "bullish"`). So the type this call needs is already
+    known here, from `bias` (computed above, before this call) -- no
+    need to wait for `build_entry_model` to filter it out downstream.
+
+    `bias not in ("bullish", "bearish")` (neutral) short-circuits to `[]`
+    immediately without even calling into `fvg.py` -- `build_entry_model`
+    returns `None` on that condition before ever touching its `fvg`
+    parameter, so the exact zones (if any) that would otherwise have been
+    found are unobservable in that case.
+
+    `fvg.find_latest_unmitigated_fvg_zone` does the actual work: a single
+    reverse scan (newest candle first) that fuses gap detection, type
+    filtering, and mitigation checking with an early exit at the first
+    match -- see that function's own docstring for the full
+    argmax-identity proof (this function used to do the reverse walk
+    itself over `detect_fair_value_gap`'s full forward-scanned output;
+    that intermediate step was folded into `fvg.py` once it became clear
+    the forward scan itself was unnecessary work for this caller).
+
+    Returned as a single-or-empty LIST (not a bare zone) to preserve
+    `build_entry_model`'s existing list-based `fvg` parameter contract
+    unchanged (entry_model.py is not touched by this optimization) --
+    `build_entry_model`'s own `[z for z in fvg if z["type"] ==
+    wanted_type]` filter is a no-op here since the zone in this list, if
+    any, already has `type == bias == wanted_type`.
+
+    See test_strategy_signal_engine.py's and test_strategy_fvg.py's
+    property tests (verbatim reference copies of the old
+    eager-detect-then-filter-both-types logic, 5,000+ seeded synthetic
+    series each) for the bit-identical verification this docstring's
+    claims were checked against.
+    """
+    if bias not in ("bullish", "bearish"):
+        return []
+
+    zone = find_latest_unmitigated_fvg_zone(ltf_candles, bias)
+    return [zone] if zone is not None else []
 
 
 @dataclass
@@ -251,11 +314,7 @@ class SignalEngine:
         # `detect_order_block`'s docstring for why that distinction matters
         # (the impulse candle's own range routinely overlaps the base zone
         # it originated from, which is not mitigation).
-        fvg_zones = [
-            zone
-            for zone in detect_fair_value_gap(ltf_candles)
-            if not is_zone_mitigated(ltf_candles, zone["index"] + 2, zone["top"], zone["bottom"])
-        ]
+        fvg_zones = _select_unmitigated_fvg_zones(ltf_candles, bias)
         order_block = detect_order_block(ltf_candles)
         if order_block is not None and is_zone_mitigated(
             ltf_candles, order_block["impulse_index"] + 1, order_block["top"], order_block["bottom"]

@@ -4,6 +4,85 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Adaptive platform milestones 22-23: FVG mitigation-scan quadratic term eliminated (performance round 2, corrected deferral) + risk-rejection observability
+
+2026-07-17. Two milestones, both closing gaps decision #60 left open.
+
+**Milestone 22 (performance round 2, Fix B -- code in the working tree,
+692/692).** Milestone 19's round-1 deferral of "Fix B" (incremental
+zone-mitigation caching for `is_zone_mitigated`, the ~22% of runtime it
+accounted for after round 1's own fix) rested on the assumption that
+closing it required cross-walk-forward-step STATE inside a
+`SignalEngine` that's stateless by design. That assumption is now
+CORRECTED, not just revisited: no stateful caching was needed at all --
+the consumer's own semantics admitted an M19-style reverse scan.
+**Discovery**: `entry_model.build_entry_model` only ever uses the
+highest-index FVG zone whose type matches `bias` (`wanted_type`
+provably collapses to `bias` for the only two values that ever proceed
+past `build_entry_model`'s early return). The old code eagerly ran
+`is_zone_mitigated` on EVERY historical zone of BOTH types, every step
+(round 1 profiling: 965,864 calls, 22.2% of runtime), just to build a
+list that gets collapsed to one argmax pick immediately downstream.
+**Fix**: new `signal_engine._select_unmitigated_fvg_zones`
+(neutral bias short-circuits to `[]`) delegates to new
+`fvg.find_latest_unmitigated_fvg_zone` -- a fused newest-to-oldest scan
+with early exit (`detect_fair_value_gap`'s loop body has no
+cross-iteration state, so a reversed scan visits the identical zones,
+merely in reverse order). `detect_fair_value_gap` itself is untouched --
+its other two consumers (`entry_point_engine`, `htf_ltf_confluence`)
+need the full zone list; every call site was grepped to confirm.
+
+**Verification** (the M19 battery): two independent 5,200-case seeded
+property tests against verbatim reference copies of the old logic (0
+mismatches, now permanent regression tests); a golden run on anchored
+real BTC data across the same 4 flag combinations M19 used -- deep-equal
+trade lists 4/4. The namespace-binding trap that caught M19's golden run
+(three modules binding `detect_order_block` at import) does NOT recur
+here -- only one namespace binds the touched functions, grep-verified
+rather than assumed.
+
+**Measured**: n=1000 1.693s->0.933s (1.81x), n=2000 7.484s->3.172s
+(2.36x); `is_zone_mitigated` calls 965,864->11,141 (~87x fewer); the FVG
+chain is now 1.68% of total runtime; `detect_fair_value_gap`'s forward
+scan no longer appears in this path's hot loop at all. **New dominant
+costs**: `find_swing_highs`/`find_swing_lows` and the `cf()` OHLCV
+accessor -- out of scope this round, recorded for a future round.
+Combined with M19's 2.3x, full-scale evidence rounds
+(`--candles 3000 --periods 6`) are now roughly **5x faster than the
+pre-M19 baseline**.
+
+**Totals**: full suite **692/692 passed / 0 failed**. Code complete in
+the working tree; not yet committed. Full report:
+`docs/PERFORMANCE_M22.md`. Full rationale: `ENGINEERING_DECISIONS.md`
+#61(a).
+
+## [Unreleased] - Adaptive platform milestone 23: risk-rejection observability (committed 3e508d8)
+
+2026-07-17. `BacktestResult` gains `risk_rejections`
+(`{total_signals, approved, rejected, by_reason}`) -- purely
+observational, closing the instrumentation gap decision #60 flagged
+explicitly: the ATR-floor evidence round (milestone 20b) could observe
+the 111->60 trade-count drop under `--min-stop-atr 1.5` but could not
+report how many signals the risk gate itself rejected, or why. Every
+non-`None` signal that reaches a `risk_manager.evaluate()` call
+increments `total_signals`; the resulting `approved`/`rejected` outcome
+increments the matching counter; a rejected decision's `reasons`
+(verbatim strings) each increment their own `by_reason` key. Since
+`RiskManager.evaluate()` deliberately does not short-circuit on the
+first failing check, a single rejected signal can fail multiple gates at
+once, so multiple `by_reason` keys can increment for one `rejected`
+increment -- `sum(by_reason.values()) >= rejected`, by design, not a
+bug. Default-populated on every path (including the below-`MIN_CANDLES`
+early return) via a shared `_empty_risk_rejections()` factory, so a
+consumer never needs a `getattr`/`None` guard.
+`scripts/run_backtest.py` prints a compact per-period rejection line
+only when that period actually rejected something (quiet runs stay
+quiet) plus one aggregate line across `--periods` that always prints.
+
+**Totals**: **690/690 passed / 0 failed** at commit time. Purely
+additive -- no change to which trades happen, in backtest or anywhere
+else. Full rationale: `ENGINEERING_DECISIONS.md` #61(b).
+
 ## [Unreleased] - Adaptive platform milestone 20: ATR stop-distance floor wired for A/B testing and REJECTED on evidence -- Legacy production baseline itself found delay-fragile
 
 2026-07-16/17. **20a (wiring, code).** `BacktestEngine.run()` gains a
