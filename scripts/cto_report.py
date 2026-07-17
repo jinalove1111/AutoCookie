@@ -232,6 +232,45 @@ def _connect_readonly_session(db_path: Path):
     return Session(bind=engine, autoflush=False, autocommit=False, future=True)
 
 
+def _ensure_unrelated_write_engine_importable() -> None:
+    """Root-cause workaround for a real production failure (2026-07-17):
+    `collect_regime_evidence` -> `_collect_shadow` LAZILY imports
+    `app.portfolio.shadow_resolver` (only for its `RESOLUTION_MODEL`
+    constant) -> `app.portfolio.trades` -> `app.database.session`, whose
+    MODULE-LEVEL statement `create_engine(settings.DATABASE_URL, ...)`
+    raises `sqlalchemy.exc.ArgumentError: Could not parse SQLAlchemy URL
+    from given URL string` whenever `settings.DATABASE_URL` is unset
+    (`app/config.py`'s documented default is `""`) -- reproduced
+    directly against this project's real `paper_validation.db` when this
+    script is invoked from a shell with no `DATABASE_URL` configured (no
+    `backend/.env`, no exported env var). `tests/conftest.py::fresh_app_env`
+    always sets `DATABASE_URL` before importing any `app.*` module, which
+    is why this never surfaces in the test suite even though it can (and
+    did) surface for a real invocation.
+
+    This is UNRELATED to this report's own read-only DB connection
+    (`_connect_readonly_session` above, which never imports
+    `app.config.settings` / `app.database.session` at all, per this
+    module's own read-only discipline) -- it is purely a side effect of
+    an incidental lazy import three hops deep inside
+    `collect_regime_evidence`, which this report has no control over and
+    is not in scope to change.
+
+    `create_engine()` itself never opens a connection (SQLAlchemy
+    engines are lazy, per `app.database.session`'s own module docstring)
+    -- setting a syntactically-valid, self-contained placeholder HERE,
+    and ONLY when `DATABASE_URL` is unset, lets that one unrelated
+    module-level statement succeed without ever touching a real file and
+    without overriding an operator-configured value (an empty string is
+    pydantic-settings' documented "not configured" default, never a real
+    value an operator deliberately set).
+    """
+    from app.config import settings
+
+    if not settings.DATABASE_URL:
+        settings.DATABASE_URL = "sqlite://"
+
+
 def _gather_shadow_and_rankings(db_path: Path, window_days: int) -> tuple[str, str, dict | None]:
     """Returns `(rankings_text, shadow_text, evidence_dict_or_None)` --
     `evidence_dict_or_None` is threaded through to `_gather_selector_state`
@@ -244,6 +283,8 @@ def _gather_shadow_and_rankings(db_path: Path, window_days: int) -> tuple[str, s
         return msg, msg, None
 
     try:
+        _ensure_unrelated_write_engine_importable()
+
         from app.portfolio.rolling_regime_performance import collect_regime_evidence
 
         evidence = collect_regime_evidence(session, window_days=window_days)
