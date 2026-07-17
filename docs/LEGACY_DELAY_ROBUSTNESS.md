@@ -225,3 +225,69 @@ its substance:
 - Per-period reports/CSVs: `scripts/reports/eval_m24_baseline_2025_period{1..6}.{md,csv}`
 - Comparison row source: `docs/ATR_FLOOR_EVALUATION.md` (committed,
   2026-07-17)
+
+---
+
+## 7. 2024 anchor (third year, completeness) — appended 2026-07-17
+
+Follow-up run per the ROADMAP's optional completeness item: same command
+with `--end-date 2024-07-10`, extending the time axis to a third
+independent year (the same three-year standard the original BTC candidate
+received). Every number below is transcribed from
+`scripts/reports/eval_m24_baseline_2024.log`. Sections 1–6 above are
+final and unchanged.
+
+**Delay gate (2024)** — transcribed from the gate block:
+
+| Window | Baseline trades (gate pass) | Delayed trades | Baseline PF | Delayed PF | Retention (≥0.5) | Sign flip | Verdict |
+|---|---|---|---|---|---|---|---|
+| 2024 | 77† | 65 | 2.959 | 0.078 | **0.026** | **YES** | **FAILED** |
+
+† Gate's own baseline pass reports 77 trades vs 73 summed across the 6
+independent periods — the same style of small discrepancy as 2025's
+63-vs-65 (section 2 footnote); recorded as observed, affects no gate
+criterion.
+
+**Walk-forward (2024)**: **PASSED** — 6/6 profitable periods (100%,
+≥66% ✓), max losing streak 0 (≤2 ✓), first-half avg PnL $230.92,
+second-half avg $371.66, degrading trend NO. Total $1,807.75 across 73
+trades, 6/6 profitable periods. Attribution against the known-difficult
+2024 context: the prior 2024 BTC check
+(`docs/PROFITABILITY_EXPERIMENT_REPORT.md` 14.2) found the baseline
+FAILING walk-forward (3/5 profitable, degrading) — but that run used 5
+periods at a materially different scale in the pre-tuned-defaults era.
+At this round's standard 6-period/3000-candle configuration the baseline
+walk-forward passes cleanly. So the expected "2024 walk-forward oddity"
+did appear, just in the opposite direction from the 14.2 precedent —
+scale/configuration-dependent, and in neither direction is it news for
+the delay question. The delay gate has now failed alongside a
+walk-forward PASS (2024, 2026) and alongside a walk-forward FAIL (2025):
+the fragility is independent of walk-forward health, which is the point.
+
+**Combined promotion-gate summary (2024)**: walk-forward PASSED,
+execution-delay gate FAILED → **OVERALL FAILED**.
+
+**Risk-rejection summary (2024)**: signals 668, approved 73, rejected
+595 (89.1%) — every rejection `trades_today 2 reached MAX_TRADES_PER_DAY
+2`, reproducing the 2025 finding (section 2): signal clustering far
+denser than the daily cap in a third year as well.
+
+**Three-year verdict: STRUCTURAL, now 3-for-3.** PF retention 0.026
+(2024) / 0.015 (2025) / 0.023 (2026), with the profit→loss sign flip in
+all three years — three independent years, three decisive failures, all
+at the same catastrophic magnitude (differences between them are noise;
+the criterion is 0.5). 2024 did not surprise: a third distinct regime —
+different baseline PF (2.959 vs 4.593/5.024), different trade density,
+walk-forward passing — moved the retention number nowhere. The section 3
+verdict and the section 4 gate-#4 wording upgrade both hold; the gate-#4
+note may now cite **three** independent years (2024, 2025, 2026) on
+BTCUSDT. The section 5 "2024 remains untested" caveat is hereby closed;
+the remaining caveats (one asset, 15-minute granularity, Jan–Jul
+windows) stand.
+
+**Wall time**: 2026-07-17 16:14:13 → 16:30:33 local, **~16.5 minutes**
+(vs ~11 min for the 2025 anchor — 2024 has more trades/signals in the
+gate passes).
+
+**Artifacts**: `scripts/reports/eval_m24_baseline_2024.log`,
+`scripts/reports/eval_m24_baseline_2024_period{1..6}.{md,csv}`.
