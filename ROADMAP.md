@@ -600,22 +600,30 @@ writes, no production code touched.
 
 **Next experiment, per Hypothesis Round 1's own ranking: H5**
 (session-conditional position sizing, ranked #5 -- the last remaining
-hypothesis from `docs/HYPOTHESES_ROUND_1.md`). The ranking table's own
-characterization of H5, quoted verbatim: "Cheap, and mechanistically
-distinct from the already-rejected Asian-only entry filter -- but rides
-on the same small-sample session split (Test 6: 41/19/8 trades) whose
-failure mode (small-sample noise) already sank the filter version.
-**Weakest grounding of the five; listed for completeness, not
-urgency.**" H5's exact pre-registered experiment spec should be read
-directly from `docs/HYPOTHESES_ROUND_1.md` before implementation
-begins -- unlike H1-H4, H5 is referenced primarily via the ranking table
-(section 1) and the "Rejected ideas" section's cross-reference to the
-Asian-session filter rejection (section 6), rather than via a full
-dedicated experiment section matching H1-H4's format; confirm during
-implementation planning whether section 5's numbering (H4's own section)
-or a later section actually carries H5's full mechanism/grounding/
-pre-registered-experiment/keep-rule text before treating any assumed
-spec as authoritative.
+hypothesis from `docs/HYPOTHESES_ROUND_1.md`). **Pre-registration
+completed 2026-07-19** -- H5 previously existed only as a ranking-table
+row (section 1) and a "Rejected ideas" cross-reference (formerly section
+6, now section 7); it now has a full H1-H4-format section (**section
+6**: mechanism, grounding, pre-registered experiment, keep-rule, cost,
+promotion path), not fabricated after the fact but built from evidence
+already on record, per `CLAUDE.md`'s explicit caution about this
+hypothesis. Two things this pre-registration surfaced that the original
+ranking-table row did not: (1) new supporting grounding -- Milestone 26's
+H1 finding ("trade FREQUENCY matters more than per-trade selectivity on
+this platform", `ENGINEERING_DECISIONS.md` #64) was published one day
+AFTER H5 was originally ranked and independently supports sizing over
+filtering as a mechanism class; (2) a disclosed grounding gap -- Test 6,
+H5's sole motivating evidence, was measured on BTCUSDT **5m** against the
+`structure_tp` candidate, not the 15m Legacy candidate H5 would actually
+size, so section 6's pre-registered experiment adds a **Step 0 gate**
+(does the session-PF gradient even replicate on Legacy/15m?) that must
+pass before `session_risk_scalar` is implemented at all. **Not yet run**
+-- this milestone is the pre-registration only; implementing
+`session_risk_scalar`/`--session-scaled-sizing` and running Step 0 is the
+next actionable item, still backtest-only and still not a promotion
+decision if it clears its keep-rule (same operator-gated boundary as
+H1/H4's sizing-adjacent findings, per section 6's own promotion-path
+text).
 
 **Standing awareness item, not an action item**: H4's evaluation flagged
 that any existing finding resting on Net Profit margins narrower than

@@ -44,7 +44,7 @@ each factor scored 1 (weak) – 5 (strong) informally, cost scored 1
 | **2** | H1 — Quality-ranked selection inside the existing `MAX_TRADES_PER_DAY` cap | 5 | 4 | 3 | Directly targets the single largest disclosed, quantified opportunity in the evidence base: 89–92% of Legacy's own signals are discarded by a FIFO daily cap, in all three tested years. Backtest-only, zero live-risk change by construction. |
 | **3** | H3 — Regime-conditional delay survival of the `structure_tp` family | 4 | 3 | 2 | Combines three already-built, already-independently-validated mechanisms (`--structure-tp`, `--tag-regimes`, `--delay-check`) in a combination nobody has run together yet. Pure analysis on top of existing machinery. |
 | **4** | H2 — Passive (limit-at-level) entry as a delay-robust alternative to immediate market entry | 3 | 3 | 4 | Mechanistically distinct from the already-rejected ATR-floor fix and the already-rejected drift-gate fix, and grounded in a `RESEARCH_ROUND_1.md` item that was deferred for infra reasons that may no longer apply. Highest new-code cost of the five. |
-| **5** | H5 — Session-conditional position sizing (not entry filtering) | 2 | 3 | 2 | Cheap, and mechanistically distinct from the already-rejected Asian-only entry filter — but rides on the same small-sample session split (Test 6: 41/19/8 trades) whose failure mode (small-sample noise) already sank the filter version. Weakest grounding of the five; listed for completeness, not urgency. |
+| **5** | H5 — Session-conditional position sizing (not entry filtering) | 2 | 3 | 2 | Cheap, and mechanistically distinct from the already-rejected Asian-only entry filter — but rides on the same small-sample session split (Test 6: 41/19/8 trades) whose failure mode (small-sample noise) already sank the filter version. Weakest grounding of the five; listed for completeness, not urgency. **Full pre-registration: section 6** (added 2026-07-19, after H1-H4 resolved — Grounding column above reflects the ORIGINAL 2026-07-17 assessment; section 6 discusses new supporting evidence from H1/Milestone 26 found since). |
 
 **Recommended first experiment: H4.** See section 7.
 
@@ -517,7 +517,255 @@ authority to decide, exactly like `MAX_TRADES_PER_DAY` in H1.
 
 ---
 
-## 6. Rejected ideas
+## 6. H5 — Session-conditional position sizing (not entry filtering)
+
+**Added 2026-07-19, after H1-H4 all resolved.** Section 1's ranking table
+carried H5 as a one-line row only, by explicit department decision (see
+`CLAUDE.md`'s own caution about this hypothesis) — this section is the
+full pre-registration the ranking-table row deferred, written BEFORE any
+run, per this document's own rule #1. Nothing below is backtest-run
+retroactively; the grounding re-assessment in the next subsection draws
+only on evidence that already existed in committed docs before this
+section was written.
+
+### Mechanism
+
+`docs/ROBUSTNESS_REPORT.md` Test 6 bucketed real trades by UTC entry hour
+(Asian 00-08, London 08-16, NY/other 16-24) and found a real, disclosed
+profit-factor gradient: Asian PF 4.65 (n=41), London PF 2.41 (n=19),
+NY/other "infinite" PF (n=8, explicitly flagged in that same document as
+likely small-sample noise, not a real edge). `docs/CONTINUOUS_RESEARCH_LOG.md`
+Experiment 3 already tested the obvious first mechanism this gradient
+suggests — an Asian-only entry FILTER — and it was REJECTED: uniformly
+worse Net Profit, Profit Factor, and Sharpe in both tested years, because
+restricting entries to one window roughly halved trade count in both
+years (42→30 trades in 2026, 26→13 in 2025) while only buying a modest
+drawdown improvement in return. H5 proposes a mechanistically distinct
+alternative that this platform has not tested: instead of DISCARDING
+trades outside the strong session (filtering), scale each trade's
+position SIZE by which session it enters in (sizing) — every signal that
+would otherwise fire still fires and still gets filled; only the risk
+allocated per trade changes. This targets the filter's own diagnosed
+failure mode directly: Experiment 3 lost because it traded throughput
+away for selectivity, not because the underlying session-quality signal
+was wrong.
+
+**New grounding this hypothesis has that its original 2026-07-17 ranking
+did not**: `docs/H1_SIGNAL_SELECTION_RESULTS.md` / `ENGINEERING_DECISIONS.md`
+#64 (Milestone 26, published 2026-07-18 — one day AFTER H5 was ranked
+last in section 1) found, independently and for an unrelated mechanism,
+that "Legacy's edge on this platform depends more on trade FREQUENCY
+under a fixed cap than on per-trade selectivity" — ranked-selection
+variants that cut throughput to raise average trade quality lost Net
+Profit in both tested years despite winning on Profit Factor. This is
+directly relevant to H5: it is independent evidence, discovered after
+H5's original ranking, for exactly the mechanism distinction H5 already
+claimed informally (sizing preserves throughput, filtering doesn't) —
+this section treats it as a real grounding upgrade, not merely restates
+the original ranking-table framing.
+
+The exact sizing mechanism proposed mirrors H4's already-implemented,
+already-live pattern (`backend/app/risk/position_sizing.py`'s
+`volatility_risk_scalar`) as closely as possible, for the same reason H4
+gave: a disclosed-not-tuned dict of scalars keyed by a regime-like label,
+defaulting to 1.0 (unchanged behavior) for anything unrecognized or
+undetectable, threaded into `calculate_position_size` as an additional
+optional multiplier alongside (not replacing) `volatility_risk_scalar`.
+Unlike `volatility_risk_scalar`'s safety-only "scale down, never up"
+convention (`ENGINEERING_DECISIONS.md` #49 — a risk-safety measure, not
+an edge-seeking one), H5's proposed scalars are deliberately symmetric,
+because the mechanism under test here is genuinely different: whether
+sizing UP into a disclosed higher-quality session and DOWN into a
+disclosed lower-quality one improves risk-adjusted expectancy, not a
+volatility safety brake. Disclosed-not-tuned proposed values (illustrative,
+declared now, not to be adjusted after seeing results):
+
+| Session label | Window (UTC) | Test 6 evidence | Proposed scalar |
+|---|---|---|---|
+| `asian` | 00:00-08:00 | PF 4.65, n=41 (pooled 2 yrs) | 1.5 |
+| `london` | 08:00-16:00 | PF 2.41, n=19 (pooled 2 yrs) | 0.75 |
+| `ny_other` | 16:00-24:00 | PF "infinite", n=8 -- disclosed noise | 1.0 (unchanged) |
+| unavailable / unrecognized | -- | -- | 1.0 (unchanged, fail-open) |
+
+`ny_other` is deliberately left unscaled even though Test 6's own PF
+number for it is the highest of the three — the same source document
+that reports it explicitly discloses it as probable small-sample noise,
+and this hypothesis is not permitted to smuggle that caveat away by
+citing the number without the disclosure attached. Scaling only the two
+buckets whose sample sizes clear a reasonable floor (and only in the
+direction their own evidence points) is the disciplined reading of Test
+6, not the aggressive one.
+
+### Grounding
+
+- **Internal, supporting**: `docs/ROBUSTNESS_REPORT.md` Test 6 (the
+  session PF gradient, with its own noise disclosure for `ny_other`);
+  `backend/app/strategy/session_liquidity.py` and the `_SESSION_WINDOWS`
+  dict already in `backend/app/strategy/signal_engine.py` (Asian/London
+  window constants already exist and are already reused by
+  `require_session`, `ENGINEERING_DECISIONS.md` #27); `backend/app/risk/position_sizing.py`'s
+  `volatility_risk_scalar` (the exact pattern this hypothesis' mechanism
+  is modeled on, already validated in production by H4/Milestone 25);
+  `docs/H1_SIGNAL_SELECTION_RESULTS.md` / `ENGINEERING_DECISIONS.md` #64
+  (the new, independently-discovered "throughput beats selectivity on
+  this platform" finding that directly supports sizing-over-filtering as
+  a mechanism class).
+- **Internal, weakening (disclosed, not omitted)**: `docs/CONTINUOUS_RESEARCH_LOG.md`
+  Experiment 3 (the closest prior art — same session windows, same
+  motivating Test 6 evidence, rejected as an entry filter; H5 must
+  survive contact with why that failed, not merely assert it won't
+  recur). **A grounding gap this section is the first to surface**: Test
+  6's 41/19/8 trades were measured on the `docs/ROBUSTNESS_REPORT.md`
+  "production candidate" — BTCUSDT **5-minute** timeframe,
+  `use_structure_tp=True, structure_tp_max_r=3.0,
+  require_premium_discount_filter=True` (`scripts/research_session_filter.py`
+  confirms `TIMEFRAME = "5m"` for the identical Test-6-motivated
+  Experiment 3 run) — **not** the BTCUSDT **15-minute** Legacy
+  default-exit candidate that every H1-H4 experiment in this same
+  document standardized on. The session-PF gradient this hypothesis
+  rests on has never been checked on the actual candidate/timeframe H5
+  would size. The pre-registered experiment below treats this as a
+  precondition to verify, not an assumption to inherit — see step 0.
+  Also disclosed: the 41/19/8 counts are POOLED across the 2025+2026
+  anchors (`docs/ROBUSTNESS_REPORT.md` Test 1's "68 real trades... across
+  both confirmed years combined" is the same 41+19+8=68), so PER-YEAR
+  session sample sizes are smaller than the headline counts suggest —
+  compounding, not merely repeating, the ranking table's own "small-sample
+  noise" caveat.
+- **External**: no literature specific to crypto trading-session position
+  sizing was found beyond the general volatility-targeting citations
+  already used for H4 (Harvey et al. 2018, SSRN 3175538; Hoyle & Shephard
+  2018, SSRN 3279787) — both support the general principle that scaling
+  size by a disclosed, independent conditioning variable can improve
+  risk-adjusted return without changing trade classification, the same
+  principle applied here to a session label instead of a volatility
+  label. Session/liquidity-cycle literature (the same ICT/SMC session
+  convention already cited for `session_liquidity.py`,
+  `ENGINEERING_DECISIONS.md` #27) supports the WINDOWS chosen, not the
+  specific scalar values, which remain disclosed-not-tuned.
+
+### Pre-registered experiment
+
+**Step 0 (grounding check, run and evaluated FIRST, before any new code
+is written)**: reuse the existing session-bucketing method from
+`docs/ROBUSTNESS_REPORT.md` Test 6 / `scripts/research_session_filter.py`,
+applied instead to Legacy's own standard candidate at this document's
+standard anchors — BTCUSDT 15m, `--candles 3000 --periods 6`, no new
+flags, the SAME three runs already on record for delay-gate purposes:
+
+```
+python scripts/run_backtest.py --symbol BTCUSDT --timeframe 15m --candles 3000 --periods 6 --end-date 2026-07-10 --walk-forward
+python scripts/run_backtest.py --symbol BTCUSDT --timeframe 15m --candles 3000 --periods 6 --end-date 2025-07-10 --walk-forward
+python scripts/run_backtest.py --symbol BTCUSDT --timeframe 15m --candles 3000 --periods 6 --end-date 2024-07-10 --walk-forward
+```
+
+Bucket each anchor's resulting trades by entry-candle UTC hour into
+Asian/London/`ny_other` (same three windows as Test 6) and compute PF per
+bucket per year — an analysis-only pass over already-recorded trade
+output, no engine change required for this step.
+
+**Step-0 gate (declared now)**: H5's mechanism proceeds to Step 1 only if
+Legacy/15m shows the SAME qualitative gradient direction Test 6 found
+(Asian PF > London PF) in at least 2 of the 3 tested years, AND at least
+the Asian and London buckets individually reach n≥10 trades in the year(s)
+counted toward that check (a lower floor than H1/H3's n≥20 sizing-gate
+convention, deliberately, since this is a precondition check not a
+promotion gate — but not so low that a 2-3 trade bucket could satisfy
+it). **If this gate fails, H5 is REJECTED at step 0** without building
+`session_risk_scalar` at all — sizing around a gradient that does not
+actually replicate on the candidate/timeframe being sized would be
+fitting Test 6's unrelated-candidate numbers, not this platform's live
+strategy.
+
+**Step 1 (mechanism test, only if step 0 passes)**: implement
+`session_risk_scalar(session: str | None) -> float` in
+`backend/app/risk/position_sizing.py`, mirroring `volatility_risk_scalar`
+exactly (dict lookup, `None`/unrecognized → 1.0, never raises), using the
+disclosed-not-tuned table above. Thread it into `calculate_position_size`
+as a second optional keyword (`session: str | None = None`, multiplying
+`risk_amount` alongside the existing `volatility` scalar — composition of
+the two scalars is multiplicative and undisclosed-as-tested here; running
+both flags together is out of scope for this hypothesis and should not be
+assumed safe without its own check). New opt-in `BacktestEngine.run()`
+parameter `session_scaled_sizing: bool = False` and CLI flag
+`--session-scaled-sizing`, wired at the exact call site as
+`vol_scaled_sizing` (`backend/app/backtesting/backtest_engine.py` ~line
+715), computing the entry candle's UTC-hour session bucket immediately
+before the sizing call and passing it as `session=...`; default `False`,
+byte-identical to current behavior when unset — same discipline as every
+existing opt-in flag in this project.
+
+```
+python scripts/run_backtest.py --symbol BTCUSDT --timeframe 15m --candles 3000 --periods 6 --end-date 2026-07-10 --session-scaled-sizing --walk-forward --delay-check
+python scripts/run_backtest.py --symbol BTCUSDT --timeframe 15m --candles 3000 --periods 6 --end-date 2025-07-10 --session-scaled-sizing --walk-forward --delay-check
+python scripts/run_backtest.py --symbol BTCUSDT --timeframe 15m --candles 3000 --periods 6 --end-date 2024-07-10 --session-scaled-sizing --walk-forward --delay-check
+```
+
+compared directly against the already-recorded Legacy unscaled baseline
+for all three years (`docs/LEGACY_DELAY_ROBUSTNESS.md`) — same trade
+classification is expected (entries/stops/targets untouched, only
+position size changes), so no re-run of the baseline is needed, mirroring
+H4's own comparison method exactly.
+
+**Keep-rule (declared now)**: unlike H4 (whose mechanism was already live
+in production and whose keep-rule was framed around evidence integrity,
+not promotion), H5 is a genuinely new, not-yet-live mechanism and gets a
+real promotion-style keep-rule, matching H1/H2/H3's discipline. KEEP only
+if, in AT LEAST 2 of the 3 tested years:
+
+1. Max drawdown improves (decreases) relative to the unscaled baseline, AND
+2. Net Profit does not degrade by more than ~10% relative to the unscaled
+   baseline in ANY of the 3 years (not just the 2 counted toward
+   condition 1) — mirroring the ~10% materiality band H4's own keep-rule
+   used, and guarding against condition 1 being satisfied by a year where
+   Net Profit was quietly given up to buy the drawdown improvement, AND
+3. Delay-gate PF retention (already measured via `--delay-check`) does
+   not newly fail relative to the already-recorded unscaled baseline in
+   any year — sizing changes currency/variance-sensitive metrics, and
+   `LEGACY_DELAY_ROBUSTNESS.md`'s STRUCTURAL verdict must not be
+   silently invalidated by this change without being re-flagged, the
+   same standing caveat H4's own evaluation raised for itself.
+
+Any single condition failing, or the Step-0 gate failing outright, is
+REJECT. A result that clears Step 0 but splits unevenly across conditions
+1-3 (e.g., condition 1 holds in only 1 of 3 years) is REJECT under this
+rule as written, not MIXED — MIXED is reserved for a keep-rule whose own
+branches don't resolve to a single answer (H4's actual situation); this
+rule's branches are not designed to leave that kind of ambiguity.
+
+### Cost
+
+Small-medium: reuses `volatility_risk_scalar`'s exact, already-validated
+pattern (new function, same shape, same file) and `_SESSION_WINDOWS`'s
+existing Asian/London constants (only `ny_other` is new, and it is a
+derived "neither of the other two" bucket, not a new detector). Step 0
+adds a genuine but cheap analysis-only pass (bucketing already-recorded
+trade output by timestamp, no new indicator). Higher than H4 (which
+needed zero new buckets and reused an already-live mechanism) because of
+the new third session bucket and the mandatory Step-0 gate; lower than H2
+(no new fill-timing/execution-simulation logic of any kind — this changes
+WHAT SIZE gets sized, never WHEN or WHETHER a trade fills).
+
+### Promotion path if KEEP
+
+Explicitly NOT a promotion by itself, same boundary H1 and H4 already
+drew around sizing/selection changes: altering the distribution of
+per-trade risk by session is a real risk-and-behavior change to how
+capital is deployed, squarely in the same operator-gated category
+`ENGINEERING_DECISIONS.md` #62 already established for `MAX_TRADES_PER_DAY`
+and #49 established for the volatility scalar itself. Before any
+operator conversation: cross-asset (ETH/SOL/XRP) confirmation, since
+this entire hypothesis is BTCUSDT-only evidence throughout (Test 6, the
+Step-0 gate, and the Step-1 runs all default to BTCUSDT); and an explicit
+check of `session_scaled_sizing` composed with the already-live
+`vol_scaled_sizing` mechanism, deliberately left unchecked by this
+pre-registration's own Step 1 (both scalars would apply multiplicatively
+in production paper trading if both were ever enabled together, and that
+composition has never been tested).
+
+---
+
+## 7. Rejected ideas
 
 Per department mandate, ideas surveyed and explicitly rejected — either
 because this platform's own evidence already falsifies the mechanism,
@@ -539,7 +787,8 @@ or because grounding was too weak relative to the hypotheses above.
   Asian PF 4.65 vs. London 2.41) that also motivates H5 — the entry-
   filter form of this idea is closed; H5 (sizing, not filtering) is
   offered as a mechanistically distinct but still weakly-grounded
-  variant, ranked last rather than excluded.
+  variant, ranked last rather than excluded. **Full pre-registration
+  now in section 6** (added 2026-07-19).
 - **Naive ATR-multiple stop-distance floor (any multiple).** Directly
   A/B-tested and REJECTED (`docs/ATR_FLOOR_EVALUATION.md`) — at 1.5x,
   PF retention moved only 0.023 → 0.079 (still 6x below the 0.5
@@ -591,7 +840,7 @@ or because grounding was too weak relative to the hypotheses above.
 
 ---
 
-## 7. Recommended first experiment: H4
+## 8. Recommended first experiment: H4
 
 **Run H4 first**, ahead of H1–H3, for a reason distinct from its
 ranking-table score: **its result conditions how every other
@@ -620,7 +869,7 @@ already-validated candidate (H3) or a higher-cost exploratory build
 
 ---
 
-## 8. Caveats
+## 9. Caveats
 
 - **No result exists yet.** This document proposes experiments; it
   reports none. Every number cited above is drawn from prior, already-
@@ -630,7 +879,12 @@ already-validated candidate (H3) or a higher-cost exploratory build
   matching the anchors specified for this round. None of these
   hypotheses have been checked against ETH/SOL/XRP; per this project's
   own standing discipline, no hypothesis here would be promoted past
-  its own pre-registered keep-rule without that cross-asset step.
+  its own pre-registered keep-rule without that cross-asset step. **One
+  disclosed exception**: H5's MOTIVATING evidence (Test 6) was measured
+  on BTCUSDT 5m against the `structure_tp` candidate, not the 15m
+  Legacy candidate H5 itself would size — section 6's Step 0 exists
+  specifically to not let that mismatch pass silently into a keep-rule
+  evaluated on the 15m standard.
 - **Three of five hypotheses (H2, H3, H5) require new code before they
   can be run at all**, unlike H1 (research-script-only) and H4
   (near-trivial engine wiring). The ranking table's cost column already
