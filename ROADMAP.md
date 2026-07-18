@@ -681,15 +681,68 @@ round -- explicitly not chased further this round, matching decision
 placed, no DB writes, no production code touched -- every Jade module
 this round touched was read, not modified.
 
-**Next research action, per `docs/HYPOTHESES_ROUND_2.md` section 3**:
-two directions are queued but not yet pre-registered in full -- (a) a
-natural H7 pre-registration targeting section 5's disclosed gap above
-(RiskManager-level gating / zone-persistence attribution for Jade's
-real trade count), and (b) rank-2/3 from Round 2's own ranking table
-(cross-asset Legacy delay-fragility check; Jade cross-asset scarcity
-check, decision #36's own step 2, whose precondition -- H6's result --
-is now satisfied). Not queued as a specific numbered milestone yet,
-pending confirmation of priority.
+**Strategic research review (2026-07-19, operator directive)**: before
+opening any further hypothesis, all six completed hypotheses (H1-H6)
+were reviewed together for cross-cutting patterns, untested assumptions,
+and ROI-ranked next directions -- full analysis in `docs/
+RESEARCH_STRATEGY_REVIEW.md` (cite, don't duplicate here). Five
+cross-hypothesis findings worth restating as standing research
+discipline, not just this round's summary:
+
+1. **Throughput beats selectivity/refinement, every time it's been
+   tested** (H1, H2, and decision #62's cap-rejection finding all point
+   the same direction) -- treat any future hypothesis that reduces trade
+   count or delays/filters fills as starting from a position of
+   suspicion, not neutrality.
+2. **Regime-/session-conditional hypotheses are data-starved by
+   construction at this platform's current trade volume** (H3: 26/27
+   bucket-year cells never reached n>=20; H5: thin pooled samples whose
+   gradient didn't even replicate on the right candidate) -- do not
+   propose another one without first budgeting for the sample floor.
+3. **Motivating evidence must be re-verified on the exact target
+   candidate before it grounds a new hypothesis** (H5's root cause) --
+   treat H5's own "Step 0 gate" pattern as a standing requirement for
+   any hypothesis citing cross-candidate evidence, not a one-off fix.
+4. **A hypothesis scoped to one named mechanism can miss the real
+   dominant driver in an adjacent pipeline stage** (H6's own result) --
+   default to wider pipeline-attribution instrumentation when it's
+   cheap to do so, rather than testing one named mechanism in isolation.
+5. **Every REJECT/MIXED in this evidence base has been mechanistically
+   explained, not just numerically reported** -- a process strength to
+   keep, not a finding to act on.
+
+**Ranked next directions** (full ranking and rationale:
+`docs/RESEARCH_STRATEGY_REVIEW.md` section 4): (1) **H7** --
+RiskManager/pipeline-gating attribution for Jade's real trade count,
+extending H6's own harness to explain the disclosed 8,312-vs-6 gap;
+(2) Jade-FVG-only isolation test, deferred behind H7; (3) cross-asset
+Legacy delay-fragility check, confirmatory not action-unlocking;
+(4) Jade cross-asset scarcity check (decision #36 step 2), deferred
+behind H7 since H6 only partially explained the mechanism; (5) H4
+cross-asset re-check, low urgency (not actionable regardless of
+outcome); (6) re-examining the quarantined experimental strategies, no
+new reason to revisit.
+
+**Explicitly eliminated, not merely deprioritized** (full rationale:
+`docs/RESEARCH_STRATEGY_REVIEW.md` section 5): a fifth Legacy
+delay-fragility fix attempt (four independently distinct mechanisms
+already REJECTED); any further regime-/session-conditional hypothesis
+that doesn't first clear the n>=20 sample floor; and a `MAX_TRADES_PER_DAY`
+cap-relaxation backtest sensitivity study, even framed as
+disclosed-not-acted-upon research -- this project's own established
+restraint (H1's boundary-respecting framing, decision #62's
+insight-not-acted-on framing) treats even a backtest-only counterfactual
+of a risk-limit constant as close enough to the operator-gated boundary
+to avoid without explicit prior authorization.
+
+**Recommended single next hypothesis: H7** (RiskManager/pipeline-gating
+attribution for Jade). Cheapest available experiment (extends H6's
+already-tested analysis code, no new `BacktestEngine` parameter or CLI
+flag), most directly grounded (named by H6, which was named by decision
+#36), and carries the highest potential for a platform-level unifying
+finding -- if `MAX_TRADES_PER_DAY` gates Jade the way decision #62 found
+it gates Legacy, that reframes the Strategy Selection Engine question
+materially. Not yet pre-registered as of this writing.
 
 **Standing awareness item, not an action item**: H4's evaluation flagged
 that any existing finding resting on Net Profit margins narrower than
