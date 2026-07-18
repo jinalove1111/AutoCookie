@@ -598,32 +598,57 @@ a resting limit order is not verified live limit-order behavior) --
 moot here. Full suite 748/748 (up from 739). No orders placed, no DB
 writes, no production code touched.
 
-**Next experiment, per Hypothesis Round 1's own ranking: H5**
-(session-conditional position sizing, ranked #5 -- the last remaining
-hypothesis from `docs/HYPOTHESES_ROUND_1.md`). **Pre-registration
-completed 2026-07-19** -- H5 previously existed only as a ranking-table
-row (section 1) and a "Rejected ideas" cross-reference (formerly section
-6, now section 7); it now has a full H1-H4-format section (**section
-6**: mechanism, grounding, pre-registered experiment, keep-rule, cost,
-promotion path), not fabricated after the fact but built from evidence
-already on record, per `CLAUDE.md`'s explicit caution about this
-hypothesis. Two things this pre-registration surfaced that the original
-ranking-table row did not: (1) new supporting grounding -- Milestone 26's
-H1 finding ("trade FREQUENCY matters more than per-trade selectivity on
-this platform", `ENGINEERING_DECISIONS.md` #64) was published one day
-AFTER H5 was originally ranked and independently supports sizing over
-filtering as a mechanism class; (2) a disclosed grounding gap -- Test 6,
-H5's sole motivating evidence, was measured on BTCUSDT **5m** against the
-`structure_tp` candidate, not the 15m Legacy candidate H5 would actually
-size, so section 6's pre-registered experiment adds a **Step 0 gate**
-(does the session-PF gradient even replicate on Legacy/15m?) that must
-pass before `session_risk_scalar` is implemented at all. **Not yet run**
--- this milestone is the pre-registration only; implementing
-`session_risk_scalar`/`--session-scaled-sizing` and running Step 0 is the
-next actionable item, still backtest-only and still not a promotion
-decision if it clears its keep-rule (same operator-gated boundary as
-H1/H4's sizing-adjacent findings, per section 6's own promotion-path
-text).
+**Milestone 29 -- CLOSED (2026-07-19).** Full evidence: `docs/
+H5_SESSION_GROUNDING_RESULTS.md` (cite, don't duplicate here); rationale:
+`ENGINEERING_DECISIONS.md` #67. Pre-registered H5 (session-conditional
+position sizing, ranked #5, the last remaining hypothesis from
+`docs/HYPOTHESES_ROUND_1.md`) in full -- section 6, not fabricated after
+the fact but built from evidence already on record, per `CLAUDE.md`'s
+explicit caution about this hypothesis -- then immediately ran its own
+pre-registered **Step 0 gate**: does the session profit-factor gradient
+`docs/ROBUSTNESS_REPORT.md` Test 6 found (Asian PF 4.65 > London PF 2.41,
+measured on BTCUSDT 5m against the `structure_tp` candidate) actually
+replicate on the candidate/timeframe H5 would size (BTCUSDT 15m, Legacy
+default exit)? New analysis-only harness
+`scripts/research_h5_step0_session_grounding.py` (+
+`backend/tests/test_research_h5_step0_session_grounding.py`, 8 tests)
+buckets already-produced Legacy-baseline trades by UTC entry hour into
+the same three Test-6 windows, no new `BacktestEngine` parameter, no new
+CLI flag. Ran BTCUSDT 15m 2024/2025/2026 (`--candles 3000 --periods 6`,
+plain Legacy default, byte-identical to the already-published baseline --
+trade counts 111/65/73 confirmed exact matches). **VERDICT: REJECT at
+Step 0.** The gradient direction (Asian PF > London PF) holds in only 1
+of 3 years (2024) against the required >=2/3 -- in 2026 and 2025,
+including the platform's single most-evidenced anchor (2026, 111 trades),
+London's PF exceeds Asian's, the OPPOSITE of Test 6's finding. Per H5's
+own pre-registered text, this ends the hypothesis outright:
+`session_risk_scalar`/`--session-scaled-sizing` were never implemented,
+Step 1 never ran. **The substantive finding**: a session-quality
+gradient measured on one candidate/timeframe does not transfer to a
+different candidate/timeframe even on the same asset and session-window
+convention -- a standalone, disclosed caveat for any future hypothesis
+tempted to condition on Test 6's numbers without re-verifying them on the
+actual candidate being sized. Full suite 756/756 (up from 748). No
+orders placed, no DB writes, no production code touched -- this REJECT
+required zero new engine flags, unlike H1/H3/H4's harnesses.
+
+**Hypothesis Round 1 is now fully resolved**: all five pre-registered
+hypotheses (H1-H5) have a verdict -- REJECT (H1, milestone 26), REJECT
+(H3, milestone 27), REJECT (H2, milestone 28), MIXED (H4, milestone 25),
+REJECT at Step 0 (H5, milestone 29). **Next research action is a fresh
+round, not a queued item from this one** -- Hypothesis Round 1 produced
+zero KEEPs and one MIXED, so before spending more compute on
+parameter-adjacent experiments against Legacy specifically, the
+recommended next step is a NEW hypothesis round scoped to the adaptive
+platform's own stated objective (`docs/ADAPTIVE_ARCHITECTURE.md`) --
+e.g., Strategy B (Jade)'s own backtest-only evaluation against the same
+3-anchor standard, which has never been run at all (Jade is fully built
+and tested per-component but never benchmarked end-to-end the way Legacy
+has been across 8 evidence rounds). This is a genuinely different
+direction (multi-strategy evaluation, not another Legacy fix) matching
+the pivot's own "prefer structural improvements over parameter
+optimization" directive -- not queued as a numbered milestone yet,
+pending confirmation this is still the platform's actual priority.
 
 **Standing awareness item, not an action item**: H4's evaluation flagged
 that any existing finding resting on Net Profit margins narrower than

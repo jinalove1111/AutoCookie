@@ -4,6 +4,63 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Milestone 29: H5 pre-registered then evaluated at Step 0 -- REJECT, session-quality gradient does not transfer across candidate/timeframe
+
+2026-07-19. Full report: `docs/H5_SESSION_GROUNDING_RESULTS.md` (cite,
+don't duplicate here). **The question**: `docs/HYPOTHESES_ROUND_1.md`
+section 6 (H5, ranked #5, the last unresolved hypothesis from Round 1,
+previously only a ranking-table row per `CLAUDE.md`'s explicit caution
+against fabricating its spec) was pre-registered in full this round --
+mechanism, grounding, pre-registered experiment, keep-rule, cost,
+promotion path -- built entirely from evidence already on record, not
+invented after the fact. Two things surfaced during pre-registration
+that the original 2026-07-17 ranking did not have: new supporting
+grounding (Milestone 26's H1 finding that trade FREQUENCY matters more
+than per-trade selectivity on this platform, published a day after H5's
+original ranking, independently backs sizing-over-filtering as a
+mechanism class) and a disclosed grounding gap (H5's sole motivating
+evidence, `docs/ROBUSTNESS_REPORT.md` Test 6, was measured on BTCUSDT 5m
+against the `structure_tp` candidate, not the 15m Legacy candidate H5
+would size). The pre-registration added a **Step 0 gate** specifically to
+check that gap before any sizing code was written.
+
+**Step 0 was then run this same round**: new analysis-only harness
+`scripts/research_h5_step0_session_grounding.py` (+
+`backend/tests/test_research_h5_step0_session_grounding.py`, 8 tests)
+buckets already-produced Legacy-baseline trades by UTC entry hour into
+Test 6's three session windows (Asian/London/NY-other), no new
+`BacktestEngine` parameter or CLI flag needed. BTCUSDT 15m
+2024/2025/2026, `--candles 3000 --periods 6`, plain Legacy default --
+trade counts (111/65/73) confirmed exact matches to the already-published
+baseline before trusting the new bucketing logic.
+
+| Anchor | Asian N / PF | London N / PF | Gradient holds (Asian > London)? |
+|---|---|---|---|
+| 2026 | 71 / 3.565 | 24 / 5.303 | NO |
+| 2025 | 42 / 2.690 | 17 / 4.451 | NO |
+| 2024 | 47 / 3.916 | 20 / 2.753 | YES |
+
+**VERDICT: REJECT at Step 0.** Applying H5's own pre-registered gate
+literally ("Asian PF > London PF in at least 2 of 3 tested years, both
+buckets n>=10"): the gradient direction holds in only 1 of 3 years
+(2024) -- in 2026 and 2025, including the platform's single
+most-evidenced anchor (2026, 111 trades), London's PF exceeds Asian's,
+the OPPOSITE of Test 6's finding. Per H5's own text, this ends the
+hypothesis outright -- `session_risk_scalar`/`--session-scaled-sizing`
+were never implemented, Step 1 never ran.
+
+**The substantive finding**: a session-quality gradient measured on one
+candidate/timeframe does not transfer to a different candidate/timeframe,
+even on the same asset and session-window convention -- a standalone,
+disclosed caveat for any future hypothesis tempted to condition on Test
+6's numbers without re-verifying them on the actual candidate being
+sized. **Hypothesis Round 1 is now fully resolved**: H1 REJECT, H2
+REJECT, H3 REJECT, H4 MIXED, H5 REJECT at Step 0 -- zero KEEPs. Full
+suite 756/756 (up from 748). No orders placed, no DB writes, no
+production code touched -- notably, this REJECT required zero new engine
+flags, unlike H1/H3/H4's harnesses. Details: `ENGINEERING_DECISIONS.md`
+#67.
+
 ## [Unreleased] - Milestone 28: H2 passive limit-at-level entry evaluated -- REJECT, delay-robustness achieved cleanly but entry model itself unprofitable
 
 2026-07-18. Full report: `docs/H2_LIMIT_ENTRY_RESULTS.md` (cite, don't

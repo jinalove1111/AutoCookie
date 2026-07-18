@@ -833,6 +833,53 @@ practice** (`scripts/cto_report.py`, milestone 17b below).
     `docs/H2_LIMIT_ENTRY_RESULTS.md`. Full rationale:
     `ENGINEERING_DECISIONS.md` #66.
 
+29. **H5: session-conditional position sizing -- pre-registered in full,
+    then REJECTED at its own Step 0 grounding gate** (2026-07-19):
+    `docs/HYPOTHESES_ROUND_1.md` section 1's ranking table carried H5 as
+    a one-line row only -- `CLAUDE.md` records that the operator/CTO
+    explicitly declined to have its full spec fabricated after the fact.
+    This round wrote H5's full pre-registration (new section 6:
+    mechanism, grounding, pre-registered experiment, keep-rule, cost,
+    promotion path), built entirely from evidence already committed to
+    this repository, then ran the pre-registration's own **Step 0**
+    precondition check in the same round -- before any
+    `session_risk_scalar` sizing code was written. **What the
+    pre-registration surfaced**: new supporting grounding (milestone 26's
+    H1 finding that trade FREQUENCY matters more than per-trade
+    selectivity on this platform, published a day after H5's original
+    ranking); and a disclosed grounding gap -- H5's sole motivating
+    evidence, `docs/ROBUSTNESS_REPORT.md` Test 6 (Asian PF 4.65 > London
+    PF 2.41), was measured on BTCUSDT 5m against the `structure_tp`
+    candidate, not the 15m Legacy candidate H5 would size. **Step 0**:
+    new analysis-only harness `scripts/research_h5_step0_session_grounding.py`
+    (+ 8 tests) buckets already-produced Legacy-baseline trades by UTC
+    entry hour into Test 6's three session windows -- no new
+    `BacktestEngine` parameter, no new CLI flag; `RiskManager.evaluate()`
+    and `scripts/run_paper.py` untouched throughout. Ran BTCUSDT 15m
+    2024/2025/2026 (plain Legacy default; trade counts 111/65/73
+    confirmed exact matches to the already-published baseline before
+    trusting the new bucketing logic). **Result**: gradient direction
+    (Asian PF > London PF) held in only 1 of 3 years (2024) -- in 2026
+    and 2025, including the platform's single most-evidenced anchor
+    (2026, 111 trades), London's PF exceeded Asian's, the OPPOSITE of
+    Test 6's finding. **VERDICT: REJECT at Step 0**, applying H5's own
+    pre-registered gate literally (Asian PF > London PF required in
+    >=2/3 years, both buckets n>=10) -- 1-of-3 is below the threshold.
+    Per H5's own text this ends the hypothesis outright:
+    `session_risk_scalar`/`--session-scaled-sizing` were never
+    implemented, Step 1 never ran. **Substantive finding**: a
+    session-quality gradient measured on one candidate/timeframe does not
+    transfer to a different candidate/timeframe, even holding the asset
+    and session-window convention fixed -- a standalone, disclosed
+    caveat for any future hypothesis conditioning on Test 6's numbers.
+    **Hypothesis Round 1 is now fully resolved**: H1 REJECT, H2 REJECT,
+    H3 REJECT, H4 MIXED, H5 REJECT at Step 0 -- zero KEEPs. Legacy's
+    live/paper trading behavior is completely unchanged; this round
+    needed zero new engine parameters or CLI flags, unlike H1/H3/H4's
+    harnesses. No orders placed, no DB writes. **Full suite 756/756**
+    (up from 748). Full report: `docs/H5_SESSION_GROUNDING_RESULTS.md`.
+    Full rationale: `ENGINEERING_DECISIONS.md` #67.
+
 **Production-behavior note**: milestones 1-6 were purely additive/
 observational. Milestone 7 was the FIRST to change actual paper-trading
 sizing/rejection math (more conservative sizing in high volatility;

@@ -4335,3 +4335,104 @@ fill-timing code was added, but default off and byte-identical when
 unset; no live/paper behavior changed). Full suite 748/748 at evaluation
 time (up from 739). Full report, cited not duplicated:
 `docs/H2_LIMIT_ENTRY_RESULTS.md`.
+
+## 67. Milestone 29: H5 (session-conditional position sizing) pre-registered in full, then REJECTED at its own Step 0 grounding gate -- the session-quality gradient does not transfer across candidate/timeframe
+
+**Decision context**: `docs/HYPOTHESES_ROUND_1.md` section 1's ranking
+table carried H5 as a one-line row only, by explicit prior department
+decision -- `CLAUDE.md` records that the operator/CTO declined to have a
+full spec fabricated for it after the fact, and instructs any future
+session asked to implement H5 to confirm which section actually carries
+its full mechanism/keep-rule text before treating anything as
+authoritative, not invent the missing pre-registration itself. This
+round did both steps in sequence, in the order the department's own rule
+#1 requires: **(1)** wrote H5's full pre-registration (new section 6:
+mechanism, grounding, pre-registered experiment, keep-rule, cost,
+promotion path) built entirely from evidence already committed to this
+repository -- no new claim invented -- then, separately, **(2)** ran the
+Step 0 precondition check that pre-registration itself declared before
+building anything further.
+
+**What the pre-registration surfaced that the original 2026-07-17
+ranking-table row did not**: (a) new supporting grounding -- decision
+#64 (Milestone 26, H1) found "trade FREQUENCY matters more than
+per-trade selectivity on this platform," published the day AFTER H5 was
+originally ranked last, independently supporting H5's sizing-not-
+filtering mechanism class against the already-rejected Asian-only entry
+filter (`docs/CONTINUOUS_RESEARCH_LOG.md` Experiment 3); (b) a disclosed
+grounding gap -- H5's sole motivating evidence, `docs/ROBUSTNESS_REPORT.md`
+Test 6 (Asian PF 4.65 > London PF 2.41), was measured on BTCUSDT
+**5-minute** timeframe against the `structure_tp` candidate, not the
+BTCUSDT **15-minute** Legacy default-exit candidate H5's proposed
+`session_risk_scalar` would actually size (`scripts/research_session_filter.py`
+confirms `TIMEFRAME = "5m"` for that same Test-6-motivated run). The
+pre-registration's own Step 0 gate exists specifically to check (b)
+before investing in the mechanism at all.
+
+**Step 0 was then run this same round**: new analysis-only harness
+`scripts/research_h5_step0_session_grounding.py` (+
+`backend/tests/test_research_h5_step0_session_grounding.py`, 8 tests) --
+no new `BacktestEngine` parameter, no new CLI flag, `RiskManager.evaluate()`
+and `scripts/run_paper.py` untouched throughout. It runs the plain
+Legacy default-exit baseline (BTCUSDT 15m, `--candles 3000 --periods 6`,
+`--end-date 2026-07-10 / 2025-07-10 / 2024-07-10`) and buckets the
+resulting trades by entry-candle UTC hour into Test 6's own three
+session windows (Asian 00:00-08:00, London 08:00-16:00, NY/other
+16:00-24:00 -- the first two already-disclosed constants from
+`backend/app/strategy/session_liquidity.py`/`signal_engine.py`'s
+`_SESSION_WINDOWS`, decision #27; the third Test 6's own residual
+bucket). **Baseline reproduction confirmed before trusting the new
+bucketing logic**: total trade counts (111/65/73 for 2026/2025/2024)
+match the already-published Legacy baseline exactly
+(`docs/LEGACY_DELAY_ROBUSTNESS.md`; `docs/H2_LIMIT_ENTRY_RESULTS.md`'s
+Legacy comparison column).
+
+**Result**: Asian N/PF 71/3.565 (2026), 42/2.690 (2025), 47/3.916
+(2024); London N/PF 24/5.303 (2026), 17/4.451 (2025), 20/2.753 (2024).
+The sample floor (n>=10 on both buckets) is met in all three years, but
+the gradient direction (Asian PF > London PF) holds in only **1 of 3
+years** (2024) -- in 2026 and 2025, including the platform's single
+most-evidenced anchor (2026, 111 trades, the largest trade count on
+record for any anchor in this evidence base), London's PF exceeds
+Asian's, the OPPOSITE of Test 6's finding on the unrelated
+candidate/timeframe.
+
+**Applying H5's own pre-registered Step-0 gate literally**: quoting it
+verbatim, "H5's mechanism proceeds to Step 1 only if Legacy/15m shows
+the SAME qualitative gradient direction Test 6 found (Asian PF > London
+PF) in at least 2 of the 3 tested years, AND at least the Asian and
+London buckets individually reach n>=10 trades in the year(s) counted
+toward that check... If this gate fails, H5 is REJECTED at step 0
+without building `session_risk_scalar` at all." **VERDICT: REJECT at
+Step 0.** 1-of-3 is below the required 2-of-3 threshold; per the rule's
+own text this ends the hypothesis outright. `session_risk_scalar` and
+`--session-scaled-sizing` were never implemented; H5's Step 1 (the
+actual sizing-mechanism keep-rule: drawdown/Net-Profit/delay-gate
+conditions) never ran.
+
+**The substantive finding, independent of H5's own REJECT**: a
+session-quality gradient measured on one candidate/timeframe does not
+transfer to a different candidate/timeframe, even holding the asset and
+the UTC session-window convention fixed -- the two candidates' session
+ranking actually INVERTS in 2 of 3 years. This is a standalone,
+disclosed caveat for this evidence base: any future hypothesis
+conditioning on Test 6's specific numbers must re-verify them on the
+actual candidate being sized, not assume they transfer. **Hypothesis
+Round 1 is now fully resolved**: H1 REJECT (decision #64), H2 REJECT
+(decision #66), H3 REJECT (decision #65), H4 MIXED (decision #63), H5
+REJECT at Step 0 (this decision) -- zero KEEPs, one MIXED, four REJECTs.
+
+**Promotion path**: NONE -- REJECT at the precondition stage, before any
+promotion-relevant keep-rule was even evaluated. Legacy's live/paper
+trading behavior is completely unchanged: `RiskManager.evaluate()`,
+`scripts/run_paper.py`, and `BacktestEngine` internals are all
+byte-for-byte unchanged -- this round needed zero new engine parameters
+or CLI flags, unlike H1/H3/H4's harnesses, since Step 0 only buckets
+trade output the engine already produces. No orders placed, no writes to
+`backend/paper_validation.db`.
+
+**Status**: read-only evidence round, no production code touched (one
+new research-only script + its dedicated test file, neither imported by
+any production or paper-trading path). Full suite 756/756 at evaluation
+time (up from 748 -- 8 new tests for the session-bucketing logic). Full
+report, cited not duplicated: `docs/H5_SESSION_GROUNDING_RESULTS.md`.
