@@ -4,6 +4,14 @@ Milestone 1: System Architecture. This document describes the intended
 architecture of the bot. No trading logic is implemented yet — this is the
 scaffolding and design contract that later milestones build against.
 
+**Still the current design for the six layers below** — none of them were
+redesigned by the later adaptive-platform pivot (2026-07-15, see
+`ROADMAP.md` "Objective change"). That pivot added a NEW layer on top
+(Market Regime Detector, Strategy interface/registry, Strategy Selection
+Engine) rather than replacing this one; see `docs/ADAPTIVE_ARCHITECTURE.md`
+for that layer and `CLAUDE.md` section 3 for the combined one-line mental
+model of how the two fit together.
+
 ## 1. System Overview — The 6 Core Layers
 
 The system is composed of six core layers. Each layer has a single
