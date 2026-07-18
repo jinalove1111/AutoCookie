@@ -443,17 +443,86 @@ LEGACY_DELAY_ROBUSTNESS.md`'s STRUCTURAL verdict is unaffected (all deltas
 noise-level, <=0.002). 701/701 (up from 692). Read-only -- no orders, no
 DB writes, no production code touched.
 
-**Next experiment, per Hypothesis Round 1's own ranking: H1** (quality-
-ranked signal selection within the existing `MAX_TRADES_PER_DAY` cap,
-ranked #2). Directly targets the single largest disclosed, quantified
-opportunity in the evidence base -- 89-92% of Legacy's own signals
-discarded by the FIFO daily cap in all three tested years -- while
-respecting the operator-gated boundary around the cap itself (re-ranks
-WITHIN the fixed cap, does not propose raising it). Pre-registered
-experiment and keep-rule already declared in `docs/HYPOTHESES_ROUND_1.md`
-section 2; not yet run. H2 (passive limit-at-level entry), H3 (regime-
-conditional `structure_tp` delay survival), and H5 (session-conditional
-sizing) remain queued behind it per the same document's ranking.
+**Milestone 26 -- CLOSED (2026-07-18).** Full evidence: `docs/
+H1_SIGNAL_SELECTION_RESULTS.md` (cite, don't duplicate here); rationale:
+`ENGINEERING_DECISIONS.md` #64. Ran H1 (quality-ranked signal selection
+within the existing `MAX_TRADES_PER_DAY` cap, ranked #2 behind milestone
+25's H4) via a new research-only harness,
+`scripts/research_signal_selection.py` (+15 tests), which re-batches each
+simulated day's full signal supply and ranks by a disclosed-not-tuned
+score (`rr`, `rr_confluence`) instead of chronological arrival order,
+taking only the top-`MAX_TRADES_PER_DAY` by score -- `RiskManager.
+evaluate()`'s live sequential-approval logic untouched throughout.
+Baseline reproduction confirmed exactly on both standard anchors (2025/
+2026) before trusting the comparison. **VERDICT: REJECT for both
+variants**, applying H1's own pre-registered keep-rule literally: `rr`
+wins Profit Factor in both anchors (+6.5% 2026, +138.3% 2025) but LOSES
+Net Profit in both (-24.1% 2026, -4.1% 2025), disqualified by the rule's
+own "wins on PF but not Net Profit, is REJECT" clause; `rr_confluence`
+loses both metrics in both anchors outright. Unlike milestone 25's H4
+(genuinely MIXED across its own keep-rule branches), H1's rule resolves
+cleanly -- a straightforward negative result, not an ambiguous one.
+**Mechanism**: both ranked variants realize far fewer trades under the
+same fixed cap (2026: 82/77 vs. baseline 111; 2025: 43/46 vs. baseline
+65) -- day-clustering causes the second-ranked candidate's window to
+overlap the still-open first trade and be skipped, so quality-ranking
+trades throughput for per-trade selectivity, and the throughput loss
+costs more Net Profit than the selectivity gain recovers, in both years
+without exception. Confirms Legacy's edge on this platform scales more
+with trade FREQUENCY under the fixed cap than with per-trade selection
+quality, and confirms the cap-rejection opportunity (`ENGINEERING_
+DECISIONS.md` #62) requires raising the cap itself to capture -- not
+smarter selection within it, and the cap remains explicitly
+operator-gated. Also reinforces `docs/strategy_spec.md` §6's existing
+finding against stricter confluence: `rr_confluence` performed worse than
+plain `rr` on both metrics in both years. **Standing follow-up, not
+resolved this round**: the harness's own Profit Factor for the
+chronological baseline variant runs consistently lower than the
+previously-published baseline PF for the identical run (2026: 4.378 vs.
+5.024; 2025: 3.498 vs. 4.593) despite Net Profit/trades/walk-forward
+matching byte-for-byte -- plausibly a PF-aggregation methodology
+difference (e.g. per-period-averaged vs. pooled gross-profit/gross-loss).
+Does not affect this round's verdict (Net Profit is the deciding metric
+and reproduced exactly), but `scripts/research_signal_selection.py`'s PF
+output should be treated as non-comparable to `run_backtest.py`'s own PF
+and this discrepancy should be root-caused before the harness is reused
+for a future hypothesis round. Full suite 716/716 (up from 701). No
+orders placed, no DB writes, no production code touched.
+
+**Next experiment, per Hypothesis Round 1's own ranking: H3** (regime-
+conditional delay survival of the `structure_tp` family, ranked #3).
+Combines three already-built, already-independently-validated mechanisms
+(`--structure-tp`, `--tag-regimes`, `--delay-check`) in a combination no
+prior round has run together. `docs/PROFITABILITY_EXPERIMENT_REPORT.md`
+§12-14 validated `use_structure_tp=True` as the platform's strongest
+candidate family (cross-asset, cross-year on raw profitability), while
+`docs/ROBUSTNESS_REPORT.md` Test 2 found this SAME family catastrophically
+delay-fragile in AGGREGATE (PF 5.24 -> 0.16 at a 5-minute delay) -- the
+finding that started the entire delay-robustness thread, later confirmed
+structural for Legacy itself (`docs/LEGACY_DELAY_ROBUSTNESS.md`). No
+round has ever regime-tagged a `structure_tp` delay-check run. H3 tests
+whether, in regimes with more directional persistence
+(`strong_trend/*`, or BTC's dominant `weak_trend/normal_volatility`
+bucket), a 15-minute delay matters proportionally less -- since
+`structure_tp` targets a real structural level rather than a fixed-RR
+distance, its stop/target geometry varies with market structure, unlike
+the already-rejected uniform ATR floor (`docs/ATR_FLOOR_EVALUATION.md`
+§4). This is a genuinely different mechanism from that rejected fix: H3
+touches no parameter at all, it asks whether an already-built,
+already-validated candidate's EXISTING variable stop/target geometry
+happens to be delay-robust in specific, identifiable regimes.
+**Pre-registered keep-rule (quoted from `docs/HYPOTHESES_ROUND_1.md`
+section 3, declared before any run)**: a regime bucket counts as a
+genuine delay-robust pocket only if it clears the same bar the platform
+already applies everywhere else -- n>=20 trades on the delayed side of
+that bucket, PF retention >=0.5, no sign flip, in AT LEAST 2 of the 3
+tested years. If no bucket clears this bar in any year, REJECT the
+regime-conditional-survival hypothesis outright. A bucket clearing the
+bar in only 1 of 3 years is recorded as a directional lead, not a keep.
+Pre-registered experiment and keep-rule already declared in
+`docs/HYPOTHESES_ROUND_1.md` section 3; not yet run. H2 (passive
+limit-at-level entry) and H5 (session-conditional sizing) remain queued
+behind it per the same document's ranking.
 
 **Standing awareness item, not an action item**: H4's evaluation flagged
 that any existing finding resting on Net Profit margins narrower than
@@ -463,6 +532,18 @@ task queued for a specific milestone -- it is a caveat to keep in mind
 when citing any prior evidence document's headline profit numbers as
 final, until/unless such a re-check is actually warranted by a future
 round touching those numbers.
+
+**Second standing awareness item (new, milestone 26)**: `scripts/
+research_signal_selection.py`'s own computed Profit Factor for its
+chronological/baseline-reproducing variant runs consistently lower than
+the previously-published baseline PF for the identical run (see milestone
+26 above) -- plausibly a PF-aggregation methodology difference, not a
+`BacktestEngine` behavioral difference (Net Profit/trades/walk-forward
+all matched byte-for-byte). Not a task queued for a specific milestone,
+but this harness's PF output should be treated as non-comparable to
+`run_backtest.py`'s own PF, and the discrepancy should be root-caused
+before this specific harness is ever reused for a future hypothesis
+round.
 
 **Natural next steps after milestone 12** (superseded by the above --
 retained for continuity): the data path to a justified

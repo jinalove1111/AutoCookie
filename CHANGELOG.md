@@ -4,6 +4,87 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Milestone 26: H1 quality-ranked signal selection evaluated -- REJECT, second confirmation that throughput beats selectivity under the fixed daily cap
+
+2026-07-18. Full report: `docs/H1_SIGNAL_SELECTION_RESULTS.md` (cite,
+don't duplicate here). **The question**: `docs/HYPOTHESES_ROUND_1.md`
+section 2 (H1, ranked #2 behind Milestone 25's H4) asks whether, holding
+`MAX_TRADES_PER_DAY` fixed at 2, selecting the two highest-QUALITY
+signals of the day (instead of the first two chronologically) improves
+expectancy -- a narrower, safer question than raising the cap itself
+(explicitly out of scope, operator-gated per `ENGINEERING_DECISIONS.md`
+#62), directly targeting the largest disclosed, quantified opportunity in
+this platform's evidence base: 89-92% of Legacy's raw signal stream
+rejected purely by the FIFO daily cap (`docs/LEGACY_DELAY_ROBUSTNESS.md`
+§2).
+
+**H1 experiment**: new research-only harness
+`scripts/research_signal_selection.py` (+
+`backend/tests/test_research_signal_selection.py`, 15 tests) re-batches
+each simulated day's full signal supply and ranks by a disclosed-not-tuned
+score (`rr` = `TradeSignal.rr`; `rr_confluence` = `rr + confluence_count`,
+both declared before any run), taking only the top-`MAX_TRADES_PER_DAY`
+by score. `RiskManager.evaluate()`'s live sequential-approval logic is
+untouched -- purely a research re-batching layer atop `BacktestEngine`'s
+existing fee/slippage/fill/PnL mechanics. Baseline reproduction confirmed
+exactly (Net Profit to the cent, trade count, walk-forward outcome,
+matching `docs/LEGACY_DELAY_ROBUSTNESS.md`/`docs/ATR_FLOOR_EVALUATION.md`)
+before trusting the comparison.
+
+| Year | Variant | Net Profit | Profit Factor | Trades | Walk-forward |
+|---|---|---|---|---|---|
+| 2026 | chronological (baseline) | $3,400.62 | 4.378 | 111 | PASSED |
+| 2026 | rr | $2,579.99 | 4.662 | 82 | PASSED |
+| 2026 | rr_confluence | $1,737.16 | 2.883 | 77 | PASSED (5/6) |
+| 2025 | chronological (baseline) | $1,714.56 | 3.498 | 65 | FAILED (known degradation) |
+| 2025 | rr | $1,644.20 | 8.336 | 43 | PASSED |
+| 2025 | rr_confluence | $968.04 | 2.708 | 46 | FAILED (5/6) |
+
+**VERDICT: REJECT for both variants**, applying H1's pre-registered
+keep-rule literally: `rr` wins Profit Factor in BOTH anchors (+6.5%
+2026, +138.3% 2025) but LOSES Net Profit in BOTH anchors (-24.1% 2026,
+-4.1% 2025) -- disqualified directly by the rule's own explicit
+"wins on PF but not Net Profit, is REJECT" clause. `rr_confluence` loses
+both metrics in both anchors outright. Unlike Milestone 25's H4, which
+genuinely did not resolve to a single keep-rule branch and was reported
+MIXED, H1's rule resolves cleanly -- a straightforward negative result.
+
+**Mechanism**: both ranked variants realize markedly fewer trades than
+the chronological baseline under the SAME fixed cap (2026: 82/77 vs. 111;
+2025: 43/46 vs. 65) -- a day's top-scored candidates can cluster in time
+such that the second-ranked candidate's window overlaps the still-open
+first trade and is skipped, whereas FIFO naturally spreads fills as
+signals arrive live. Quality-ranking traded away raw throughput for
+higher per-trade selectivity, but the throughput loss cost more aggregate
+Net Profit than the quality gain recovered, in both years without
+exception -- Legacy's edge on this platform scales more with trade
+FREQUENCY under the fixed cap than with per-trade selectivity. This
+reinforces `docs/strategy_spec.md` §6's existing finding that stricter
+confluence does not reliably improve trade quality (`rr_confluence`
+performed worse than plain `rr` on both metrics, both years -- a second,
+independent data point) and confirms the cap-rejection opportunity
+(`ENGINEERING_DECISIONS.md` #62) requires trade throughput, not smarter
+selection, to capture -- raising the cap remains explicitly operator-gated,
+not something this result argues for.
+
+**Disclosed, un-root-caused discrepancy**: the harness's own PF for the
+`chronological` variant runs consistently lower than the previously-
+published baseline PF for the identical run (2026: 4.378 vs. 5.024; 2025:
+3.498 vs. 4.593) despite Net Profit/trades/walk-forward matching
+byte-for-byte -- plausibly a PF-aggregation methodology difference
+(per-period-averaged vs. pooled), not verified this round. Does not
+affect the verdict (Net Profit is the deciding metric and it reproduced
+exactly); flagged as a standing follow-up to resolve before this harness
+is reused.
+
+**Promotion path**: NONE -- REJECT. Legacy's live/paper trading behavior
+is completely unchanged: `RiskManager.evaluate()`, `scripts/run_paper.py`,
+`BacktestEngine` internals all byte-for-byte unchanged. No orders placed,
+no DB writes.
+
+**Full suite 716/716 at evaluation time** (up from 701 -- 15 new
+`research_signal_selection` tests).
+
 ## [Unreleased] - Milestone 25: the research-company loop's first full cycle -- Hypothesis Round 1 + H4 position-sizing parity, verdict MIXED
 
 2026-07-17/18. Full reports: `docs/HYPOTHESES_ROUND_1.md`,
