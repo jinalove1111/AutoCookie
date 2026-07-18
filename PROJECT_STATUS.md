@@ -997,6 +997,72 @@ practice** (`scripts/cto_report.py`, milestone 17b below).
     Full report: `docs/H7_JADE_RISK_ATTRIBUTION_RESULTS.md`. Full
     rationale: `ENGINEERING_DECISIONS.md` #69.
 
+32. **H8: validating Jade's RR-geometry bottleneck -- structural on
+    stop_model, plus a real bug found and corrected in Milestone 30's
+    own harness** (2026-07-19): operator directive -- "proceed with
+    H8... focus on validating the newly identified reward-risk geometry
+    bottleneck." New analysis-only harness
+    `scripts/research_h8_jade_rr_sensitivity.py` (+ 9 tests) sweeps
+    every already-existing `stop_model` value (FVG: aggressive/moderate/
+    conservative; Breaker: aggressive/conservative) and every
+    already-computed exit-target rank against production's actual
+    default combination -- zero new production code;
+    `find_entry_point`'s own selection called once per step (unaffected
+    by stop_model choice, confirmed by code inspection before this
+    design was finalized). Ran BTCUSDT 15m 2024/2025/2026, 8,340
+    baseline candidates. **Result**: baseline (production's actual
+    default) qualify rate (RR>=2.0) = 0.95% -- confirms H7's
+    RiskManager-level finding at the candidate level directly.
+    **Isolating stop_model alone** (target held at TP1, production's
+    default): aggressive 0.95%, moderate 0.95%, conservative 0.92% --
+    no meaningful difference, because 94.0% of selected steps (Order
+    Block/Premium-Discount/Liquidity Raid) have no `stop_model`
+    parameter to vary at all. **Isolating target-index alone** (stop
+    held at aggressive): TP1 0.95% -> TP2 2.61% -> TP3 7.19% -> TP4
+    12.69% -> TP5 20.53% -> TP6 26.35%, monotonically increasing --
+    nearly all movement comes from choosing a farther exit target, not
+    from stop_model choice. **Literal keep-rule verdict:
+    PARAMETER_SENSITIVE** (best_alt clears 25% and >2x baseline) --
+    **not treated as an endorsed finding**: RR is a distance ratio, not
+    a probability; a farther target mechanically inflates nominal RR
+    with zero regard for whether price is actually more likely to reach
+    it before the stop, plausibly trading RR for win rate in a way this
+    hypothesis's design cannot see. **Honest reading**: on the narrower
+    question H7's own finding actually raised -- does an existing
+    `stop_model` choice change Jade's RR profile -- the answer is
+    **STRUCTURAL: no, essentially not at all.** The target-index label
+    is real but explicitly unvalidated without a future, separately
+    pre-registered end-to-end backtest measuring actual win rate/Net
+    Profit (a natural H9 candidate, not endorsed by this round).
+    **A real bug found in Milestone 30's own harness, disclosed and
+    corrected, not hidden**: H8's pooled selection distribution
+    (`premium_discount` 44.5%, `liquidity_raid` 33.8%, `order_block`
+    15.7%, `breaker_block` 5.8%, `fair_value_gap` 0.2%) directly
+    contradicts Milestone 30's own reported distribution (`fair_value_gap`
+    76.4%, `liquidity_raid` 0%) -- both call the same real
+    `find_entry_point` function, so one had to be wrong. Root cause:
+    H6's own harness reimplemented `find_entry_point`'s
+    highest-confidence-wins selection using its OWN dict iteration order
+    (`fair_value_gap` first) instead of calling `find_entry_point`
+    directly (whose real `evaluators` tuple order puts `liquidity_raid`
+    and `premium_discount` before `fair_value_gap`) --
+    `fair_value_gap`/`premium_discount`/`liquidity_raid` all share a
+    fixed `confidence_score` of 4, so ties (common) broke differently in
+    H6's own harness than in real production. **Milestone 30's own
+    PRIMARY VERDICT (same-bar-retracement REJECT) is UNAFFECTED** --
+    computed per-model, independent of selection/tie-breaking order;
+    only its section 4 narrative ("FVG dominates because it's
+    unconstrained") and `selected_model_counts` figures are superseded.
+    A correction notice was added to the TOP of
+    `docs/H6_JADE_SCARCITY_RESULTS.md` itself, pointing here, rather
+    than silently rewriting that document's original, already-committed
+    analysis. **Promotion path: NONE -- diagnostic only.**
+    `use_jade_engine` stays `False`; Legacy's live/paper trading
+    behavior is completely unchanged; no Jade module was modified. No
+    orders placed, no DB writes. **Full suite 789/789** (up from 780).
+    Full report: `docs/H8_JADE_RR_SENSITIVITY_RESULTS.md`. Full
+    rationale: `ENGINEERING_DECISIONS.md` #70.
+
 **Production-behavior note**: milestones 1-6 were purely additive/
 observational. Milestone 7 was the FIRST to change actual paper-trading
 sizing/rejection math (more conservative sizing in high volatility;

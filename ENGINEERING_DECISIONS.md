@@ -4687,3 +4687,137 @@ reusing already-existing, already-tested functions verbatim, neither
 imported by any production or paper-trading path). Full suite 780/780
 at evaluation time (up from 773 -- 7 new tests for the keep-rule
 arithmetic). Full report, cited not duplicated: `docs/H7_JADE_RISK_ATTRIBUTION_RESULTS.md`.
+
+## 70. Milestone 32: H8 validates Jade's RR-geometry bottleneck -- structural on stop_model choice, and a real selection-order bug found and corrected in Milestone 30's own harness
+
+**Decision context**: H7 (decision #69) found Jade's dominant rejection
+reason is RR-below-minimum (92.3% of rejection-reason instances), not
+the shared `MAX_TRADES_PER_DAY` cap. Operator directive: "proceed with
+H8... focus on validating the newly identified reward-risk geometry
+bottleneck." H8 (`docs/HYPOTHESES_ROUND_2.md` section 4) asks whether
+that shortfall is structural (inherent to Jade's entry/stop/target
+geometry) or fixable by simply choosing a DIFFERENT, already-built,
+already-tested parameter value production never uses:
+`_evaluate_fair_value_gap`/`_evaluate_breaker_block`'s own `stop_model`
+argument (3/2 named values each, exposed via `find_entry_point(...,
+fvg_stop_model=..., breaker_stop_model=...)`), and
+`exit_point_engine.find_exit_targets`'s own full ranked target list
+(production always uses `targets[0]`, the nearest/smallest-reward
+candidate).
+
+**New instrumentation** (read-only, same walk-forward step loop H6 used
+-- `MIN_CANDLES - 1` start, no-lookahead `_advance_htf_cursor`): new
+analysis-only harness `scripts/research_h8_jade_rr_sensitivity.py` (+
+`backend/tests/test_research_h8_jade_rr_sensitivity.py`, 9 tests) calls
+`find_entry_point` ONCE per step with production's default stop_models
+to identify the real selected candidate (selection does not depend on
+`stop_model` -- confidence scores are fixed per model type, verified by
+code inspection before this design was finalized, not assumed). For the
+selected model, stop-loss counterfactuals re-evaluate ONLY that model's
+own evaluator for its other supported `stop_model` values (a bounded
+per-step overhead, not a full re-walk); target counterfactuals compute
+RR against every available ranked target from the already-computed list.
+`RiskManager.evaluate()`, `scripts/run_paper.py`, and every Jade module
+are read but UNMODIFIED; no trade is ever executed.
+
+**Anchor (all three years)**: BTCUSDT 15m, `--candles 3000 --periods 6`,
+`--end-date 2026-07-10 / 2025-07-10 / 2024-07-10` -- matching H6/H7.
+
+**Result**: baseline (production's actual default combination, pooled
+across 3 anchors, n=8,340) qualify rate (RR>=2.0) = **0.95%** --
+confirms H7's RiskManager-level finding at the candidate level directly.
+**Isolating stop_model alone** (target held at TP1, production's
+default): aggressive 0.95%, moderate 0.95%, conservative 0.92% -- no
+meaningful difference. **Isolating target-index alone** (stop held at
+aggressive): TP1 0.95% -> TP2 2.61% -> TP3 7.19% -> TP4 12.69% -> TP5
+20.53% -> TP6 26.35%, monotonically increasing. The stop_model dimension
+is nearly inert because 94.0% of selected steps (Order Block/
+Premium-Discount/Liquidity Raid) have no `stop_model` parameter at all
+and always use the same single default stop regardless of which value
+is nominally chosen.
+
+**Applying H8's own pre-registered keep-rule literally**: quoting it
+verbatim, "STRUCTURAL if best_alt's qualification rate is < 25% ...
+PARAMETER-SENSITIVE if best_alt's qualification rate is >= 25% AND at
+least double baseline's own rate." Mechanically: `aggressive|TP6`
+(26.35%) clears 25% and is ~27.7x baseline (0.95%) --
+**PARAMETER_SENSITIVE per the rule as literally written.**
+
+**This mechanical result is not treated as an endorsed finding, the same
+discipline H7's own literal-but-misleading result required**: the entire
+effect traces to choosing a farther exit target, not to stop_model
+choice -- the dimension H7's own finding was actually about. RR is a
+ratio of distances, not a measure of probability: a farther target
+mechanically produces a larger nominal RR with zero regard for whether
+price is actually more likely to reach it before the stop is hit,
+plausibly making a trade both higher-RR AND lower-win-rate
+simultaneously in a way this hypothesis's design cannot distinguish.
+**The honest reading of this round's own data**: on the narrower
+question H7's finding actually raised -- does an existing `stop_model`
+choice change Jade's RR profile -- the answer is **STRUCTURAL, not
+PARAMETER_SENSITIVE: no, essentially not at all.** The mechanical label
+on the target-index dimension is real but unvalidated without a future,
+separately pre-registered end-to-end backtest measuring actual win
+rate/Net Profit under a farther-target convention -- a natural H9
+candidate, explicitly not endorsed by this round.
+
+**A real bug found in Milestone 30's own harness, disclosed and
+corrected, not hidden**: H8's pooled selection distribution
+(`premium_discount` 44.5%, `liquidity_raid` 33.8%, `order_block` 15.7%,
+`breaker_block` 5.8%, `fair_value_gap` 0.2%) directly contradicts
+Milestone 30's own reported distribution (`fair_value_gap` 76.4%,
+`liquidity_raid` 0%) -- both call the same real `find_entry_point`
+function, so one had to be wrong. Root cause, found by reading both
+harnesses side by side: `scripts/research_h6_jade_scarcity_diagnosis.py`
+reimplemented `find_entry_point`'s own highest-confidence-wins selection
+rather than calling `find_entry_point` itself, iterating candidates in
+ITS OWN dict insertion order (`fair_value_gap, order_block,
+breaker_block, premium_discount, liquidity_raid`). The real
+`find_entry_point` iterates its own `evaluators` tuple in a DIFFERENT
+order (`order_block, breaker_block, liquidity_raid, premium_discount,
+fair_value_gap`). `fair_value_gap`/`premium_discount`/`liquidity_raid`
+all share a fixed `confidence_score` of 4 (`entry_point_engine.py` lines
+307/414/500) -- a common tie whenever more than one fires on the same
+step -- and Python's `max()` keeps the FIRST maximal element it
+encounters on a tie, never a later one. H6's own harness therefore
+silently favored `fair_value_gap` in every such tie (it iterated first
+in H6's own list); production actually favors `liquidity_raid` first,
+then `premium_discount`, with `fair_value_gap` evaluated and inserted
+LAST and only winning when neither of the other two also fired.
+
+**Scope of the correction**: `docs/H6_JADE_SCARCITY_RESULTS.md`
+section 3's PRIMARY VERDICT (same-bar-retracement hypothesis REJECTED)
+is UNAFFECTED -- that verdict was computed from each model's own
+independent `no_matching_zone`/`zone_exists_not_retraced` classification
+at every step, which never called `max()` or depended on selection
+order at all. Only section 4's "substantive finding" narrative (FVG
+dominates selection because it is nearly unconstrained) and the
+`selected_model_counts` figures it cites are wrong, now superseded. A
+correction notice was added to the TOP of `docs/H6_JADE_SCARCITY_RESULTS.md`
+itself, pointing to this decision and `docs/H8_JADE_RR_SENSITIVITY_RESULTS.md`,
+rather than silently editing that document's original, already-committed
+analysis -- matching this project's standing discipline of disclosing
+corrections as new, dated entries rather than rewriting history. Why
+this was caught: H8 calls the real, unmodified `find_entry_point`
+directly (a design choice made specifically so H8's own selection logic
+could not diverge from production) rather than reimplementing it a
+second time -- itself a disclosed argument for a general
+research-harness convention: prefer calling the real aggregation
+function over re-deriving its selection/tie-breaking logic, even when
+re-deriving looks equivalent on inspection.
+
+**Promotion path**: NONE -- diagnostic only. The STRUCTURAL finding on
+stop_model does not itself validate or invalidate anything (nothing to
+promote). The PARAMETER_SENSITIVE finding on target-index is explicitly
+NOT endorsed as a fix and does not authorize any change to Jade's
+default target selection. `use_jade_engine` stays `False`. Legacy's
+live/paper trading behavior is completely unchanged: `RiskManager.evaluate()`
+and `scripts/run_paper.py` are untouched; no Jade module was modified.
+No orders placed, no writes to `backend/paper_validation.db`.
+
+**Status**: read-only evidence round, no production code touched (one
+new research-only script + its dedicated test file, both reusing
+already-existing, already-tested functions verbatim, neither imported by
+any production or paper-trading path). Full suite 789/789 at evaluation
+time (up from 780 -- 9 new tests for the keep-rule and no-stop-model
+fallback logic). Full report, cited not duplicated: `docs/H8_JADE_RR_SENSITIVITY_RESULTS.md`.

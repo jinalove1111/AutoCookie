@@ -765,15 +765,68 @@ question, not the "shared cap" unification this hypothesis originally
 set out to test. Full suite 780/780 (up from 773). No orders placed, no
 DB writes, no production code touched.
 
-**Next research action**: no hypothesis is pre-registered yet. H7's own
-RR-geometry finding is a new, well-grounded candidate for a future H8
-(does adjusting Jade's stop/target construction raise its own RR
-distribution?) but that is a genuinely new hypothesis to pre-register
-separately, not implied or authorized by this round. The Jade
-cross-asset scarcity check (`docs/HYPOTHESES_ROUND_2.md` section 4,
-decision #36 step 2) now has a sharper reason to run (confirm whether
-the RR-geometry problem is BTC-specific or general) than its original
-zone-scarcity framing alone provided.
+**Milestone 32 -- CLOSED (2026-07-19).** Full evidence: `docs/
+H8_JADE_RR_SENSITIVITY_RESULTS.md` (cite, don't duplicate here);
+rationale: `ENGINEERING_DECISIONS.md` #70. Ran H8 (`docs/HYPOTHESES_ROUND_2.md`
+section 4), validating H7's RR-geometry finding: does sweeping every
+already-existing `stop_model` value and every already-computed exit-target
+rank clear the 1:2 minimum RR meaningfully more often than production's
+actual default combination? New analysis-only harness
+`scripts/research_h8_jade_rr_sensitivity.py` (+ 9 tests), zero new
+production code. Ran BTCUSDT 15m 2024/2025/2026, 8,340 baseline
+candidates. **Baseline (production's actual default) qualify rate: 0.95%**
+-- confirms H7's RiskManager-level finding at the candidate level.
+**Isolating stop_model alone** (target held at production's default
+TP1): aggressive 0.95%, moderate 0.95%, conservative 0.92% -- **no
+meaningful difference at all**, because 94.0% of selected steps (Order
+Block/Premium-Discount/Liquidity Raid) have no `stop_model` parameter to
+vary in the first place. **Isolating target-index alone** (stop held at
+aggressive): TP1 0.95% -> TP6 26.35%, monotonically increasing --
+**nearly all apparent movement comes from choosing a farther exit
+target, not stop_model choice.** Mechanically, the literal keep-rule
+resolves PARAMETER_SENSITIVE (best_alt clears 25% and >2x baseline) --
+but this document does not let that stand alone: RR is a distance
+ratio, not a probability: a farther target mechanically inflates nominal
+RR with zero regard for whether price is actually more likely to reach
+it before the stop -- plausibly higher-RR AND lower-win-rate
+simultaneously, which this hypothesis cannot distinguish. **On the
+narrower, more meaningful question H7 actually raised** (does an
+existing stop_model choice change Jade's RR profile) **the honest
+answer is STRUCTURAL -- no, essentially not at all.**
+
+**A real bug was found in Milestone 30's own harness while running H8,
+disclosed and corrected, not hidden.** H8's pooled selection distribution
+(`premium_discount` 44.5%, `liquidity_raid` 33.8%, `fair_value_gap`
+0.2%) directly contradicts Milestone 30's own reported distribution
+(`fair_value_gap` 76.4%, `liquidity_raid` 0%) -- both call the same
+`find_entry_point` function, so one had to be wrong. Root cause: H6's
+own harness reimplemented `find_entry_point`'s selection instead of
+calling it directly, iterating candidates in its OWN dict order rather
+than the real `evaluators` tuple order -- and since
+`fair_value_gap`/`premium_discount`/`liquidity_raid` share a fixed
+confidence_score of 4, Python's `max()` silently favored whichever one
+H6's own harness listed first (`fair_value_gap`) on every tie, not
+production's real tie-break order (`liquidity_raid` first, then
+`premium_discount`, `fair_value_gap` last). **Milestone 30's own PRIMARY
+VERDICT is unaffected** -- the same-bar-retracement REJECT was computed
+per-model independently of selection/tie-breaking -- only its section 4
+narrative and `selected_model_counts` are superseded. A correction
+notice was added to the top of `docs/H6_JADE_SCARCITY_RESULTS.md`
+itself rather than silently rewriting that document's original,
+already-committed analysis. Full suite 789/789 (up from 780). No orders
+placed, no DB writes, no production code touched.
+
+**Next research action**: no hypothesis is pre-registered yet. Two
+well-grounded, explicitly-not-endorsed candidates surfaced this round:
+(a) a future H9 measuring actual Net Profit/win-rate impact of a
+farther-target convention end-to-end (not RR alone, per H8's own
+win-rate-blind caveat) -- this would be the correct way to find out
+whether H8's PARAMETER_SENSITIVE label survives contact with real
+trading outcomes; (b) the Jade cross-asset scarcity check
+(`docs/HYPOTHESES_ROUND_2.md` section 5, decision #36 step 2) now has a
+sharper reason to run (confirm whether the RR-geometry problem is
+BTC-specific or general) than its original zone-scarcity framing alone
+provided.
 
 **Standing awareness item, not an action item**: H4's evaluation flagged
 that any existing finding resting on Net Profit margins narrower than

@@ -405,7 +405,186 @@ round regardless of outcome.
 
 ---
 
-## 4. Deferred directions (not pre-registered in full this round)
+## 4. H8 — Validate Jade's reward:risk-geometry bottleneck: is it structural, or fixable by an already-existing parameter choice?
+
+**Added 2026-07-19, immediately after H7 resolved** (operator directive:
+"proceed with H8... focus on validating the newly identified
+reward-risk geometry bottleneck"). Pre-registered here, in full, before
+any run, per this document's own rule #1.
+
+### Mechanism
+
+H7 (section 3) found Jade's dominant rejection reason is RR-below-minimum
+(92.3% of rejection-reason instances, pooled by category), not the
+shared `MAX_TRADES_PER_DAY` cap (7.3%). That finding characterizes WHICH
+gate rejects Jade's signals; it does not establish WHY the RR is so
+often low, or whether the shortfall is a fundamental mismatch in Jade's
+entry/stop/target geometry versus a simple consequence of which
+already-existing, already-built parameter values production happens to
+use by default. Two convention choices exist, unexamined until now:
+
+1. **Stop-model choice**: `_evaluate_fair_value_gap`/`_evaluate_breaker_block`
+   (`entry_point_engine.py`) already support 3/2 named `stop_model`
+   values each (`aggressive`/`moderate`/`conservative` for FVG;
+   `aggressive`/`conservative` for Breaker Block), exposed one level up
+   via `find_entry_point(..., fvg_stop_model=..., breaker_stop_model=...)`.
+   Production (`SignalEngine._generate_signal_via_jade_engine` via
+   `jade_trade_plan.build_trade_plan`) always uses the DEFAULTS
+   (`fvg_stop_model="moderate"`, `breaker_stop_model="aggressive"`) --
+   nobody has measured whether a different already-supported choice
+   would systematically produce a wider (more favorable) stop distance
+   and thus a different RR.
+2. **Target-selection choice**: `exit_point_engine.find_exit_targets`
+   already returns EVERY valid target, ranked nearest (`TP1`) to
+   farthest (`TPn`) -- but `_generate_signal_via_jade_engine` always uses
+   `exit_targets[0]` (TP1, the NEAREST, i.e. smallest-reward candidate)
+   as `take_profit`. Combined with that same method's own
+   `entry_price` convention (the zone's outer edge, not its midpoint --
+   `entry_price = entry_zone["top"] if direction == "long" else
+   entry_zone["bottom"]`, a more conservative, worse-case fill
+   assumption that also widens the risk denominator), production's
+   actual RR calculation may be systematically biased toward the WORST
+   end of what Jade's own machinery is capable of producing, using
+   inputs that were never selected for RR quality -- `entry_price`'s
+   convention was chosen for a different reason (decision #34, "the
+   more conservative, worse-case realistic fill assumption") and TP1's
+   selection was never a deliberate RR decision at all, just "the
+   nearest target."
+
+**This hypothesis validates H7's structural-bottleneck framing directly**:
+across the full cross product of every already-existing stop_model
+value and every already-computed target rank, does ANY combination
+clear the platform's 1:2 minimum RR meaningfully more often than
+production's current default combination? If not, the bottleneck is
+confirmed structural -- inherent to Jade's entry/stop/target geometry,
+not a simple default-selection miscalibration. If some combination does
+clear it meaningfully more often, that is a well-grounded, disclosed
+finding for a FUTURE hypothesis to test end-to-end (Net Profit/PF
+impact) -- explicitly not evidence to act on in this round.
+
+### Grounding
+
+- **Internal**: `docs/H7_JADE_RISK_ATTRIBUTION_RESULTS.md` section 4
+  (the RR-geometry finding this hypothesis validates); `entry_point_engine.py`
+  (`_evaluate_fair_value_gap`/`_evaluate_breaker_block`'s already-built,
+  already-tested `stop_model` parameter and its 3/2 named values;
+  `find_entry_point`'s `fvg_stop_model`/`breaker_stop_model` pass-through);
+  `exit_point_engine.find_exit_targets` (the already-ranked, already-computed
+  multi-target list production never uses beyond index 0);
+  `signal_engine.py`'s `_generate_signal_via_jade_engine` (the exact
+  `entry_price`/`take_profit` convention this hypothesis's counterfactual
+  must match, per decision #34's own disclosed rationale for why
+  `entry_price` uses the zone edge, not the midpoint).
+- **External**: none specific -- this is an internal counterfactual
+  parameter-sensitivity question, the same status H6/H7 had.
+
+### Pre-registered experiment
+
+**New analysis-only harness**, `scripts/research_h8_jade_rr_sensitivity.py`
+-- reuses the same walk-forward step loop H6 used (`MIN_CANDLES - 1`
+start, no-lookahead `_advance_htf_cursor`), calling `bias.detect_htf_bias`
+and `entry_point_engine.find_entry_point` (default stop_models, matching
+production exactly) to identify each non-neutral-bias step's SELECTED
+model. `find_entry_point`'s own confidence-ranking selection is
+UNAFFECTED by `stop_model` choice (confidence scores are fixed per
+model type, independent of which stop_model produced the winning
+candidate's `stop_loss`), so selection only needs to run once per step,
+not once per stop_model combination -- confirmed by inspection of
+`_evaluate_fair_value_gap`/`_evaluate_breaker_block`'s own code before
+this design was finalized, not assumed.
+
+For each step with a selected candidate:
+
+1. Compute `entry_price` exactly as `_generate_signal_via_jade_engine`
+   does (`entry_zone["top"]` long / `entry_zone["bottom"]` short).
+2. **Stop-loss counterfactuals**: if the selected model is
+   `fair_value_gap`, re-call `_evaluate_fair_value_gap(ltf_slice, bias,
+   stop_model=X)` for `X` in `("aggressive", "moderate", "conservative")`
+   (production's default, "moderate", included as the baseline row);
+   if `breaker_block`, re-call `_evaluate_breaker_block(ltf_slice, bias,
+   stop_model=X)` for `X` in `("aggressive", "conservative")` (production
+   default "aggressive" included); if `order_block`/`premium_discount`/
+   `liquidity_raid` (no `stop_model` parameter exists), use the single
+   `stop_loss` already returned, labeled `"default"` -- not swept,
+   because there is nothing to sweep, disclosed as a real limit on this
+   hypothesis's own coverage (see Caveats).
+3. **Target counterfactuals**: call `find_exit_targets(ltf_slice,
+   direction, entry_price)["targets"]` ONCE per step (target computation
+   does not depend on stop_model); for each target index 1..N present
+   (production's default is index 0, i.e. `TP1`), compute `RR = abs(target_level
+   - entry_price) / abs(entry_price - stop_loss)` for every
+   (stop_model_variant, target_index) pair.
+4. Classify each (stop_model_variant, target_index) cell's RR against
+   the 1:2 minimum (`RR >= 2.0`), aggregated across all steps and all 3
+   anchor years.
+
+**Anchors**: BTCUSDT 15m, `--candles 3000 --periods 6`, `--end-date
+2026-07-10 / 2025-07-10 / 2024-07-10` -- this project's standard
+3-anchor set, matching H6/H7.
+
+```
+python scripts/research_h8_jade_rr_sensitivity.py
+```
+
+(single invocation, loops all 3 anchors internally -- same shape as
+`scripts/research_h6_jade_scarcity_diagnosis.py` /
+`scripts/research_h7_jade_risk_attribution.py`.)
+
+**Keep-rule (declared now)**: let `baseline` be production's actual
+default combination (FVG moderate / Breaker aggressive / OB,PD,LR
+default stop, target index 0) and `best_alt` be whichever OTHER
+(stop_model, target_index) combination achieves the highest RR>=2.0
+qualification rate, pooled across all 3 anchors:
+
+- **STRUCTURAL** (bottleneck confirmed, not a simple default-selection
+  fix) if `best_alt`'s qualification rate is `< 25%` -- even the most
+  favorable ALREADY-EXISTING configuration still fails to clear the
+  1:2 minimum for at least 3 of every 4 candidates. No further
+  parameter-reselection experiment is warranted; any real fix would
+  need new geometry, not a different existing choice.
+- **PARAMETER-SENSITIVE** if `best_alt`'s qualification rate is `>= 25%`
+  AND at least double `baseline`'s own rate -- a materially different
+  order of magnitude, not noise, and a well-grounded candidate for a
+  future hypothesis (NOT this one) to test end-to-end.
+- **INCONCLUSIVE** if `best_alt >= 25%` but less than double `baseline`
+  -- a real but modest difference, not clearly actionable either way,
+  reported honestly rather than rounded toward either label.
+
+Every cell's own qualification rate and RR distribution (median, p25,
+p75) is reported regardless of which of the three labels applies --
+full transparency, not just the winning cell.
+
+### Cost
+
+Small-medium: reuses H6's exact walk-forward step machinery and
+`find_entry_point`/`_evaluate_fair_value_gap`/`_evaluate_breaker_block`/
+`find_exit_targets` verbatim, unmodified. Adds a bounded per-step
+overhead only for steps where FVG or Breaker Block wins selection (2
+extra `_evaluate_fair_value_gap` calls, or 1 extra `_evaluate_breaker_block`
+call, beyond the one `find_entry_point` call every step already needs)
+-- not a 6x re-walk of the full pipeline, since selection itself does
+not depend on `stop_model`. No new `BacktestEngine` parameter, no new
+CLI flag, no production code touched.
+
+### Promotion path if PARAMETER-SENSITIVE or STRUCTURAL
+
+**Not a promotion decision either way.** A PARAMETER-SENSITIVE result
+would identify a well-grounded candidate for a NEW, separately
+pre-registered hypothesis (a natural H9) to test whether switching
+Jade's default `stop_model`/target-selection convention changes real
+Net Profit/PF/walk-forward outcomes end-to-end -- this hypothesis only
+measures RR-qualification-rate sensitivity, never runs a real backtest
+comparison, and does not itself justify changing any default. A
+STRUCTURAL result redirects future Jade investment away from
+parameter-reselection entirely, toward examining whether the entry/stop/
+target geometry itself (not just which existing knob is turned) would
+need to change. `use_jade_engine` stays `False` under either outcome;
+`RiskManager.evaluate()` and `scripts/run_paper.py` are completely
+unmodified and unaffected by this round.
+
+---
+
+## 5. Deferred directions (not pre-registered in full this round)
 
 - **Cross-asset Legacy delay-fragility check (rank 2)**: cheap and
   well-grounded, but confirmatory rather than action-unlocking given
@@ -425,13 +604,21 @@ round regardless of outcome.
 
 ---
 
-## 5. Caveats
+## 6. Caveats
 
-- **No result exists yet for H7.** H6 (section 2) has a result;
-  everything in section 3 (H7) is a proposal, not a report. Every number
-  cited in H7's own text is drawn from H6's own already-committed
-  results (`docs/H6_JADE_SCARCITY_RESULTS.md`) or decision #36, not from
-  any run performed for H7 specifically.
+- **No result exists yet for H8.** H6 (section 2) and H7 (section 3)
+  both have results; everything in section 4 (H8) is a proposal, not a
+  report. Every number cited in H8's own text is drawn from H6/H7's own
+  already-committed results, not from any run performed for H8
+  specifically.
+- **H8's stop_model sweep only covers FVG and Breaker Block** — Order
+  Block, Premium/Discount, and Liquidity Raid have no `stop_model`
+  parameter to sweep at all, so H8's own coverage of "is the geometry
+  problem fixable by an existing parameter" is necessarily partial for
+  those three models. A STRUCTURAL verdict on the swept models does not
+  by itself rule out that OB/PD/LR's own (unswept) stop construction
+  could differ; a future hypothesis would need new code (not an existing
+  parameter) to examine that possibility.
 - **One asset (BTCUSDT), one timeframe (15m)** — matching decision #36's
   own original scope, extended here only to 3 years for cross-year
   mechanism confirmation, not cross-asset. Whether Jade's scarcity

@@ -4,6 +4,63 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Milestone 32: H8 validates the RR-geometry bottleneck -- structural on stop_model, and a real bug found in Milestone 30's own harness
+
+2026-07-19. Full report: `docs/H8_JADE_RR_SENSITIVITY_RESULTS.md` (cite,
+don't duplicate here). **The question**: H7 found Jade's dominant
+rejection reason is RR-below-minimum, not the shared
+`MAX_TRADES_PER_DAY` cap. H8 validates that finding: does sweeping every
+already-existing `stop_model` value (FVG: aggressive/moderate/
+conservative; Breaker: aggressive/conservative) and every
+already-computed exit-target rank clear the 1:2 minimum RR meaningfully
+more often than production's actual default (FVG moderate, Breaker
+aggressive, target index 1)? New analysis-only harness
+`scripts/research_h8_jade_rr_sensitivity.py` (+ 9 tests), zero new
+production code -- calls `find_entry_point`/`_evaluate_fair_value_gap`/
+`_evaluate_breaker_block`/`find_exit_targets` directly and unmodified.
+
+**Result** (BTCUSDT 15m, 2024/2025/2026, 8,340 baseline candidates):
+
+| Dimension isolated | Range | Effect |
+|---|---|---|
+| stop_model (target held at TP1) | 0.92% - 0.95% | **negligible** |
+| target index (stop held at aggressive) | 0.95% (TP1) - 26.35% (TP6) | **all the movement** |
+
+94.0% of selected steps (Order Block/Premium-Discount/Liquidity Raid)
+have no `stop_model` parameter to vary at all, so the stop_model
+dimension can only move 6% of the dataset -- explaining why it barely
+moves the pooled rate.
+
+**Literal keep-rule verdict: PARAMETER_SENSITIVE** (best_alt clears 25%
+and >2x baseline) -- **but this is not treated as an endorsed finding.**
+RR is a distance ratio, not a probability: a farther target mechanically
+inflates nominal RR with zero regard for whether price actually reaches
+it before the stop -- plausibly higher-RR AND lower-win-rate at once, a
+tradeoff this hypothesis cannot see. On the narrower question H7 actually
+raised (does an existing stop_model choice fix anything), the honest
+answer is **STRUCTURAL -- no, essentially not at all.**
+
+**A real bug found in Milestone 30's own harness, disclosed and
+corrected in place, not hidden**: H8's pooled selection distribution
+(`premium_discount` 44.5%, `liquidity_raid` 33.8%, `fair_value_gap`
+0.2%) directly contradicts Milestone 30's own reported distribution
+(`fair_value_gap` 76.4%, `liquidity_raid` 0%) -- both call the same real
+`find_entry_point` function, so one had to be wrong. Root cause: H6's
+own harness reimplemented `find_entry_point`'s selection using its OWN
+dict iteration order instead of calling the real function directly;
+since `fair_value_gap`/`premium_discount`/`liquidity_raid` share a fixed
+confidence_score of 4, Python's `max()` silently favored whichever one
+H6 listed first (FVG) on every tie -- production's real tie-break order
+favors `liquidity_raid` first, `fair_value_gap` last. **Milestone 30's
+own PRIMARY VERDICT is unaffected** (the same-bar-retracement REJECT was
+computed per-model, independent of selection order); only its narrative
+"FVG dominates because it's unconstrained" finding is superseded. A
+correction notice was added to the top of `docs/H6_JADE_SCARCITY_RESULTS.md`
+itself rather than rewriting that document's original analysis.
+
+Full suite 789/789 (up from 780). No orders placed, no DB writes, no
+production code touched. Details: `ENGINEERING_DECISIONS.md` #70.
+
 ## [Unreleased] - Milestone 31: H7 attributes Jade's remaining scarcity gap -- Jade's bottleneck is RR geometry, not the shared MAX_TRADES_PER_DAY cap
 
 2026-07-19. Full report: `docs/H7_JADE_RISK_ATTRIBUTION_RESULTS.md`

@@ -1,5 +1,37 @@
 # H6 — Root-Causing Jade's Signal Scarcity — Milestone 30
 
+> **CORRECTION (2026-07-19, found during H8, Milestone 32).** Section 4's
+> "substantive finding" below — that FVG wins `find_entry_point`'s
+> selection 76.4% of the time because it is nearly unconstrained — is
+> **WRONG**, caused by a real bug in this document's own harness
+> (`scripts/research_h6_jade_scarcity_diagnosis.py`), not a fact about
+> production. That harness reimplemented `find_entry_point`'s
+> highest-confidence-wins selection itself, iterating candidates in ITS
+> OWN dict insertion order (`fair_value_gap, order_block, breaker_block,
+> premium_discount, liquidity_raid`) — but `find_entry_point`'s real
+> `evaluators` tuple order is `(order_block, breaker_block,
+> liquidity_raid, premium_discount, fair_value_gap)`. Since
+> `fair_value_gap`/`premium_discount`/`liquidity_raid` all share a fixed
+> `confidence_score` of 4, ties between them are common, and Python's
+> `max()` keeps the FIRST maximal element it encounters — so this
+> harness's own reordering silently favored FVG in every such tie, while
+> production actually favors `liquidity_raid` first, then
+> `premium_discount`, with `fair_value_gap` LAST. H8
+> (`docs/H8_JADE_RR_SENSITIVITY_RESULTS.md`), which calls the real
+> `find_entry_point` directly rather than reimplementing its selection,
+> found the TRUE pooled selection distribution is `premium_discount`
+> 44.5%, `liquidity_raid` 33.8%, `order_block` 15.7%, `breaker_block`
+> 5.8%, **`fair_value_gap` only 0.2%** — the opposite of what this
+> document originally reported. **This correction does NOT affect
+> section 3's PRIMARY VERDICT (REJECTED)** — the same-bar-retracement
+> keep-rule was computed from each model's own independent
+> `no_matching_zone`/`zone_exists_not_retraced` classification, which
+> never depended on `max()` selection or tie-breaking order at all, and
+> remains correct as originally reported. Only section 4's narrative
+> explanation (and the `selected_model_counts` figures it cites) is
+> superseded. Full detail: `docs/H8_JADE_RR_SENSITIVITY_RESULTS.md`
+> section 4.
+
 Evaluation deliverable (2026-07-19). This closes out `docs/HYPOTHESES_ROUND_2.md`
 section 2 (H6): the pre-registered diagnostic testing `ENGINEERING_DECISIONS.md`
 #36's disclosed, UNCONFIRMED hypothesis for why the Jade engine produced
