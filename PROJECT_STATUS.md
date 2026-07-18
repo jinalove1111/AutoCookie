@@ -754,6 +754,85 @@ practice** (`scripts/cto_report.py`, milestone 17b below).
     `docs/H3_REGIME_DELAY_RESULTS.md`. Full rationale:
     `ENGINEERING_DECISIONS.md` #65.
 
+28. **H2: passive limit-at-level entry as a delay-robust alternative --
+    REJECTED, delay-robustness achieved cleanly but the entry model
+    itself is unprofitable independent of delay** (2026-07-18):
+    `docs/HYPOTHESES_ROUND_1.md` section 4's H2 (ranked #4, highest
+    implementation cost of the five) asks whether a passive resting
+    limit order at the structural entry zone (OB/FVG/sweep level,
+    `docs/strategy_spec.md` §§2-5) -- instead of an immediate market
+    fill -- is a genuinely delay-robust alternative entry model. Unlike
+    H1/H3's pure research-aggregation harnesses, H2 required real new
+    fill-timing logic: new opt-in `--limit-at-level` /
+    `--limit-timeout-candles N` flags wired into
+    `BacktestEngine.run()`/`entry_model.py`, default off and
+    byte-identical when unset (confirmed by 2 dedicated regression
+    tests in `backend/tests/test_backtest_engine.py`).
+    `RiskManager.evaluate()`'s live sequential-approval logic and
+    `scripts/run_paper.py` are untouched. **Disclosed implementation
+    judgment calls**: the limit fill price is the zone level itself
+    (`signal.entry_price`) with slippage applied identically to the
+    existing immediate-fill path -- only WHEN/WHETHER the fill happens
+    changed, never the price formula; `entry_delay_candles` was
+    interpreted as placement/dispatch latency, shifting when the
+    resting order's scan window starts while the timeout still measures
+    window length from that point; unfilled/expired signals are not
+    recorded as trades or losses, matching existing precedent for other
+    filtered-out signal types. **Anchor**: BTCUSDT 15m, `--candles 3000
+    --periods 6 --limit-at-level --limit-timeout-candles 4
+    --walk-forward --delay-check`, all three years (2024/2025/2026), vs.
+    the already-recorded Legacy market-order baseline
+    (`docs/LEGACY_DELAY_ROBUSTNESS.md`). **Result**: -$744.13 (2026),
+    -$727.22 (2025), -$895.05 (2024) Net Profit -- 96/51/64 trades
+    (13-21% fewer than Legacy), 1/6, 0/6, 2/6 profitable periods,
+    walk-forward FAILED all three years (degrading trends, losing
+    streaks of 5/6/3); its OWN internal delay-gate retention (delay=0 vs
+    delay=1 within the mechanism) PASSED cleanly all three years: PF
+    retention 1.003/0.883/0.935, no sign flip. **VERDICT: REJECT**,
+    applying H2's own pre-registered two-part keep-rule literally --
+    both parts must hold for KEEP, either failing alone is REJECT.
+    **Check 2 (delay-robustness) PASSES cleanly, 3/3 years** -- PF
+    retention 1.003/0.883/0.935, no sign flip anywhere, genuinely and
+    robustly solving the execution-delay fragility that both Legacy's
+    default exit (retention 0.015-0.026) and `structure_tp` (milestone
+    27, retention 0.051-0.080) failed catastrophically -- mechanistically
+    sound, since a resting order's fill price does not depend on
+    placement latency, only on whether/when price revisits the level.
+    **Check 1 (cost-of-passivity) FAILS catastrophically, 0/3 years** --
+    inverts sign in every single year (2026: +$3,400.62 -> -$744.13;
+    2025: +$1,714.56 -> -$727.22; 2024: +$1,807.75 -> -$895.05). Check 1
+    alone disqualifies. **Precision note, the substantive finding of
+    this round**: this is NOT the same failure shape as "the ATR floor
+    already showed" (the keep-rule's own analogy, fixing delay by mostly
+    not trading) -- trade count drops only modestly (13-21% fewer than
+    Legacy) while profitable-periods collapses almost entirely (1/6,
+    0/6, 2/6 vs. Legacy's 6/6 in all three years) and walk-forward fails
+    everywhere with elevated losing streaks -- too small a volume
+    reduction to explain a swing from strongly profitable to net-loss on
+    its own. The more precise finding: the retest-based passive-fill
+    mechanism itself systematically selects for structurally worse trade
+    outcomes, independent of delay entirely -- waiting for a retest of
+    the zone edge appears to filter FOR setups that subsequently
+    underperform (or filters OUT the immediate-continuation setups that
+    drove Legacy's edge), not merely filter volume. A genuinely novel,
+    third distinct failure mode among this platform's three tested
+    delay-robustness fixes: ATR floor (thinned population, milestone
+    20), entry-drift gate (inconsistent/partial,
+    `docs/CONTINUOUS_RESEARCH_LOG.md` Experiment 4), and now H2 (clean
+    delay-robustness, but an unprofitable entry model independent of
+    delay) -- a clean, well-differentiated addition to the evidence
+    base, not a repeat of a known pattern. **Promotion path: NONE --
+    REJECT.** Even a KEEP would have had a uniquely different promotion
+    story per H2's own pre-registered text (a candle-only approximation
+    of a resting limit order is not verified live limit-order
+    behavior) -- moot here. Legacy's live/paper trading behavior is
+    completely unchanged: `RiskManager.evaluate()`, `scripts/run_paper.py`,
+    `BacktestEngine` internals all untouched, new flags default off and
+    byte-identical when unset. No orders placed, no DB writes. **Full
+    suite 748/748** (up from 739). Full report:
+    `docs/H2_LIMIT_ENTRY_RESULTS.md`. Full rationale:
+    `ENGINEERING_DECISIONS.md` #66.
+
 **Production-behavior note**: milestones 1-6 were purely additive/
 observational. Milestone 7 was the FIRST to change actual paper-trading
 sizing/rejection math (more conservative sizing in high volatility;

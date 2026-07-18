@@ -848,6 +848,357 @@ def test_run_skips_degenerate_zero_size_signal_without_recording_a_fake_trade():
     assert signal_engine.call_count == len(ltf_candles) - (MIN_CANDLES - 1)
 
 
+# --- limit_at_level / limit_timeout_candles (H2 experiment, opt-in --
+# docs/HYPOTHESES_ROUND_1.md section 4, Milestone 28): resting limit order
+# at the signal's structural zone level (`signal.entry_price`), filled by a
+# LATER candle's genuine retest instead of an immediate fill on the signal's
+# own candle, expiring unfilled after `limit_timeout_candles` candles with
+# no retest. See `BacktestEngine.run`'s `limit_at_level` docstring for the
+# full mechanism and fill-price design decision. ------------------------
+
+
+class _FakeSignalEngineFiresOnceThenNone:
+    """Returns the fixed signal on the FIRST call only, then `None` forever
+    after. `_FakeSignalEngineFixedSignal` (used elsewhere in this file)
+    fires unconditionally on EVERY walk-forward step -- fine for tests
+    where the first signal always fills or always expires regardless of
+    later re-evaluation, but WRONG for an "expires unfilled, and a touch
+    candle exists just past the window" test: after the first signal
+    expires, `run()`'s loop advances one candle and would generate a BRAND
+    NEW signal there too, whose OWN (shifted) scan window could then catch
+    the very touch candle the test is trying to prove falls outside the
+    FIRST signal's window -- contaminating the result. This fake isolates
+    a single signal's own fill/expire behavior from that re-firing.
+    """
+
+    def __init__(self, signal):
+        self._signal = signal
+        self._fired = False
+
+    def generate_signal(self, symbol, ltf_candles, htf_candles, **kwargs):
+        if self._fired:
+            return None
+        self._fired = True
+        return self._signal
+
+
+def test_run_limit_at_level_fills_when_a_later_candles_range_crosses_the_zone_level():
+    """A resting limit at signal.entry_price=100 must NOT fill on a candle
+    whose range never reaches 100, and MUST fill on the first later candle
+    within the timeout window whose [low, high] range does cross it --
+    proving this is a real forward search, not just "fill on the next
+    candle regardless".
+    """
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=110.0, direction="long")
+    signal_engine = _FakeSignalEngineFixedSignal(signal)
+    ltf_candles = _flat_ltf_candles(MIN_CANDLES - 1)
+    # Signal candle (index MIN_CANDLES - 1) -- irrelevant to the scan, which
+    # starts strictly AFTER it.
+    ltf_candles.append(_c(100, 101, 99, 100, BASE_TS + (MIN_CANDLES - 1) * LTF_STEP))
+    # i + 1: range [102, 105] -- does NOT cross 100, must not fill here.
+    ltf_candles.append(_c(103, 105, 102, 104, BASE_TS + MIN_CANDLES * LTF_STEP))
+    # i + 2: range [99, 101] -- DOES cross 100, the first genuine retest --
+    # must fill exactly here.
+    ltf_candles.append(_c(100, 101, 99, 100, BASE_TS + (MIN_CANDLES + 1) * LTF_STEP))
+    # i + 3: high=111 hits take_profit=110 (stop_loss=95 untouched).
+    ltf_candles.append(_c(100, 111, 99, 105, BASE_TS + (MIN_CANDLES + 2) * LTF_STEP))
+
+    result = BacktestEngine().run(
+        ltf_candles,
+        [],
+        signal_engine,
+        _FakeRiskManager(),
+        account_balance=10000.0,
+        slippage_percent=0.0,
+        limit_at_level=True,
+        limit_timeout_candles=4,
+    )
+
+    assert result.total_trades == 1
+    trade = result.trades[0]
+    assert trade["entry_price"] == 100.0  # fills AT the zone level, no slippage here
+    assert trade["opened_at"] == ltf_candles[MIN_CANDLES + 1]["timestamp"]  # the i+2 retest candle
+    assert trade["exit_price"] == 110.0
+
+
+def test_run_limit_at_level_expires_unfilled_when_price_never_retests_within_timeout():
+    """If NO candle's range ever crosses the zone level within
+    `limit_timeout_candles`, the signal must expire unfilled: no trade
+    recorded at all -- not a loss, not a fake zero-notional trade, just
+    genuinely nothing (per H2's pre-registered "expired/unfilled" spec).
+    """
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=110.0, direction="long")
+    signal_engine = _FakeSignalEngineFixedSignal(signal)
+    ltf_candles = _flat_ltf_candles(MIN_CANDLES - 1)
+    ltf_candles.append(_c(100, 101, 99, 100, BASE_TS + (MIN_CANDLES - 1) * LTF_STEP))
+    # Every subsequent candle stays well away from 100 (range [200, 210]) for
+    # the rest of the series -- the zone level is never retested by anyone.
+    ts = BASE_TS + MIN_CANDLES * LTF_STEP
+    for _ in range(10):
+        ltf_candles.append(_c(205, 210, 200, 205, ts))
+        ts += LTF_STEP
+
+    result = BacktestEngine().run(
+        ltf_candles,
+        [],
+        signal_engine,
+        _FakeRiskManager(),
+        account_balance=10000.0,
+        limit_at_level=True,
+        limit_timeout_candles=2,
+    )
+
+    assert result.total_trades == 0
+    assert result.trades == []
+
+
+def test_run_limit_at_level_boundary_last_candle_in_window_still_fills():
+    """Off-by-one proof: with `limit_timeout_candles=2`, a retest on the
+    LAST candle still inside the window (`i + 2`) must fill; the exact same
+    retest one candle later (`i + 3`, outside the window) must NOT (covered
+    by the sibling "one candle later" test below) -- together these pin
+    down the window's inclusive boundary.
+    """
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=110.0, direction="long")
+    signal_engine = _FakeSignalEngineFixedSignal(signal)
+    ltf_candles = _flat_ltf_candles(MIN_CANDLES - 1)
+    ltf_candles.append(_c(100, 101, 99, 100, BASE_TS + (MIN_CANDLES - 1) * LTF_STEP))  # signal (i)
+    ltf_candles.append(_c(205, 210, 200, 205, BASE_TS + MIN_CANDLES * LTF_STEP))  # i+1: no touch
+    ltf_candles.append(  # i+2: last candle inside a 2-candle window -- must fill
+        _c(100, 101, 99, 100, BASE_TS + (MIN_CANDLES + 1) * LTF_STEP)
+    )
+    ltf_candles.append(_c(100, 111, 99, 105, BASE_TS + (MIN_CANDLES + 2) * LTF_STEP))  # exit at TP
+
+    result = BacktestEngine().run(
+        ltf_candles,
+        [],
+        signal_engine,
+        _FakeRiskManager(),
+        account_balance=10000.0,
+        slippage_percent=0.0,
+        limit_at_level=True,
+        limit_timeout_candles=2,
+    )
+
+    assert result.total_trades == 1
+    assert result.trades[0]["opened_at"] == ltf_candles[MIN_CANDLES + 1]["timestamp"]
+
+
+def test_run_limit_at_level_boundary_one_candle_past_window_expires_unfilled():
+    """Same shape as the boundary-fill test above, but the retest candle is
+    pushed ONE candle further out (`i + 3`, outside a `limit_timeout_candles
+    =2` window) -- must expire unfilled instead of filling. Uses
+    `_FakeSignalEngineFiresOnceThenNone` (not the always-refiring fake --
+    see that class's own docstring) since the touch candle existing just
+    past the FIRST signal's window would otherwise fall inside a LATER,
+    re-fired signal's own shifted window and contaminate the result.
+    """
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=110.0, direction="long")
+    signal_engine = _FakeSignalEngineFiresOnceThenNone(signal)
+    ltf_candles = _flat_ltf_candles(MIN_CANDLES - 1)
+    ltf_candles.append(_c(100, 101, 99, 100, BASE_TS + (MIN_CANDLES - 1) * LTF_STEP))  # signal (i)
+    ltf_candles.append(_c(205, 210, 200, 205, BASE_TS + MIN_CANDLES * LTF_STEP))  # i+1: no touch
+    ltf_candles.append(_c(205, 210, 200, 205, BASE_TS + (MIN_CANDLES + 1) * LTF_STEP))  # i+2: no touch
+    ltf_candles.append(  # i+3: retest, but OUTSIDE a 2-candle window -- must NOT fill
+        _c(100, 101, 99, 100, BASE_TS + (MIN_CANDLES + 2) * LTF_STEP)
+    )
+
+    result = BacktestEngine().run(
+        ltf_candles,
+        [],
+        signal_engine,
+        _FakeRiskManager(),
+        account_balance=10000.0,
+        slippage_percent=0.0,
+        limit_at_level=True,
+        limit_timeout_candles=2,
+    )
+
+    assert result.total_trades == 0
+
+
+def test_run_limit_at_level_default_false_is_byte_identical_to_prior_behavior():
+    """`limit_at_level` (default False, and `limit_timeout_candles`'s
+    default value) must be byte-identical to not passing either parameter
+    at all -- regression-critical: every existing caller's immediate-fill
+    behavior must be provably unchanged. Uses a scenario where the signal
+    candle's OWN range already covers entry_price (the immediate-fill
+    assumption), same as this file's other real end-to-end trade test.
+    """
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=110.0, direction="long")
+    ltf_candles = _flat_ltf_candles(MIN_CANDLES + 1)
+
+    result_default = BacktestEngine().run(
+        ltf_candles, [], _FakeSignalEngineFixedSignal(signal), _FakeRiskManager(),
+        account_balance=10000.0,
+    )
+    result_explicit_off = BacktestEngine().run(
+        ltf_candles, [], _FakeSignalEngineFixedSignal(signal), _FakeRiskManager(),
+        account_balance=10000.0, limit_at_level=False, limit_timeout_candles=4,
+    )
+
+    assert result_default.trades == result_explicit_off.trades
+    assert result_default.total_trades == 1  # sanity: a real trade actually fired
+    # Immediate-fill precedent unchanged: fills on the SIGNAL candle itself
+    # (index MIN_CANDLES - 1), never scanning forward for a retest.
+    assert result_default.trades[0]["opened_at"] == ltf_candles[MIN_CANDLES - 1]["timestamp"]
+
+
+def test_run_limit_at_level_unset_matches_real_signal_engine_end_to_end_baseline():
+    """Same regression-critical claim as above, but through the REAL
+    SignalEngine/RiskManager end-to-end path (mirrors
+    `test_run_produces_a_real_trade_with_real_signal_and_risk_engines`) --
+    proves the new parameters don't alter behavior for real strategy
+    detection either, not just the fake-signal unit path.
+    """
+    ltf_candles = _ltf_candles_with_real_confluence(n_pad=17)
+    htf_candles = _htf_bullish_closed_candles(13)
+
+    result_baseline = BacktestEngine().run(ltf_candles, htf_candles, SignalEngine(), RiskManager())
+    result_explicit_off = BacktestEngine().run(
+        ltf_candles, htf_candles, SignalEngine(), RiskManager(),
+        limit_at_level=False, limit_timeout_candles=4,
+    )
+
+    assert result_baseline.trades == result_explicit_off.trades
+    assert result_baseline.total_pnl == result_explicit_off.total_pnl
+    assert result_baseline.total_trades == 1
+
+
+def test_run_limit_at_level_fill_price_is_the_zone_level_with_slippage_applied_on_top():
+    """Fill-price design decision proof: once triggered, the limit fills AT
+    THE ZONE LEVEL ITSELF (`signal.entry_price`), with the SAME slippage
+    formula `_simulate_trade` already applies to the immediate-fill path
+    (`entry_fill = entry_price * (1 +/- slip)`) -- not the touching
+    candle's own open/high/low/close.
+    """
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=110.0, direction="long")
+    signal_engine = _FakeSignalEngineFixedSignal(signal)
+    ltf_candles = _flat_ltf_candles(MIN_CANDLES - 1)
+    ltf_candles.append(_c(100, 101, 99, 100, BASE_TS + (MIN_CANDLES - 1) * LTF_STEP))
+    # Retest candle deliberately has a DIFFERENT open/close (103/97) than the
+    # zone level (100) -- if the fill price were mistakenly taken from this
+    # candle's own OHLC instead of the zone level, this test would catch it.
+    ltf_candles.append(_c(103, 104, 96, 97, BASE_TS + MIN_CANDLES * LTF_STEP))
+    ltf_candles.append(_c(100, 111, 99, 105, BASE_TS + (MIN_CANDLES + 1) * LTF_STEP))
+
+    result = BacktestEngine().run(
+        ltf_candles,
+        [],
+        signal_engine,
+        _FakeRiskManager(),
+        account_balance=10000.0,
+        slippage_percent=0.02,
+        limit_at_level=True,
+        limit_timeout_candles=4,
+    )
+
+    assert result.total_trades == 1
+    expected_fill = 100.0 * (1 + 0.02 / 100)  # zone level with slippage, long side
+    assert result.trades[0]["entry_price"] == pytest.approx(expected_fill)
+
+
+def test_run_limit_at_level_stop_take_profit_and_pnl_unchanged_once_filled():
+    """Once a limit fill occurs, SL/TP/PnL simulation must be exactly the
+    SAME formula/code path as the immediate-fill case (`_simulate_trade`,
+    completely reused, never reimplemented) -- proven here via an
+    independent, hand-computed expected PnL, mirroring this file's own
+    `test_run_wires_real_settings_risk_per_trade_percent_into_trade_size`
+    pattern.
+    """
+    entry_level = 100.0
+    stop_loss = 95.0
+    take_profit = 110.0
+    signal = _FakeSignal(entry_price=entry_level, stop_loss=stop_loss, take_profit=take_profit, direction="long")
+    signal_engine = _FakeSignalEngineFixedSignal(signal)
+    ltf_candles = _flat_ltf_candles(MIN_CANDLES - 1)
+    ltf_candles.append(_c(100, 101, 99, 100, BASE_TS + (MIN_CANDLES - 1) * LTF_STEP))  # signal (i)
+    ltf_candles.append(_c(205, 210, 200, 205, BASE_TS + MIN_CANDLES * LTF_STEP))  # i+1: no touch
+    ltf_candles.append(  # i+2: retest -> fills here
+        _c(100, 101, 99, 100, BASE_TS + (MIN_CANDLES + 1) * LTF_STEP)
+    )
+    ltf_candles.append(  # i+3: hits take_profit
+        _c(100, 111, 99, 105, BASE_TS + (MIN_CANDLES + 2) * LTF_STEP)
+    )
+
+    result = BacktestEngine().run(
+        ltf_candles,
+        [],
+        signal_engine,
+        _FakeRiskManager(),
+        account_balance=10000.0,
+        fee_percent=0.1,
+        slippage_percent=0.0,
+        limit_at_level=True,
+        limit_timeout_candles=4,
+    )
+
+    assert result.total_trades == 1
+    trade = result.trades[0]
+
+    expected_size = calculate_position_size(
+        10000.0, settings.RISK_PER_TRADE_PERCENT, entry_level, stop_loss
+    )
+    assert trade["size"] == expected_size
+    assert trade["stop_loss"] == stop_loss
+    assert trade["take_profit"] == take_profit
+
+    fee_rate = 0.1 / 100
+    raw_pnl = expected_size * (take_profit - entry_level)
+    entry_fee = fee_rate * expected_size * entry_level
+    exit_fee = fee_rate * expected_size * take_profit
+    expected_pnl = raw_pnl - entry_fee - exit_fee
+    assert trade["pnl"] == pytest.approx(expected_pnl)
+
+
+def test_run_limit_at_level_composes_with_entry_delay_candles_as_placement_latency():
+    """`entry_delay_candles` (when combined with `limit_at_level`) shifts
+    WHEN the resting order starts scanning for a retest (placement/dispatch
+    latency), not the fill-price formula -- `limit_timeout_candles` still
+    measures the window length FROM that delayed placement point. Proven
+    here: a retest candle placed such that it falls OUTSIDE a plain (no
+    delay) window but INSIDE the SAME window once shifted by
+    `entry_delay_candles=1` must fill only when the delay is applied. Uses
+    `_FakeSignalEngineFiresOnceThenNone` for the no-delay run (see that
+    class's own docstring) -- otherwise the walk-forward loop would
+    re-fire a brand new signal after the first one expires, whose own
+    shifted window could catch the retest candle anyway and contaminate
+    the "no delay -> expires" half of this comparison.
+    """
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=110.0, direction="long")
+    ltf_candles = _flat_ltf_candles(MIN_CANDLES - 1)
+    ltf_candles.append(_c(100, 101, 99, 100, BASE_TS + (MIN_CANDLES - 1) * LTF_STEP))  # signal (i)
+    ltf_candles.append(_c(205, 210, 200, 205, BASE_TS + MIN_CANDLES * LTF_STEP))  # i+1: no touch
+    ltf_candles.append(  # i+2: no touch -- common to BOTH windows (no-delay: i+1..i+2;
+        # delayed by 1: i+2..i+3), so it alone can't explain a difference.
+        _c(205, 210, 200, 205, BASE_TS + (MIN_CANDLES + 1) * LTF_STEP)
+    )
+    ltf_candles.append(  # i+3: retest -- inside the DELAYED window (i+2..i+3) only,
+        # OUTSIDE the plain no-delay window (i+1..i+2) -- this is the candle
+        # that proves the delay actually shifted the scan window.
+        _c(100, 101, 99, 100, BASE_TS + (MIN_CANDLES + 2) * LTF_STEP)
+    )
+    ltf_candles.append(_c(100, 111, 99, 105, BASE_TS + (MIN_CANDLES + 3) * LTF_STEP))  # exit at TP
+
+    result_no_delay = BacktestEngine().run(
+        ltf_candles, [], _FakeSignalEngineFiresOnceThenNone(signal), _FakeRiskManager(),
+        account_balance=10000.0, slippage_percent=0.0,
+        limit_at_level=True, limit_timeout_candles=2, entry_delay_candles=0,
+    )
+    result_with_delay = BacktestEngine().run(
+        ltf_candles, [], _FakeSignalEngineFixedSignal(signal), _FakeRiskManager(),
+        account_balance=10000.0, slippage_percent=0.0,
+        limit_at_level=True, limit_timeout_candles=2, entry_delay_candles=1,
+    )
+
+    # No delay: scan window is i+1..i+2, neither of which touches 100 -> expires.
+    assert result_no_delay.total_trades == 0
+    # With 1-candle placement delay: scan window shifts to i+2..i+3, and i+3
+    # DOES touch 100 -> fills there.
+    assert result_with_delay.total_trades == 1
+    assert result_with_delay.trades[0]["opened_at"] == ltf_candles[MIN_CANDLES + 2]["timestamp"]
+
+
 # --- Daily/weekly loss-limit wiring (previously never passed to
 # RiskManager.evaluate() at all -- silently defaulted to 0.0, so a backtest
 # could keep opening trades through a day that would have tripped paper/

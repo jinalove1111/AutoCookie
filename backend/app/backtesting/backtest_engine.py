@@ -227,6 +227,8 @@ class BacktestEngine:
         tag_regimes: bool = False,
         min_stop_atr_mult: float = 0.0,
         vol_scaled_sizing: bool = False,
+        limit_at_level: bool = False,
+        limit_timeout_candles: int = 4,
     ) -> "BacktestResult":
         """Replays historical LTF candles (with a time-aligned, no-lookahead
         HTF slice at each step) through the Strategy Engine and Risk Engine
@@ -463,6 +465,89 @@ class BacktestEngine:
         flip the backtest default live in docs/H4_SIZING_PARITY_RESULTS.md,
         not here.
 
+        `limit_at_level` (default `False`, opt-in -- H2 experiment,
+        docs/HYPOTHESES_ROUND_1.md section 4, Milestone 28): replaces this
+        engine's entry-fill TIMING mechanism, not the fill PRICE formula.
+        Every existing path (default here, and `entry_delay_candles`
+        above) treats a signal's `entry_price` -- already the structural
+        OB/FVG/sweep zone edge the signal was built from, see
+        `app.strategy.entry_model.build_entry_model`'s `entry_price`
+        convention (`zone["top"]` for a long, `zone["bottom"]` for a
+        short) -- as IMMEDIATELY fillable on the signal's own candle `i`,
+        with no check that price ever actually traded at that level on
+        that candle. This flag adds a genuine, new fill-timing search
+        instead: starting at candle `i + 1` (never the signal candle
+        itself -- no lookahead), scan forward through at most
+        `limit_timeout_candles` further candles for the first one whose
+        `[low, high]` range crosses `signal.entry_price` (a real retest of
+        the zone level, approximated from OHLC alone -- no tick/L2 feed).
+        The first such candle becomes the trade's `fill_index` (where
+        SL/TP scanning starts from, exactly like `entry_delay_candles`'s
+        own `fill_index` shift) -- everything else (sizing, stop_loss,
+        take_profit, fees, slippage, breakeven, partial-TP, PnL) reuses
+        `_simulate_trade` completely unchanged. If NO candle within the
+        timeout window ever touches the level, the signal expires
+        unfilled: treated exactly like "no signal this step" (`i += 1;
+        continue`, same precedent as `max_entry_drift_pct`'s skip and the
+        zero-size guard below) -- no trade is recorded, and this is
+        DISCLOSED, EXPECTED behavior (a resting order that never got
+        touched), never a bug or a loss.
+
+        Fill-price design decision: a filled limit order is deemed to
+        fill AT THE ZONE LEVEL ITSELF (`signal.entry_price`), not at the
+        touching candle's own open/high/low/close. This is the standard
+        definition of a passive limit order (it fills at its own resting
+        price the instant price trades through it, never at a worse
+        price) and it is also the SAME raw pre-slippage reference
+        `_simulate_trade` already uses for the immediate-fill path
+        (`entry_fill = entry_price * (1 +/- slip)`) -- so `limit_at_level`
+        changes WHEN the fill happens (which candle) and WHETHER it
+        happens at all (timeout), never the price/slippage formula once
+        it does. This also means `fill_signal` does not need its
+        `entry_price` overwritten (unlike the `entry_delay_candles` path,
+        which DOES rewrite it to the delayed candle's close) -- only
+        `fill_index` changes.
+
+        Composes with `entry_delay_candles` as DISPATCH/PLACEMENT latency,
+        not fill latency (the two model genuinely different things once
+        `limit_at_level` is on, so they are not mutually exclusive):
+        `entry_delay_candles` shifts WHEN the resting order actually
+        starts resting at the exchange (`scan_start = i +
+        entry_delay_candles + 1` instead of `i + 1`), while
+        `limit_timeout_candles` still measures how long it stays live
+        FROM that (possibly delayed) placement point, not from the signal
+        candle itself. This is what makes `--limit-at-level
+        --limit-timeout-candles 4 --walk-forward --delay-check` (the
+        pre-registered evaluation command,
+        docs/HYPOTHESES_ROUND_1.md section 4) a meaningful comparison
+        instead of a no-op: `--delay-check` reruns the SAME config once at
+        `entry_delay_candles=0` and once at `=1` (see
+        `scripts/run_backtest.py`'s `delay_robustness_report`) -- if
+        `entry_delay_candles` were simply ignored whenever
+        `limit_at_level=True`, both runs would fill (or expire) on
+        exactly the same candles and the delay-gate would trivially
+        "pass" every time, silently defeating the whole point of that
+        gate for this candidate. `max_entry_drift_pct` (the OTHER
+        `entry_delay_candles`-gated parameter) is NOT applied on this
+        path -- it exists to reject a delayed IMMEDIATE fill that has
+        drifted too far from the planned `entry_price`; a limit fill is
+        defined to occur AT `entry_price` exactly (see the fill-price
+        design decision above), so its drift is always exactly zero by
+        construction -- the check would never fire and is skipped rather
+        than evaluated as a permanent no-op. Default `False` preserves
+        the exact prior immediate-fill-at-`entry_price`-on-the-signal-
+        candle behavior for every existing caller -- byte-identical when
+        unset, the same "disclosed-not-tuned, opt-in" discipline as every
+        other flag in this module.
+
+        `limit_timeout_candles` (default `4`, DISCLOSED-NOT-TUNED, only
+        has effect when `limit_at_level=True`): how many candles AFTER the
+        signal candle the resting limit stays live before expiring
+        unfilled. Not swept/optimized against any dataset -- chosen only
+        as "a small, plausible number of bars for a genuine retest to
+        occur" per docs/HYPOTHESES_ROUND_1.md section 4's own example
+        value.
+
         Risk-gate rejection observability (Milestone 23, 2026-07-17,
         ENGINEERING_DECISIONS.md #60): purely additive -- see
         `BacktestResult.risk_rejections`'s own docstring for the exact
@@ -666,7 +751,50 @@ class BacktestEngine:
 
             fill_index = i
             fill_signal = signal
-            if entry_delay_candles > 0:
+            if limit_at_level:
+                # H2 (docs/HYPOTHESES_ROUND_1.md section 4, Milestone 28):
+                # resting limit order at the structural zone level
+                # (`signal.entry_price`) instead of an immediate fill on
+                # the signal's own candle -- see `limit_at_level`'s
+                # docstring above for the full mechanism/design-decision
+                # writeup, including how `entry_delay_candles` composes
+                # here as PLACEMENT latency (shifts the scan window's
+                # start) rather than being ignored. Deliberately an `if`,
+                # not falling through to the plain `entry_delay_candles`
+                # `elif` below -- that branch's own (different) semantics
+                # are only for the non-limit immediate-fill path.
+                limit_level = signal.entry_price
+                fill_idx = None
+                scan_start = i + entry_delay_candles + 1
+                scan_end = min(i + entry_delay_candles + limit_timeout_candles, len(ltf_candles) - 1)
+                for k in range(scan_start, scan_end + 1):
+                    high = _get(ltf_candles[k], "high")
+                    low = _get(ltf_candles[k], "low")
+                    if (
+                        high is not None
+                        and low is not None
+                        and limit_level is not None
+                        and low <= limit_level <= high
+                    ):
+                        fill_idx = k
+                        break
+                if fill_idx is None:
+                    # Timeout expired with no retest -- expired/unfilled
+                    # signal, not a loss: never recorded as a trade (same
+                    # "treat like no signal" handling as the zero-size
+                    # guard above and max_entry_drift_pct's skip below).
+                    i += 1
+                    continue
+                fill_index = fill_idx
+                # fill_signal stays the original `signal` object (not
+                # copied/mutated): the fill price design decision is that
+                # a triggered limit fills AT `entry_price` itself, which
+                # `signal.entry_price` already IS -- only `fill_index`
+                # (which candle SL/TP scanning starts from) differs from
+                # the immediate-fill path. `max_entry_drift_pct` never
+                # applies here -- see docstring (a limit fill's drift from
+                # its own planned entry_price is always exactly zero).
+            elif entry_delay_candles > 0:
                 fill_index = min(i + entry_delay_candles, len(ltf_candles) - 1)
                 delayed_price = _get(ltf_candles[fill_index], "close")
                 # max_entry_drift_pct (opt-in, default None -- 2026-07-14

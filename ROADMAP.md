@@ -540,49 +540,82 @@ strategy/exit-logic variants tested so far, not specific to one family.
 Full suite 739/739 (up from 716). No orders placed, no DB writes, no
 production code touched.
 
-**Next experiment, per Hypothesis Round 1's own ranking: H2** (passive
-limit-at-level entry as a delay-robust alternative to immediate market
-entry, ranked #4 -- highest implementation cost of the five
-hypotheses). Every delay-robustness fix tried so far (ATR floor --
-REJECTED, `docs/ATR_FLOOR_EVALUATION.md`; entry-confirmation drift gate
--- REJECTED, `docs/CONTINUOUS_RESEARCH_LOG.md` Experiment 4) shares one
-property: it keeps the IMMEDIATE-marketable-fill entry model and tries
-to compensate downstream. H2 targets the entry model itself: instead of
-requiring an immediate fill at (or near) the signal candle's close,
-place a passive limit order at the actual structural entry zone (the
-OB/FVG/sweep level the signal is already built from,
-`docs/strategy_spec.md` §§2-5) and let a subsequent candle's retest fill
-it, with a bounded timeout (expire unfilled after N candles).
-Approximable entirely from existing OHLC candle data -- no tick/L2 feed
-needed. `docs/RESEARCH_ROUND_1.md` §4b already named this technique
-("limit-entry-with-timeout") and deferred it specifically for live
-order-book infrastructure this platform lacks -- but that deferral does
-not fully apply to a backtest-only research question, and that same
-document names the fallback H2 adopts: "a synthetic candle-only
-approximation." **New CLI flags required** (new entry-timing logic in
-`BacktestEngine`/`entry_model.py`, opt-in, default off): `--limit-at-level`
-(rest a limit order at the structural zone edge instead of an immediate
-market fill) and `--limit-timeout-candles N` (disclosed-not-tuned
-default, e.g. 4 -- expire unfilled after N candles). **Pre-registered
-keep-rule, two parts (quoted from `docs/HYPOTHESES_ROUND_1.md` section 4,
-declared before any run)**: (1) **cost-of-passivity check**:
-`--limit-at-level`'s own zero-added-delay Net Profit must retain >=50%
-of Legacy market-order baseline Net Profit in at least 2 of 3 years -- a
-resting-order model that misses too many fills waiting for a retest is
-not a viable substitute regardless of its delay behavior; (2)
-**delay-robustness check**: `--limit-at-level`'s delay-gate PF retention
-must clear >=0.5 with no sign flip in at least 2 of 3 years -- where
-market-order Legacy failed 3-for-3 (`docs/LEGACY_DELAY_ROBUSTNESS.md`
-§3). **Both** must hold for KEEP; either failing alone is REJECT --
-passing (1) while failing (2) means it's just a worse Legacy with the
-same fragility, passing (2) while failing (1) means it "fixed" delay by
-mostly not trading, the same failure shape the ATR floor already showed.
-Pre-registered experiment and keep-rule already declared in
-`docs/HYPOTHESES_ROUND_1.md` section 4; not yet run -- real new
-execution-simulation code required (medium-high cost, highest of the
-five hypotheses), unlike H1/H3's research-aggregation-only harnesses.
-H5 (session-conditional sizing) remains queued behind it per the same
-document's ranking.
+**Milestone 28 -- CLOSED (2026-07-18).** Full evidence: `docs/
+H2_LIMIT_ENTRY_RESULTS.md` (cite, don't duplicate here); rationale:
+`ENGINEERING_DECISIONS.md` #66. Ran H2 (passive limit-at-level entry as
+a delay-robust alternative to immediate market entry, ranked #4 --
+highest implementation cost of the five hypotheses). Every prior
+delay-robustness fix (ATR floor -- REJECTED, `docs/ATR_FLOOR_EVALUATION.md`;
+entry-confirmation drift gate -- REJECTED,
+`docs/CONTINUOUS_RESEARCH_LOG.md` Experiment 4) shared one property: it
+kept the IMMEDIATE-marketable-fill entry model and tried to compensate
+downstream. H2 targeted the entry model itself: new opt-in CLI flags
+`--limit-at-level` (rest a limit order at the structural OB/FVG/sweep
+zone edge instead of an immediate market fill) and
+`--limit-timeout-candles N` (disclosed-not-tuned default 4), wired into
+`BacktestEngine.run()`/`entry_model.py`, default off and byte-identical
+when unset, confirmed by 2 dedicated regression tests in
+`backend/tests/test_backtest_engine.py`. `RiskManager.evaluate()`'s live
+sequential-approval logic and `scripts/run_paper.py` untouched
+throughout. Ran BTCUSDT 15m 2024/2025/2026 (`--candles 3000 --periods 6
+--limit-at-level --limit-timeout-candles 4 --walk-forward
+--delay-check`) vs. the already-recorded Legacy market-order baseline.
+**VERDICT: REJECT**, applying H2's own pre-registered two-part keep-rule
+literally (both parts must hold for KEEP; either failing alone is
+REJECT): **Check 2 (delay-robustness) PASSES cleanly, 3/3 years** -- PF
+retention 1.003/0.883/0.935, no sign flip anywhere, genuinely and
+robustly solving the execution-delay fragility that both Legacy's
+default exit (retention 0.015-0.026) and `structure_tp` (milestone 27,
+retention 0.051-0.080) failed catastrophically -- mechanistically sound,
+since a resting order's fill price does not depend on placement
+latency, only on whether/when price revisits the level. **Check 1
+(cost-of-passivity) FAILS catastrophically, 0/3 years** -- inverts sign
+in every single year (2026: +$3,400.62 -> -$744.13; 2025: +$1,714.56 ->
+-$727.22; 2024: +$1,807.75 -> -$895.05). Check 1 alone disqualifies.
+**Precision note, the substantive finding of this round**: this is NOT
+the same failure shape as "the ATR floor already showed" (the
+keep-rule's own analogy, fixing delay by mostly not trading) -- trade
+count drops only modestly (13-21% fewer than Legacy: 96/51/64 vs.
+111/65/73-77) while profitable-periods collapses almost entirely (1/6,
+0/6, 2/6 vs. Legacy's 6/6 in all three years) and walk-forward fails
+everywhere with elevated losing streaks (5, 6, 3) -- too small a volume
+reduction to explain a swing from strongly profitable to net-loss on its
+own. The more precise finding: the retest-based passive-fill mechanism
+itself systematically selects for structurally worse trade outcomes,
+independent of delay entirely -- waiting for a retest of the zone edge
+appears to filter FOR setups that subsequently underperform (or filters
+OUT the immediate-continuation setups that drove Legacy's edge), not
+merely filter volume. A genuinely novel, third distinct failure mode
+among this platform's three tested delay-robustness fixes: ATR floor
+(thinned population, milestone 20), entry-drift gate
+(inconsistent/partial, `docs/CONTINUOUS_RESEARCH_LOG.md` Experiment 4),
+and now H2 (clean delay-robustness, but an unprofitable entry model
+independent of delay) -- a clean, well-differentiated addition to the
+evidence base, not a repeat of a known pattern. **Promotion path: NONE
+-- REJECT.** Even a KEEP would have had a uniquely different promotion
+story per H2's own pre-registered text (a candle-only approximation of
+a resting limit order is not verified live limit-order behavior) --
+moot here. Full suite 748/748 (up from 739). No orders placed, no DB
+writes, no production code touched.
+
+**Next experiment, per Hypothesis Round 1's own ranking: H5**
+(session-conditional position sizing, ranked #5 -- the last remaining
+hypothesis from `docs/HYPOTHESES_ROUND_1.md`). The ranking table's own
+characterization of H5, quoted verbatim: "Cheap, and mechanistically
+distinct from the already-rejected Asian-only entry filter -- but rides
+on the same small-sample session split (Test 6: 41/19/8 trades) whose
+failure mode (small-sample noise) already sank the filter version.
+**Weakest grounding of the five; listed for completeness, not
+urgency.**" H5's exact pre-registered experiment spec should be read
+directly from `docs/HYPOTHESES_ROUND_1.md` before implementation
+begins -- unlike H1-H4, H5 is referenced primarily via the ranking table
+(section 1) and the "Rejected ideas" section's cross-reference to the
+Asian-session filter rejection (section 6), rather than via a full
+dedicated experiment section matching H1-H4's format; confirm during
+implementation planning whether section 5's numbering (H4's own section)
+or a later section actually carries H5's full mechanism/grounding/
+pre-registered-experiment/keep-rule text before treating any assumed
+spec as authoritative.
 
 **Standing awareness item, not an action item**: H4's evaluation flagged
 that any existing finding resting on Net Profit margins narrower than

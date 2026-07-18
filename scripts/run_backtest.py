@@ -170,6 +170,8 @@ def run_backtest(
     tag_regimes: bool = False,
     min_stop_atr_mult: float = 0.0,
     vol_scaled_sizing: bool = False,
+    limit_at_level: bool = False,
+    limit_timeout_candles: int = 4,
 ) -> Any:
     """Replay `ltf_candles`/`htf_candles` once through the real
     Strategy/Risk/Backtest engines.
@@ -216,6 +218,17 @@ def run_backtest(
     volatility-scaled risk since Milestone 7). Default `False` preserves
     the exact prior sizing behavior (uniform 1.0x risk scalar) for every
     existing caller.
+
+    `limit_at_level`/`limit_timeout_candles` (default `False`/`4`,
+    Milestone 28, H2 experiment, docs/HYPOTHESES_ROUND_1.md section 4):
+    threaded straight through to `BacktestEngine.run(...,
+    limit_at_level=..., limit_timeout_candles=...)` -- see that
+    parameter's own docstring for the full mechanism (a resting limit
+    order at the signal's structural zone level, filled by a later
+    candle's genuine retest instead of an immediate fill, expiring
+    unfilled after the timeout) and fill-price design decision. Default
+    `False` preserves the exact prior immediate-fill behavior for every
+    existing caller.
     """
     return BacktestEngine().run(
         ltf_candles,
@@ -242,6 +255,8 @@ def run_backtest(
         tag_regimes=tag_regimes,
         min_stop_atr_mult=min_stop_atr_mult,
         vol_scaled_sizing=vol_scaled_sizing,
+        limit_at_level=limit_at_level,
+        limit_timeout_candles=limit_timeout_candles,
     )
 
 
@@ -895,6 +910,56 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--limit-at-level",
+        dest="limit_at_level",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable passive limit-at-level entries (opt-in, default off, "
+            "Milestone 28, H2 experiment, docs/HYPOTHESES_ROUND_1.md "
+            "section 4). Replaces the immediate-fill-at-entry_price "
+            "assumption with a genuine resting limit order at the "
+            "signal's structural OB/FVG/sweep zone level: the engine now "
+            "scans forward, candle by candle, for the first later candle "
+            "whose high/low range actually crosses that level (a real "
+            "retest, approximated from OHLC alone) within "
+            "--limit-timeout-candles bars, and fills there. If price "
+            "never returns within the timeout, the signal expires "
+            "unfilled (no trade recorded -- disclosed, expected "
+            "behavior, not a bug). See "
+            "app.backtesting.backtest_engine.BacktestEngine.run's "
+            "limit_at_level docstring for the full mechanism and the "
+            "fill-price design decision (fills at the zone level itself, "
+            "not the touching candle's open/close). Composes with "
+            "--delay-check's internal entry_delay_candles-based latency "
+            "simulation as PLACEMENT/dispatch latency (shifts WHEN the "
+            "scan window starts, not whether it runs at all) -- see "
+            "limit_at_level's own docstring for why this composition "
+            "(rather than one flag simply overriding the other) is what "
+            "makes the pre-registered '--limit-at-level "
+            "--limit-timeout-candles 4 --walk-forward --delay-check' "
+            "evaluation command a meaningful delay-robustness comparison. "
+            "A/B-testable, not a proven improvement; run the same "
+            "--symbol/--timeframe/--candles/--periods with and without "
+            "this flag (and with --walk-forward --delay-check) and "
+            "compare."
+        ),
+    )
+    parser.add_argument(
+        "--limit-timeout-candles",
+        dest="limit_timeout_candles",
+        type=int,
+        default=4,
+        help=(
+            "How many candles after the signal candle a resting "
+            "--limit-at-level order stays live before expiring unfilled "
+            "(default 4, DISCLOSED-NOT-TUNED -- only has effect when "
+            "--limit-at-level is set). Not swept/optimized against any "
+            "dataset; docs/HYPOTHESES_ROUND_1.md section 4's own example "
+            "value."
+        ),
+    )
+    parser.add_argument(
         "--end-date",
         default=None,
         help=(
@@ -997,6 +1062,10 @@ def main() -> int:
         "ATR stop-distance floor (min_stop_atr_mult): "
         f"{args.min_stop_atr if args.min_stop_atr > 0.0 else 'disabled'}"
     )
+    print(
+        "Limit-at-level entries (H2): "
+        f"{f'ENABLED (timeout={args.limit_timeout_candles} candles)' if args.limit_at_level else 'disabled'}"
+    )
     print(f"Fetched {len(candles)} candles for {args.symbol}/{args.timeframe}.")
     if len(candles) < total_requested:
         print(
@@ -1073,6 +1142,8 @@ def main() -> int:
                 tag_regimes=args.tag_regimes,
                 min_stop_atr_mult=args.min_stop_atr,
                 vol_scaled_sizing=args.vol_scaled_sizing,
+                limit_at_level=args.limit_at_level,
+                limit_timeout_candles=args.limit_timeout_candles,
             )
         except Exception as exc:  # unexpected engine failure is a genuine failure
             print(f"ERROR: backtest engine raised an exception on period {period_num}: {exc}")
@@ -1148,6 +1219,8 @@ def main() -> int:
                 entry_delay_candles=0,
                 min_stop_atr_mult=args.min_stop_atr,
                 vol_scaled_sizing=args.vol_scaled_sizing,
+                limit_at_level=args.limit_at_level,
+                limit_timeout_candles=args.limit_timeout_candles,
             )
             delayed_result = run_backtest(
                 candles,
@@ -1164,6 +1237,8 @@ def main() -> int:
                 entry_delay_candles=1,
                 min_stop_atr_mult=args.min_stop_atr,
                 vol_scaled_sizing=args.vol_scaled_sizing,
+                limit_at_level=args.limit_at_level,
+                limit_timeout_candles=args.limit_timeout_candles,
             )
         except Exception as exc:  # unexpected engine failure is a genuine failure
             print(f"ERROR: backtest engine raised an exception during --delay-check: {exc}")
