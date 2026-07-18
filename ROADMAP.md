@@ -816,17 +816,37 @@ itself rather than silently rewriting that document's original,
 already-committed analysis. Full suite 789/789 (up from 780). No orders
 placed, no DB writes, no production code touched.
 
-**Next research action**: no hypothesis is pre-registered yet. Two
-well-grounded, explicitly-not-endorsed candidates surfaced this round:
-(a) a future H9 measuring actual Net Profit/win-rate impact of a
-farther-target convention end-to-end (not RR alone, per H8's own
-win-rate-blind caveat) -- this would be the correct way to find out
-whether H8's PARAMETER_SENSITIVE label survives contact with real
-trading outcomes; (b) the Jade cross-asset scarcity check
-(`docs/HYPOTHESES_ROUND_2.md` section 5, decision #36 step 2) now has a
-sharper reason to run (confirm whether the RR-geometry problem is
-BTC-specific or general) than its original zone-scarcity framing alone
-provided.
+**Phase transition review (2026-07-19, operator directive): the default
+"run the next hypothesis" cadence is PAUSED, based on evidence, not
+momentum.** Full analysis: `docs/PHASE_TRANSITION_REVIEW.md` (cite,
+don't duplicate here). Reviewed all eight completed hypotheses (H1-H8)
+against six specific questions (what's been learned, which assumptions
+are disproven, what's genuinely unknown, whether this is still the
+highest-ROI direction, whether research still outranks validation work,
+and what objective criteria should trigger a phase transition).
+**Conclusion**: Legacy-delay-fragility research is confirmed exhausted
+(again); Jade diagnostic research hit a real inflection point at H8 --
+three consecutive rounds (H6/H7/H8) narrowed the same finding without
+producing a constructive fix candidate, this review's own formalized
+"diagnostic saturation" trigger (docs/PHASE_TRANSITION_REVIEW.md section
+6, item 1). **Two items are recommended to the operator, not
+autonomously started**: (a) real signal-to-fill latency measurement
+against actual execution infrastructure -- `docs/live_trading_checklist.md`'s
+Gate #4 hardened prerequisite, never once addressed across any of the 8
+hypotheses or any prior milestone, and not answerable by any amount of
+further backtest research; (b) confirming whether Legacy's live
+paper-trading process is still actually running -- this review could not
+observe it running in this environment (`PROJECT_STATUS.md`'s last
+confirmation was PID 24616 as of milestone 28; not found via `tasklist`
+during this review). **Not fully retired**: one genuinely constructive
+(not diagnostic) Jade hypothesis remains well-grounded if Jade research
+resumes at all -- does a farther-target selection convention improve
+real Net Profit/win-rate, not just nominal RR (H8's own disclosed,
+explicitly unvalidated caveat) -- but this review does not recommend
+prioritizing it over the two operator-level items above, since Jade has
+never cleared a single backtest profitability gate regardless of
+mechanism understanding. No hypothesis was run to produce this review;
+no production code touched.
 
 **Standing awareness item, not an action item**: H4's evaluation flagged
 that any existing finding resting on Net Profit margins narrower than
