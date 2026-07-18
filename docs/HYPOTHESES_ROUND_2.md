@@ -49,6 +49,17 @@ discipline `CLAUDE.md` names for H5 in reverse — do not write a full
 spec for a direction not being run yet, so a future session doesn't
 mistake a placeholder ranking-table row for an authoritative one.
 
+**Addendum (2026-07-19, after H6 resolved)**: this ranking table is
+historical — it reflects what was known before H6 ran, preserved as-is
+rather than rewritten. H6 ran (REJECTED, section 2) and its own results
+surfaced a new, higher-priority direction the original ranking above
+could not have anticipated: H7 (section 3), which a full strategic
+review across H1-H6 (`docs/RESEARCH_STRATEGY_REVIEW.md`) ranked #1
+among six candidate directions, ahead of ranks 2-3 above. See that
+review for the current, up-to-date priority ordering — do not treat
+this section's original 1-2-3 ranking as still authoritative for
+choosing the next hypothesis to run.
+
 ---
 
 ## 2. H6 — Root-cause Jade's entry-signal scarcity
@@ -260,26 +271,167 @@ verdict.
 
 ---
 
-## 3. Deferred directions (not pre-registered in full this round)
+## 3. H7 — RiskManager/pipeline-gating attribution for Jade's real trade count
+
+**Added 2026-07-19, after H6 resolved and a strategic review across
+H1-H6 ranked this the single highest-value next direction**
+(`docs/RESEARCH_STRATEGY_REVIEW.md` section 6). Follows this document's
+own rule #1: pre-registered here, in full, before any run.
+
+### Mechanism
+
+H6 (section 2 above) found decision #36's same-bar-retracement
+hypothesis REJECTED, but in doing so surfaced a much larger, explicitly
+unattributed gap: 8,312 `signal_would_generate` steps across the 3
+anchors versus decision #36's already-recorded 6 actual trades. H6's own
+results (`docs/H6_JADE_SCARCITY_RESULTS.md` section 5) disclosed three
+reasons those numbers are not directly comparable, none measured by H6
+itself: (1) H6's harness does not track open-trade state, unlike
+`BacktestEngine.run()`'s real single-open-trade-at-a-time invariant;
+(2) Jade's own no-zone-mitigation design lets one real zone satisfy
+`candidate_found` across many consecutive candles, inflating step counts
+relative to distinct opportunities; (3) `RiskManager.evaluate()` gating
+(`MAX_TRADES_PER_DAY`, RR>=1:2 minimum, daily/weekly loss limits) sits
+downstream of every H6 number and was entirely out of its declared
+scope. H7 measures (3) directly, and (1)/(2) as a byproduct, using
+machinery that already exists and needs no new code at all.
+
+**Key realization this pre-registration is built on**: `BacktestResult.risk_rejections`
+(Milestone 23, `ENGINEERING_DECISIONS.md` #61(b), shipped 2026-07-17) is
+GENERIC observational instrumentation on `BacktestEngine.run()` — it
+counts whatever `risk_manager.evaluate()` decides on whatever signal
+`SignalEngine.generate_signal()` produces, regardless of which engine
+(Legacy or Jade, via the existing `use_jade_engine` flag) produced that
+signal. **Decision #36's original Jade A/B backtest (2026-07-12) predates
+this instrumentation by 5 days** — it was never possible to see Jade's
+own risk-rejection breakdown at the time, not because anyone chose not
+to look. H7 re-runs the SAME kind of comparison decision #36 already
+made (`use_jade_engine=True` vs. baseline), extended to this project's
+standard 3-anchor set, and reads the `risk_rejections` field that now
+exists but didn't when #36 ran — this is new information, not a
+duplicate of settled work, and requires writing zero new production
+code: `BacktestEngine.run()`, `RiskManager.evaluate()`, and every Jade
+module stay completely unmodified and uncalled-into beyond their
+existing public API.
+
+### Grounding
+
+- **Internal**: `docs/H6_JADE_SCARCITY_RESULTS.md` section 5 (the
+  disclosed, unattributed 8,312-vs-6 gap this hypothesis targets
+  directly); `ENGINEERING_DECISIONS.md` #36 (Jade's original 6-trade
+  result, predating risk-rejection observability); `ENGINEERING_DECISIONS.md`
+  #61(b) / `ENGINEERING_DECISIONS.md` #62 (Milestone 23's
+  `risk_rejections` instrumentation, and its own first real-world use:
+  discovering `MAX_TRADES_PER_DAY` explains 89-92% of Legacy's own raw
+  signal rejection) — the same instrumentation, never yet pointed at
+  Jade; `docs/RESEARCH_STRATEGY_REVIEW.md` section 4 (this hypothesis's
+  #1 ranking and rationale among six candidate directions).
+- **External**: none specific — this is an internal instrumentation
+  reuse question, the same status H5's Step 0 gate and H6 itself had.
+
+### Pre-registered experiment
+
+**No new script needed beyond a thin reporting wrapper** —
+`scripts/research_h7_jade_risk_attribution.py` calls `run_backtest.py`'s
+own already-existing `run_backtest(chunk, htf, use_jade_engine=True)`
+per period (the exact function every other research harness in this
+project already reuses) and `aggregate_risk_rejections(results)`
+(already built for `run_backtest.py`'s own CLI reporting, Milestone 23)
+— no new `BacktestEngine` parameter, no new production code path.
+
+```
+python scripts/research_h7_jade_risk_attribution.py --symbol BTCUSDT --timeframe 15m --candles 3000 --periods 6 --end-date 2026-07-10
+python scripts/research_h7_jade_risk_attribution.py --symbol BTCUSDT --timeframe 15m --candles 3000 --periods 6 --end-date 2025-07-10
+python scripts/research_h7_jade_risk_attribution.py --symbol BTCUSDT --timeframe 15m --candles 3000 --periods 6 --end-date 2024-07-10
+```
+
+(This project's standard 3-anchor set, extending decision #36's original
+single-anchor BTCUSDT scope for cross-year confirmation — same
+methodological choice H6 made for the same reason.)
+
+For each anchor, reports: `total_signals` (how many times a Jade signal
+actually reached `RiskManager.evaluate()`, i.e. survived open-trade
+skipping AND entry-model/exit-target gating — the number directly
+comparable, for the first time, to H6's own step-level counts),
+`approved`/`rejected` and the `by_reason` breakdown, and total real
+trades opened (`sum(len(r.trades) for r in results)`, expected to
+reproduce decision #36's 6-trade result on the matching single anchor,
+confirming this experiment reuses the identical mechanism before
+trusting any new number).
+
+**Keep-rule (declared now)** — like H6, this is a diagnostic, not a
+promotion candidate, so the rule classifies which stage dominates the
+gap rather than KEEP/REJECT a trading behavior:
+
+- **RiskManager-gating-dominant** if, aggregated across the 3 anchors,
+  `rejected / total_signals >= 0.5` (at least half of all signals that
+  reach RiskManager are turned away by it) AND `MAX_TRADES_PER_DAY` is
+  the single most frequent `by_reason` entry — mirroring decision #62's
+  own finding for Legacy, extended to Jade.
+- **Open-trade/zone-persistence-dominant** if `total_signals` (this
+  experiment's count) is less than 25% of H6's own `signal_would_generate`
+  count (8,312, aggregated) — meaning most of H6's step-level events were
+  the SAME persistent zone re-counted across an open-trade window, not
+  distinct opportunities that ever reached RiskManager at all.
+- **Both, or neither** are honest, reportable outcomes too (matching
+  H4's MIXED precedent) — this hypothesis does not force a single
+  dominant-cause narrative if the evidence splits.
+
+### Cost
+
+Very small — smaller than H6. No new detector-level classification
+logic (H6's own `_fvg_bucket`/`_same_bar_reject_bucket` machinery), no
+per-step manual pipeline walk. Reuses `run_backtest()` and
+`aggregate_risk_rejections()` verbatim, both already built and tested
+(Milestone 23, and every research harness since). The only new code is
+a thin per-anchor fetch-and-aggregate loop, matching
+`scripts/research_h5_step0_session_grounding.py`'s own minimal shape.
+
+### Promotion path if RiskManager-gating-dominant or otherwise
+
+**Not a promotion decision either way**, same as H6. A
+RiskManager-gating-dominant result would be a genuine, disclosed,
+platform-level finding — TWO independently-built strategies (Legacy,
+decision #62; Jade, this hypothesis) sharing the same `MAX_TRADES_PER_DAY`
+bottleneck — but per `docs/RESEARCH_STRATEGY_REVIEW.md` section 5's
+explicit, deliberate restraint, this does NOT authorize or recommend
+testing what raising the cap would do. `MAX_TRADES_PER_DAY` stays
+exactly as operator-gated as it already is (decision #62); this
+hypothesis only measures how much of Jade's OWN scarcity the existing,
+already-fixed cap explains, never whether to change it.
+`use_jade_engine` stays `False`; `RiskManager.evaluate()` and
+`scripts/run_paper.py` are completely unmodified and unaffected by this
+round regardless of outcome.
+
+---
+
+## 4. Deferred directions (not pre-registered in full this round)
 
 - **Cross-asset Legacy delay-fragility check (rank 2)**: cheap and
   well-grounded, but confirmatory rather than action-unlocking given
   every proposed fix for the fragility already failed on the one asset
   tested regardless of whether the fragility itself proves universal.
   A candidate for a future round, not excluded.
-- **Jade cross-asset scarcity check (rank 3, decision #36 step 2)**:
+- **Jade cross-asset scarcity check (rank 4, decision #36 step 2)**:
   explicitly ordered by decision #36 itself to follow, not precede, H6's
   mechanism confirmation — pre-registering it in full before H6 runs
-  would violate that decision's own stated ordering.
+  would violate that decision's own stated ordering. Per
+  `docs/RESEARCH_STRATEGY_REVIEW.md` section 4, also deferred behind H7,
+  since H6 only partially explained Jade's scarcity mechanism.
+- **Jade-FVG-only isolation test (rank 2)**: directly follows H6's own
+  selected-model-share finding (FVG wins 76.4% of selections). Deferred
+  behind H7 — if H7 finds `MAX_TRADES_PER_DAY` is the dominant
+  bottleneck, entry-model composition may not matter much regardless.
 
 ---
 
-## 4. Caveats
+## 5. Caveats
 
-- **No result exists yet.** This document proposes H6; it reports none.
-  Every number cited above is drawn from prior, already-committed
-  evidence documents (`ENGINEERING_DECISIONS.md` #35/#36), not from any
-  run performed for this round.
+- **No result exists yet for H7.** H6 (section 2) has a result;
+  everything in section 3 (H7) is a proposal, not a report. Every number
+  cited in H7's own text is drawn from H6's own already-committed
+  results (`docs/H6_JADE_SCARCITY_RESULTS.md`) or decision #36, not from
+  any run performed for H7 specifically.
 - **One asset (BTCUSDT), one timeframe (15m)** — matching decision #36's
   own original scope, extended here only to 3 years for cross-year
   mechanism confirmation, not cross-asset. Whether Jade's scarcity

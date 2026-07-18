@@ -735,14 +735,45 @@ insight-not-acted-on framing) treats even a backtest-only counterfactual
 of a risk-limit constant as close enough to the operator-gated boundary
 to avoid without explicit prior authorization.
 
-**Recommended single next hypothesis: H7** (RiskManager/pipeline-gating
-attribution for Jade). Cheapest available experiment (extends H6's
-already-tested analysis code, no new `BacktestEngine` parameter or CLI
-flag), most directly grounded (named by H6, which was named by decision
-#36), and carries the highest potential for a platform-level unifying
-finding -- if `MAX_TRADES_PER_DAY` gates Jade the way decision #62 found
-it gates Legacy, that reframes the Strategy Selection Engine question
-materially. Not yet pre-registered as of this writing.
+**Milestone 31 -- CLOSED (2026-07-19).** Full evidence: `docs/
+H7_JADE_RISK_ATTRIBUTION_RESULTS.md` (cite, don't duplicate here);
+rationale: `ENGINEERING_DECISIONS.md` #69. Ran H7 (RiskManager/
+pipeline-gating attribution for Jade), the strategic review's own #1
+ranked direction. New thin wrapper `scripts/research_h7_jade_risk_attribution.py`
+(+ 7 tests) reused `run_backtest.py`'s own already-existing
+`run_backtest(..., use_jade_engine=True)` and `aggregate_risk_rejections()`
+verbatim -- zero new production code. Ran BTCUSDT 15m 2024/2025/2026,
+8,021 signals reached `RiskManager.evaluate()` (96.5% of H6's own
+step-level count -- **open-trade/zone-persistence branch cleanly
+REJECTED**, since so few trades ever open there's rarely anything to
+skip past), of which 99.3% were rejected, only 57 approved into real
+trades. **The literal keep-rule mechanically resolves RISK_GATING_DOMINANT**
+(`MAX_TRADES_PER_DAY` was the single most frequent exact reason string)
+**but this round caught and disclosed why that's misleading**:
+RR-below-minimum reasons embed their exact numeric value per string, so
+they fragment across thousands of near-unique keys while
+`MAX_TRADES_PER_DAY` never varies and naturally accumulates the most raw
+count. Re-pooled by CATEGORY: RR-below-minimum accounts for 92.3% of all
+rejection-reason instances, `MAX_TRADES_PER_DAY` only 7.3%. **The real
+finding**: unlike Legacy (100% cap-driven per decision #62), Jade's
+bottleneck is a reward:risk GEOMETRY problem -- its stop/target
+construction has never been swept/tuned the way Legacy's `_RR`/
+`_STOP_BUFFER` were, and rarely clears the platform's 1:2 minimum RR.
+Two independently-built strategies, two different bottlenecks -- a
+disclosed, platform-level finding for the Strategy Selection Engine
+question, not the "shared cap" unification this hypothesis originally
+set out to test. Full suite 780/780 (up from 773). No orders placed, no
+DB writes, no production code touched.
+
+**Next research action**: no hypothesis is pre-registered yet. H7's own
+RR-geometry finding is a new, well-grounded candidate for a future H8
+(does adjusting Jade's stop/target construction raise its own RR
+distribution?) but that is a genuinely new hypothesis to pre-register
+separately, not implied or authorized by this round. The Jade
+cross-asset scarcity check (`docs/HYPOTHESES_ROUND_2.md` section 4,
+decision #36 step 2) now has a sharper reason to run (confirm whether
+the RR-geometry problem is BTC-specific or general) than its original
+zone-scarcity framing alone provided.
 
 **Standing awareness item, not an action item**: H4's evaluation flagged
 that any existing finding resting on Net Profit margins narrower than

@@ -4,6 +4,56 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Milestone 31: H7 attributes Jade's remaining scarcity gap -- Jade's bottleneck is RR geometry, not the shared MAX_TRADES_PER_DAY cap
+
+2026-07-19. Full report: `docs/H7_JADE_RISK_ATTRIBUTION_RESULTS.md`
+(cite, don't duplicate here). **Preceded by a strategic research review**
+(`docs/RESEARCH_STRATEGY_REVIEW.md`) across all six prior hypotheses
+(H1-H6), which ranked this direction #1 among six candidates before it
+was pre-registered.
+
+**The question**: H6 (milestone 30) disclosed but explicitly did not
+measure a gap -- 8,312 step-level `signal_would_generate` events across
+3 anchors versus decision #36's 6 recorded Jade trades. H7 attributes
+it, reusing `run_backtest.py`'s own already-existing `run_backtest(...,
+use_jade_engine=True)` and `aggregate_risk_rejections()` verbatim (zero
+new production code -- `BacktestResult.risk_rejections`, Milestone 23,
+is engine-agnostic instrumentation that simply predates decision #36's
+original 2026-07-12 A/B test by 5 days).
+
+**Result**: 8,021 signals reached `RiskManager.evaluate()` across the 3
+anchors (96.5% of H6's own step count) -- the open-trade/zone-persistence
+hypothesis is cleanly REJECTED, since so few trades ever open there's
+almost nothing to skip past. 99.3% of those signals were rejected; only
+57 became real trades.
+
+**A keep-rule design flaw caught and disclosed, not hidden**: the
+literal pre-registered rule mechanically resolves RISK_GATING_DOMINANT
+(`MAX_TRADES_PER_DAY` is the single most frequent EXACT reason string).
+But RR-below-minimum rejection reasons embed their exact numeric value
+per string, fragmenting into thousands of near-unique keys, while
+`MAX_TRADES_PER_DAY` never varies and naturally accumulates the most raw
+count regardless of true prevalence. Re-pooled by category:
+
+| Category | Share of rejection-reason instances |
+|---|---|
+| RR below minimum (pooled) | **92.3%** |
+| `MAX_TRADES_PER_DAY` cap | 7.3% |
+| Daily loss limit | 0.4% |
+
+**The substantive finding**: unlike Legacy, whose own signal rejection
+is 100% cap-driven (decision #62), Jade's real bottleneck is a
+reward:risk GEOMETRY problem -- its stop/target construction has never
+been swept or tuned the way Legacy's `_RR`/`_STOP_BUFFER` were, and
+rarely clears this platform's 1:2 minimum RR. Two independently-built
+strategies, sitting on two DIFFERENT bottlenecks -- a disclosed,
+platform-level finding for any future Strategy Selection Engine design
+conversation, not the "shared cap" unification H7 originally set out to
+test. Full suite 780/780 (up from 773). No orders placed, no DB writes,
+no production code touched -- this round needed less new code than any
+prior milestone (one thin wrapper reusing two already-existing
+functions). Details: `ENGINEERING_DECISIONS.md` #69.
+
 ## [Unreleased] - Milestone 30: Hypothesis Round 2 opened, H6 root-causes Jade's signal scarcity -- REJECTED, zones don't exist far more often than they're mistimed
 
 2026-07-19. Full report: `docs/H6_JADE_SCARCITY_RESULTS.md` (cite, don't

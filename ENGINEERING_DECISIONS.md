@@ -4567,3 +4567,123 @@ new research-only script + its dedicated test file, neither imported by
 any production or paper-trading path). Full suite 773/773 at evaluation
 time (up from 756 -- 17 new tests for the pipeline-attribution logic).
 Full report, cited not duplicated: `docs/H6_JADE_SCARCITY_RESULTS.md`.
+
+## 69. Milestone 31: H7 attributes Jade's remaining scarcity gap -- Jade's real bottleneck is reward:risk geometry, not the shared MAX_TRADES_PER_DAY cap; a keep-rule design flaw caught and disclosed mid-analysis
+
+**Decision context**: preceded by a strategic research review
+(`docs/RESEARCH_STRATEGY_REVIEW.md`) across all six prior hypotheses
+(H1-H6) -- rather than opening a seventh hypothesis in isolation, that
+review extracted five cross-cutting patterns and ranked six candidate
+future directions by expected ROI, placing H7 (RiskManager/pipeline-
+gating attribution for Jade) first. H6 (decision #68) had disclosed but
+explicitly not measured a gap: 8,312 step-level `signal_would_generate`
+events across 3 anchors versus decision #36's 6 recorded Jade trades,
+naming three un-measured candidate explanations (open-trade-state
+tracking, Jade's own zone-persistence, `RiskManager.evaluate()` gating)
+without chasing any of them in the same round.
+
+**Why this needed essentially zero new code**: `BacktestResult.risk_rejections`
+(Milestone 23, decision #61(b)) is generic, engine-agnostic
+instrumentation -- it observes whatever `RiskManager.evaluate()`
+decides on whatever signal `SignalEngine.generate_signal()` produces,
+regardless of `use_jade_engine`. Decision #36's original A/B test
+(2026-07-12) simply predates this instrumentation (shipped 2026-07-17)
+by 5 days -- nobody had looked at Jade's own risk-rejection breakdown
+because the tooling to see it didn't exist yet when #36 ran, not because
+anyone chose not to look. New thin wrapper
+`scripts/research_h7_jade_risk_attribution.py` (+
+`backend/tests/test_research_h7_jade_risk_attribution.py`, 7 tests)
+reuses `run_backtest.py`'s own already-existing `run_backtest(...,
+use_jade_engine=True)` and `aggregate_risk_rejections()` verbatim -- no
+new `BacktestEngine` parameter, no new production code path anywhere.
+
+**Anchor (all three years)**: BTCUSDT 15m, `--candles 3000 --periods 6`,
+`--end-date 2026-07-10 / 2025-07-10 / 2024-07-10`, `use_jade_engine=True`
+-- this project's standard 3-anchor set. **Disclosed limitation**: H7's
+own pre-registered text intended to first confirm reproducing decision
+#36's 6-trade result before trusting new numbers; that check as
+literally described wasn't actually possible, since decision #36 used
+no explicit `--end-date` (candles ending at "now" on 2026-07-12), not
+this round's `2026-07-10` anchor -- the two windows differ by ~2 days
+out of an ~18,000-candle span. This round's 2026 anchor produced 22
+trades, not 6; most plausibly the anchor-date shift interacting with
+Jade's own RR-sensitivity (no Jade module was touched by any commit
+between decision #36 and this round). This does not weaken H7's own
+findings below (about rejection-reason composition and rate, not about
+matching one historical trade count), but this round's 57 pooled trades
+should be read as new, standalone measurements, not a confirmed
+byte-identical replication of #36.
+
+**Result**: 8,021 signals reached `RiskManager.evaluate()` across the 3
+anchors -- 96.5% of H6's own step-level `signal_would_generate` count.
+**Open-trade/zone-persistence branch of H7's keep-rule: cleanly
+REJECTED** -- `total_signals` stayed at 94.6-97.3% of H6's count in
+every year, nowhere near the pre-registered <25% threshold. Because the
+approval rate is so low (0.7% of signals reaching RiskManager), a trade
+is almost never open, so the walk-forward loop has almost nothing to
+skip past regardless of Jade's own zone-persistence design -- H6's raw
+step counts were NOT mostly duplicate/overlapping retests of the same
+zone. Of the 8,021 signals, 7,964 (99.3%) were rejected; only 57 became
+real trades.
+
+**Applying H7's own pre-registered RiskManager-gating branch literally**:
+quoting it verbatim, "`rejected / total_signals >= 0.5` ... AND
+`MAX_TRADES_PER_DAY` is the single most frequent `by_reason` entry."
+Mechanically: reject rate 99.3% clears 0.5, and `"trades_today 2 reached
+MAX_TRADES_PER_DAY 2"` is, character-for-character, the single most
+frequent individual string in `by_reason` -- **RISK_GATING_DOMINANT per
+the rule as literally written.**
+
+**A design flaw in this literal result, caught and disclosed rather than
+reported as the final answer**: `RiskManager.evaluate()`'s RR-below-minimum
+rejection reason embeds the exact numeric RR value in its own string
+("rr 0.052 is below required MIN_RR 2.0"), so it fragments into
+thousands of distinct near-unique strings, each individually small --
+while `MAX_TRADES_PER_DAY`'s reason string never varies, so every one of
+its occurrences accumulates under one key. A "single most frequent exact
+string" comparison structurally favors whichever reason happens to have
+a fixed string, independent of which reason is actually more prevalent
+in substance -- the keep-rule's own operationalization has a blind spot
+this round discovered on contact with real data, not before. Re-aggregating
+`by_reason` by CATEGORY instead of exact string (8,589 total
+reason-instances, pooled across all 3 anchors -- more than
+`aggregate_rejected` 7,964 because `RiskManager.evaluate()` collects
+every failing check per signal, not just the first): **RR below minimum
+92.3% (7,929 instances), `MAX_TRADES_PER_DAY` cap 7.3% (624), daily loss
+limit 0.4% (36).**
+
+**The substantive finding**: Jade's dominant rejection reason is
+overwhelmingly RR-below-minimum, not the shared cap. Unlike Legacy,
+whose own raw-signal rejection is 100% `MAX_TRADES_PER_DAY`-driven
+(decision #62: 89-92% of Legacy's signals rejected, every fired reason
+the daily cap), **Jade's scarcity is a genuinely different mechanism**:
+the vast majority of its own generated entry/stop/target combinations
+never clear this platform's 1:2 minimum reward:risk requirement.
+Consistent with everything else this evidence base has found about Jade
+-- its stop/target construction (`entry_point_engine.py`'s
+zone-boundary-based stops, `exit_point_engine.find_exit_targets`'s
+liquidity/swing/premium-discount targets) has never been swept or tuned
+the way Legacy's own `_RR`/`_STOP_BUFFER` were
+(`docs/parameter_sweep_report.md`). **Two independently-built strategies
+on this platform are bottlenecked by two DIFFERENT gates** -- Legacy by
+trade-frequency throughput under a fixed cap, Jade by trade-quality
+geometry under the fixed minimum RR -- a disclosed, platform-level
+finding for any future Strategy Selection Engine design conversation,
+distinct from (and more specific than) the "shared bottleneck"
+hypothesis this round originally set out to test.
+
+**Promotion path**: NONE -- diagnostic only. The RR-geometry finding
+does not itself validate or invalidate any specific stop/target fix for
+Jade -- that would be a new, separately pre-registered hypothesis
+(a natural H8 candidate, not authorized or implied by this round).
+`use_jade_engine` stays `False`. Legacy's live/paper trading behavior is
+completely unchanged: `RiskManager.evaluate()` and `scripts/run_paper.py`
+are untouched; no Jade module was modified. No orders placed, no writes
+to `backend/paper_validation.db`.
+
+**Status**: read-only evidence round, no production code touched (one
+thin new research-only wrapper script + its dedicated test file, both
+reusing already-existing, already-tested functions verbatim, neither
+imported by any production or paper-trading path). Full suite 780/780
+at evaluation time (up from 773 -- 7 new tests for the keep-rule
+arithmetic). Full report, cited not duplicated: `docs/H7_JADE_RISK_ATTRIBUTION_RESULTS.md`.

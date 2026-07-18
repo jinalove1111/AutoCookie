@@ -937,6 +937,66 @@ practice** (`scripts/cto_report.py`, milestone 17b below).
     (up from 756). Full report: `docs/H6_JADE_SCARCITY_RESULTS.md`. Full
     rationale: `ENGINEERING_DECISIONS.md` #68.
 
+31. **Strategic research review (H1-H6) + H7: Jade's real bottleneck is
+    RR geometry, not the shared cap** (2026-07-19): before opening a
+    seventh hypothesis, reviewed all six completed hypotheses together
+    (`docs/RESEARCH_STRATEGY_REVIEW.md`) -- 5 cross-cutting patterns
+    (throughput beats selectivity; regime/session hypotheses are
+    data-starved by construction at current trade volume; motivating
+    evidence must be re-verified on the exact target candidate before
+    grounding a new hypothesis; a narrowly-scoped hypothesis can miss
+    the real driver in an adjacent pipeline stage; every REJECT/MIXED
+    has been mechanistically explained, not just numerically reported),
+    6 future directions ranked by ROI, 3 paths explicitly eliminated (a
+    fifth Legacy delay-fragility fix attempt; any further regime-/
+    session-conditional hypothesis that doesn't first clear the n>=20
+    sample floor; a `MAX_TRADES_PER_DAY` cap-relaxation sensitivity
+    study, even framed as disclosed-not-acted-upon research). **H7**
+    (`docs/HYPOTHESES_ROUND_2.md` section 3) ran the #1-ranked
+    direction: attributes H6's own disclosed, unmeasured gap (8,312
+    step-level `signal_would_generate` events vs. decision #36's 6
+    actual Jade trades). New thin wrapper
+    `scripts/research_h7_jade_risk_attribution.py` (+ 7 tests) reuses
+    `run_backtest.py`'s own already-existing `run_backtest(...,
+    use_jade_engine=True)`/`aggregate_risk_rejections()` verbatim --
+    zero new production code; `BacktestResult.risk_rejections`
+    (Milestone 23) simply predates decision #36's original A/B test by
+    5 days, so nobody had looked at Jade's own risk-rejection breakdown
+    until now. Ran BTCUSDT 15m 2024/2025/2026. **Result**: 8,021
+    signals reached `RiskManager.evaluate()` (96.5% of H6's own step
+    count) -- the open-trade/zone-persistence branch of H7's keep-rule
+    is cleanly REJECTED, since so few trades ever open there's almost
+    nothing to skip past. 99.3% of those signals were rejected; only 57
+    became real trades. **Keep-rule design flaw caught and disclosed,
+    not hidden**: the literal pre-registered rule mechanically resolves
+    RISK_GATING_DOMINANT (`MAX_TRADES_PER_DAY` is the single most
+    frequent EXACT reason string), but RR-below-minimum reasons embed
+    their exact numeric value per string and fragment across thousands
+    of near-unique keys, while the cap's reason string never varies and
+    naturally accumulates the most raw count regardless of true
+    prevalence. Re-pooled by CATEGORY instead of exact string:
+    RR-below-minimum accounts for 92.3% of all rejection-reason
+    instances, `MAX_TRADES_PER_DAY` only 7.3%, daily loss limit 0.4%.
+    **Substantive finding**: unlike Legacy (100% cap-driven per decision
+    #62), Jade's real bottleneck is a reward:risk GEOMETRY problem --
+    its stop/target construction has never been swept or tuned the way
+    Legacy's `_RR`/`_STOP_BUFFER` were. Two independently-built
+    strategies, sitting on two DIFFERENT bottlenecks -- a disclosed,
+    platform-level finding for any future Strategy Selection Engine
+    design conversation, not the "shared cap" unification this
+    hypothesis originally set out to test. **Disclosed limitation**:
+    this round's anchor (`2026-07-10`) differs by ~2 days from decision
+    #36's original unspecified "now" anchor (2026-07-12), so this
+    round's 57 pooled trades are not a confirmed byte-identical
+    reproduction of #36's 6 -- doesn't weaken the rejection-rate/
+    reason-composition findings, which don't depend on matching that
+    historical number. **Promotion path: NONE -- diagnostic only.**
+    `use_jade_engine` stays `False`; Legacy's live/paper trading
+    behavior is completely unchanged; no Jade module was modified. No
+    orders placed, no DB writes. **Full suite 780/780** (up from 773).
+    Full report: `docs/H7_JADE_RISK_ATTRIBUTION_RESULTS.md`. Full
+    rationale: `ENGINEERING_DECISIONS.md` #69.
+
 **Production-behavior note**: milestones 1-6 were purely additive/
 observational. Milestone 7 was the FIRST to change actual paper-trading
 sizing/rejection math (more conservative sizing in high volatility;
