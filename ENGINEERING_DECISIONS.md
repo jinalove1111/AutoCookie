@@ -4436,3 +4436,134 @@ new research-only script + its dedicated test file, neither imported by
 any production or paper-trading path). Full suite 756/756 at evaluation
 time (up from 748 -- 8 new tests for the session-bucketing logic). Full
 report, cited not duplicated: `docs/H5_SESSION_GROUNDING_RESULTS.md`.
+
+## 68. Milestone 30: Hypothesis Round 2 opened; H6 root-causes Jade's signal scarcity -- REJECTED, zones don't exist far more often than they're mistimed, and the aggregate masks real per-model heterogeneity
+
+**Decision context**: with Hypothesis Round 1 fully resolved (decisions
+#63-#67, zero KEEPs, one MIXED), this round opens `docs/HYPOTHESES_ROUND_2.md`,
+scoped to the adaptive platform's own stated objective -- a working
+second strategy -- rather than a sixth Legacy-delay-fragility patch,
+per the operator's own "prefer structural improvements over parameter
+optimization" directive. **Self-correction, disclosed rather than
+silently fixed**: `ROADMAP.md`'s milestone 29 close-out claimed Jade
+"has never been benchmarked end-to-end." This was factually wrong --
+decision #36 already ran that exact comparison (2026-07-12, BTCUSDT 15m
+standard scale) and found it lost badly: 6 trades vs. Legacy's 47, 0/6
+vs. 6/6 profitable periods, walk-forward FAILED. Re-benchmarking Jade
+in Round 2 would have duplicated already-settled work; caught before it
+happened via a direct grep-and-read pass over the evidence base before
+committing to a Round 2 direction, corrected in the same round's
+`ROADMAP.md` update rather than left standing.
+
+**What Round 2 targets instead**: decision #36 itself named a specific,
+disclosed, un-executed next step -- "confirm or rule out the
+same-bar-retracement-requirement hypothesis directly" -- the
+plausible-but-unconfirmed claim that 3 of Jade's 5 entry models (FVG,
+Order Block, Breaker Block) require the CURRENT candle to already be
+retracing into a zone (`_last_candle_overlaps_zone`,
+`entry_point_engine.py`) before producing a candidate, unlike Legacy's
+own zone selection, which has no same-bar timing requirement. H6
+(`docs/HYPOTHESES_ROUND_2.md` section 2) tests this directly, and
+expands it into a complete pipeline attribution after reading
+`jade_trade_plan.build_trade_plan` and `signal_engine.
+_generate_signal_via_jade_engine` surfaced two more candidate scarcity
+drivers decision #36's text did not examine: the upstream
+`bias.detect_htf_bias` neutral-bias gate (shared identically with
+Legacy's own pipeline, so disclosed as context, not a differential
+explanation) and the downstream `exit_point_engine.find_exit_targets`
+empty-result gate (Jade-specific, never previously measured).
+
+**New instrumentation** (read-only, walks every candle exactly like
+`scripts/research_signal_selection.py`'s `collect_candidates` phase --
+same `MIN_CANDLES - 1` start, same no-lookahead `_advance_htf_cursor`):
+`scripts/research_h6_jade_scarcity_diagnosis.py` (+
+`backend/tests/test_research_h6_jade_scarcity_diagnosis.py`, 17 tests)
+calls `bias.detect_htf_bias` and each of `entry_point_engine.py`'s 5
+entry-model evaluators directly and unmodified, classifying the 3
+same-bar models into `no_matching_zone` / `zone_exists_not_retraced` /
+`candidate_found` per step (FVG's own reject reason conflates the first
+two, so this re-derives the distinction from `detect_fair_value_gap`
+directly -- the same function `_evaluate_fair_value_gap` itself already
+calls). `RiskManager.evaluate()`, `scripts/run_paper.py`, and every Jade
+module touched are read but UNMODIFIED; no trade is ever executed by
+this harness.
+
+**Anchor (all three years)**: BTCUSDT 15m, `--candles 3000 --periods 6`,
+`--end-date 2026-07-10 / 2025-07-10 / 2024-07-10` -- this project's
+standard 3-anchor set, extending decision #36's original single-window
+BTCUSDT scope for cross-year confirmation of the MECHANISM only, not a
+re-run of the already-decided trade-count comparison itself.
+
+**Result** (53,910 total steps across 3 anchors, 45,510 = 84.4%
+neutral-bias-gated -- a shared constraint on both pipelines, reported as
+context per H6's own pre-registered framing, not a differential
+explanation): per-model `no_matching_zone` / `zone_exists_not_retraced`,
+summed across all 3 years -- `fair_value_gap` 0 / 202; `order_block`
+5,004 / 2,070 (2.42x); `breaker_block` 7,477 / 438 (17.07x); aggregate
+across all 3 same-bar models: 12,481 / 2,710 (4.61x).
+
+**Applying H6's own pre-registered keep-rule literally**: quoting it
+verbatim, "CONFIRMED if zone_exists_not_retraced >= 2x no_matching_zone
+... REJECTED if no_matching_zone >= 2x zone_exists_not_retraced ...
+INCONCLUSIVE otherwise." **VERDICT: REJECTED** -- the aggregate 4.61x
+ratio clears the threshold, and this is not an aggregation artifact:
+Order Block (2.42x) and Breaker Block (17.07x) both independently clear
+the REJECTED bar evaluated alone. Decision #36's originally-disclosed
+fix direction (relaxing the same-bar retracement window) is not
+supported by this evidence -- the models overwhelmingly fail to find a
+matching ZONE at all, not "find one but miss the exact bar."
+
+**The substantive finding**: the aggregate REJECTED verdict masks real,
+disclosed per-model heterogeneity. FVG's own numbers in isolation
+(`no_matching_zone=0`, `candidate_found=8,198` of 8,400 zone-checked
+steps, ~97.6%) would satisfy CONFIRMED trivially -- FVG is essentially
+unconstrained, a direct, disclosed consequence of Jade's deliberate
+design choice to never apply `is_zone_mitigated` ("repeated FVG tests do
+not invalidate the setup" per spec) and to search the FULL candle
+history every step, so the pool of still-valid matching zones only
+grows over an ~18,000-candle series. FVG wins `find_entry_point`'s
+highest-confidence selection 76.4% of the time (6,421 of 8,400)
+specifically because it is almost always available to compete. Order
+Block and especially Breaker Block are the genuinely zone-scarce models
+-- a real, model-specific finding decision #36's originally-framed
+"3 same-bar models behave alike" characterization did not anticipate.
+
+**The larger finding this round surfaces, disclosed and explicitly NOT
+chased further this round**: 8,312 `signal_would_generate` steps were
+found across the 3 anchors, vastly exceeding decision #36's 6 actual
+trades. This is NOT read as a missed-opportunity signal -- three
+disclosed methodological reasons the two numbers are not comparable:
+(1) this harness does not track open-trade state, unlike
+`BacktestEngine.run()`'s real single-open-trade-at-a-time invariant;
+(2) Jade's own no-zone-mitigation design lets one real zone satisfy
+`candidate_found` across many consecutive candles, so step counts
+overcount distinct opportunities; (3) `RiskManager.evaluate()` gating
+(`MAX_TRADES_PER_DAY`, already found to reject 89-92% of Legacy's own
+raw signals per decision #62; the 1:2 minimum RR rule; daily/weekly loss
+limits) was entirely out of H6's declared scope. This gap is recorded as
+the most likely remaining explanation for decision #36's low trade
+count and a well-grounded H7 candidate for a future round -- named, not
+chased, matching decision #36's own precedent exactly.
+
+**Secondary footnotes**: exit-target availability is a negligible gate
+(only 88 of 8,400 selected steps, 1.0%, had empty targets) -- this
+candidate explanation is effectively ruled out. Liquidity Raid never won
+`find_entry_point`'s selection in any of the 8,400 steps across 3 years
+despite 3,731 `candidate_found` occurrences of its own -- noted as a
+minor, uninvestigated footnote for a future round examining Jade's
+confidence-ranking logic specifically.
+
+**Promotion path**: NONE -- this is a diagnostic, not a promotion
+candidate. `use_jade_engine` stays `False`. Legacy's live/paper trading
+behavior is completely unchanged: `RiskManager.evaluate()` and
+`scripts/run_paper.py` are untouched; every Jade module this round
+touched (`entry_point_engine.py`, `jade_trade_plan.py`,
+`exit_point_engine.py`, `bias.py`) was read, not modified. No trade was
+ever executed by this harness; no orders placed, no writes to
+`backend/paper_validation.db`.
+
+**Status**: read-only evidence round, no production code touched (one
+new research-only script + its dedicated test file, neither imported by
+any production or paper-trading path). Full suite 773/773 at evaluation
+time (up from 756 -- 17 new tests for the pipeline-attribution logic).
+Full report, cited not duplicated: `docs/H6_JADE_SCARCITY_RESULTS.md`.

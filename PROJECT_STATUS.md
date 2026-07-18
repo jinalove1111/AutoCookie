@@ -880,6 +880,63 @@ practice** (`scripts/cto_report.py`, milestone 17b below).
     (up from 748). Full report: `docs/H5_SESSION_GROUNDING_RESULTS.md`.
     Full rationale: `ENGINEERING_DECISIONS.md` #67.
 
+30. **Hypothesis Round 2 opened; H6 root-causes Jade's signal scarcity
+    -- REJECTED** (2026-07-19): with Round 1 fully resolved, opened
+    `docs/HYPOTHESES_ROUND_2.md`, scoped to the adaptive platform's
+    actual objective (a working second strategy) rather than another
+    Legacy-delay-fragility patch. **Self-correction disclosed**: the
+    prior milestone's claim that Jade "has never been benchmarked
+    end-to-end" was wrong -- `ENGINEERING_DECISIONS.md` #36 already ran
+    that exact comparison and it lost badly (6 trades vs. Legacy's 47,
+    0/6 profitable periods, walk-forward FAILED). Caught before Round 2
+    duplicated it; corrected the same round. **H6** targets decision
+    #36's own disclosed, un-executed next step instead: does the
+    same-bar-retracement requirement on 3 of Jade's 5 entry models (FVG/
+    Order Block/Breaker Block) dominantly explain the scarcity? New
+    analysis-only harness `scripts/research_h6_jade_scarcity_diagnosis.py`
+    (+ 17 tests) walks every candle calling Jade's own entry-model
+    evaluators, `detect_htf_bias`, and `find_exit_targets` directly and
+    unmodified -- no trade is ever executed, `RiskManager.evaluate()`
+    and `scripts/run_paper.py` untouched. Ran BTCUSDT 15m
+    2024/2025/2026, 53,910 total steps. **Result**: per-model
+    `no_matching_zone`/`zone_exists_not_retraced` -- `fair_value_gap` 0/202;
+    `order_block` 5,004/2,070 (2.42x); `breaker_block` 7,477/438 (17.07x);
+    aggregate across all 3 same-bar models 12,481/2,710 (4.61x).
+    **VERDICT: REJECTED**, applying H6's own pre-registered keep-rule
+    literally (REJECTED if no_matching_zone >= 2x zone_exists_not_retraced)
+    -- 4.61x clears the threshold, and Order Block/Breaker Block both
+    independently clear it too, not an aggregation artifact. Zones don't
+    exist far more often than they exist-but-are-mistimed; decision #36's
+    originally-disclosed fix direction (relaxing the retracement window)
+    is not supported by this evidence. **Substantive finding**: the
+    aggregate masks real per-model heterogeneity -- FVG is essentially
+    unconstrained (candidate_found in 97.6% of zone-checked steps)
+    because Jade deliberately never invalidates a zone on repeated
+    retest and searches the FULL candle history every step, so old FVGs
+    accumulate indefinitely; Order Block and especially Breaker Block are
+    the genuinely zone-scarce models -- a real, model-specific finding
+    decision #36's original framing did not anticipate. **The larger
+    finding this round surfaces, disclosed and explicitly NOT chased
+    further**: 8,312 `signal_would_generate` steps were found across the
+    3 anchors, vastly exceeding decision #36's 6 actual trades -- NOT
+    read as a missed-opportunity signal: this harness doesn't track
+    open-trade state, Jade's own no-invalidation design lets one real
+    zone satisfy the check across many consecutive candles, and
+    `RiskManager.evaluate()` gating (`MAX_TRADES_PER_DAY`, RR>=1:2,
+    daily/weekly loss limits) was entirely out of H6's scope. Flagged as
+    the most likely remaining explanation and a well-grounded H7
+    candidate for a future round, matching decision #36's own precedent
+    of naming a next step without chasing it prematurely. Secondary
+    footnotes: exit-target availability is a negligible gate (1.0% of
+    selected steps); Liquidity Raid never won selection across any of
+    the 8,400 selected steps despite 3,731 candidate occurrences of its
+    own. **Promotion path: NONE -- diagnostic only.** `use_jade_engine`
+    stays `False`; Legacy's live/paper trading behavior is completely
+    unchanged; every Jade module this round touched was read, not
+    modified. No orders placed, no DB writes. **Full suite 773/773**
+    (up from 756). Full report: `docs/H6_JADE_SCARCITY_RESULTS.md`. Full
+    rationale: `ENGINEERING_DECISIONS.md` #68.
+
 **Production-behavior note**: milestones 1-6 were purely additive/
 observational. Milestone 7 was the FIRST to change actual paper-trading
 sizing/rejection math (more conservative sizing in high volatility;

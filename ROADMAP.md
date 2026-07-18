@@ -635,20 +635,61 @@ required zero new engine flags, unlike H1/H3/H4's harnesses.
 **Hypothesis Round 1 is now fully resolved**: all five pre-registered
 hypotheses (H1-H5) have a verdict -- REJECT (H1, milestone 26), REJECT
 (H3, milestone 27), REJECT (H2, milestone 28), MIXED (H4, milestone 25),
-REJECT at Step 0 (H5, milestone 29). **Next research action is a fresh
-round, not a queued item from this one** -- Hypothesis Round 1 produced
-zero KEEPs and one MIXED, so before spending more compute on
-parameter-adjacent experiments against Legacy specifically, the
-recommended next step is a NEW hypothesis round scoped to the adaptive
-platform's own stated objective (`docs/ADAPTIVE_ARCHITECTURE.md`) --
-e.g., Strategy B (Jade)'s own backtest-only evaluation against the same
-3-anchor standard, which has never been run at all (Jade is fully built
-and tested per-component but never benchmarked end-to-end the way Legacy
-has been across 8 evidence rounds). This is a genuinely different
-direction (multi-strategy evaluation, not another Legacy fix) matching
-the pivot's own "prefer structural improvements over parameter
-optimization" directive -- not queued as a numbered milestone yet,
-pending confirmation this is still the platform's actual priority.
+REJECT at Step 0 (H5, milestone 29).
+
+**Correction (2026-07-19, same-day self-correction)**: this section
+previously stated Jade "has never been run at all... never benchmarked
+end-to-end." That was WRONG -- Jade WAS benchmarked once
+(`ENGINEERING_DECISIONS.md` #36, 2026-07-12, BTCUSDT 15m standard scale)
+and lost badly (6 trades vs. Legacy's 47, 0/6 profitable periods,
+walk-forward FAILED). Re-running that comparison would have duplicated
+settled work -- caught before it happened, corrected here rather than
+silently fixed, per this project's own evidence-integrity discipline
+(the same standard `docs/H4_SIZING_PARITY_RESULTS.md` and every
+disclosed-caveat section in this evidence base already holds itself to).
+
+**Milestone 30 -- CLOSED (2026-07-19).** Full evidence: `docs/
+H6_JADE_SCARCITY_RESULTS.md` (cite, don't duplicate here); rationale:
+`ENGINEERING_DECISIONS.md` #68. Opened Hypothesis Round 2
+(`docs/HYPOTHESES_ROUND_2.md`) and ran its top-ranked item, H6: decision
+#36's own disclosed, unconfirmed hypothesis for Jade's 6-vs-47 trade gap
+-- do 3 of Jade's 5 entry models (FVG/Order Block/Breaker Block)
+require same-bar retracement (`_last_candle_overlaps_zone`) in a way
+that dominantly explains the scarcity? New analysis-only harness
+`scripts/research_h6_jade_scarcity_diagnosis.py` (+ 17 tests) walks
+every candle (no trade ever executed) calling Jade's own entry-model
+evaluators, `detect_htf_bias`, and `find_exit_targets` directly,
+unmodified. Ran BTCUSDT 15m 2024/2025/2026 (53,910 total steps).
+**VERDICT: REJECTED**, aggregate `no_matching_zone` (12,481) outweighs
+`zone_exists_not_retraced` (2,710) by 4.61x, clearing the pre-registered
+REJECTED threshold (>=2x) -- and Order Block (2.42x) and Breaker Block
+(17.07x) both independently clear it too, so the verdict is not an
+aggregation artifact. Zones don't exist in the first place far more
+often than they exist-but-are-mistimed; decision #36's originally
+recommended fix direction (relaxing the retracement window) is not
+supported by this evidence. **The bigger, disclosed finding**: 8,312
+`signal_would_generate` steps were found across the 3 anchors -- vastly
+more than decision #36's 6 actual trades -- but this is NOT evidence of
+a missed opportunity: this harness doesn't track open-trade state,
+Jade's own no-zone-mitigation design lets one real zone satisfy the
+check across many consecutive candles, and `RiskManager.evaluate()`
+gating (`MAX_TRADES_PER_DAY`, RR>=1:2, daily/weekly loss limits) was
+entirely out of H6's scope. That gap is disclosed as the most likely
+remaining explanation and a well-grounded H7 candidate for a future
+round -- explicitly not chased further this round, matching decision
+#36's own precedent. Full suite 773/773 (up from 756). No orders
+placed, no DB writes, no production code touched -- every Jade module
+this round touched was read, not modified.
+
+**Next research action, per `docs/HYPOTHESES_ROUND_2.md` section 3**:
+two directions are queued but not yet pre-registered in full -- (a) a
+natural H7 pre-registration targeting section 5's disclosed gap above
+(RiskManager-level gating / zone-persistence attribution for Jade's
+real trade count), and (b) rank-2/3 from Round 2's own ranking table
+(cross-asset Legacy delay-fragility check; Jade cross-asset scarcity
+check, decision #36's own step 2, whose precondition -- H6's result --
+is now satisfied). Not queued as a specific numbered milestone yet,
+pending confirmation of priority.
 
 **Standing awareness item, not an action item**: H4's evaluation flagged
 that any existing finding resting on Net Profit margins narrower than

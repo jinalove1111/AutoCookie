@@ -4,6 +4,68 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Milestone 30: Hypothesis Round 2 opened, H6 root-causes Jade's signal scarcity -- REJECTED, zones don't exist far more often than they're mistimed
+
+2026-07-19. Full report: `docs/H6_JADE_SCARCITY_RESULTS.md` (cite, don't
+duplicate here). **Context**: Hypothesis Round 1 fully resolved
+(milestones 25-29, zero KEEPs). Opened `docs/HYPOTHESES_ROUND_2.md`,
+scoped to the adaptive platform's actual objective (a working second
+strategy) rather than a sixth Legacy-delay-fragility patch. **Self-correction
+first**: the previous milestone's ROADMAP.md note claimed Jade "has
+never been benchmarked end-to-end" -- wrong, `ENGINEERING_DECISIONS.md`
+#36 already benchmarked it once (6 trades vs. Legacy's 47, 0/6
+profitable periods, walk-forward FAILED) and disclosed an unconfirmed
+hypothesis for the gap. Corrected in this same round rather than left
+standing.
+
+**H6** targets that disclosed, un-executed next step directly: do 3 of
+Jade's 5 entry models (FVG, Order Block, Breaker Block) requiring
+same-bar retracement (`_last_candle_overlaps_zone`) dominantly explain
+the scarcity? New analysis-only harness
+`scripts/research_h6_jade_scarcity_diagnosis.py` (+
+`backend/tests/test_research_h6_jade_scarcity_diagnosis.py`, 17 tests)
+walks every candle calling Jade's own entry-model evaluators,
+`detect_htf_bias`, and `find_exit_targets` directly and unmodified --
+no trade is ever executed, `RiskManager.evaluate()` and
+`scripts/run_paper.py` untouched. BTCUSDT 15m, 2024/2025/2026,
+53,910 total steps.
+
+| Model | no_matching_zone | zone_exists_not_retraced | Ratio |
+|---|---|---|---|
+| fair_value_gap | 0 | 202 | (no_zone=0) |
+| order_block | 5,004 | 2,070 | 2.42x |
+| breaker_block | 7,477 | 438 | 17.07x |
+| **aggregate (3 models)** | **12,481** | **2,710** | **4.61x** |
+
+**VERDICT: REJECTED**, applying H6's pre-registered keep-rule literally
+("REJECTED if no_matching_zone >= 2x zone_exists_not_retraced"): 4.61x
+clears the threshold, and Order Block/Breaker Block both independently
+clear it too -- not an aggregation artifact. Zones simply don't exist
+far more often than they exist-but-are-mistimed; decision #36's
+originally-recommended fix (relaxing the retracement window) is not
+supported by this evidence.
+
+**The substantive finding**: the aggregate masks real per-model
+heterogeneity -- FVG is essentially unconstrained (candidate_found in
+8,198 of 8,400 zone-checked steps, ~97.6%) because Jade deliberately
+never invalidates a zone on repeated retest and searches the FULL candle
+history each step, so old FVGs accumulate indefinitely; Order Block and
+especially Breaker Block are the genuinely zone-scarce models.
+
+**The bigger, disclosed-not-chased finding**: 8,312 `signal_would_generate`
+steps were found across the 3 anchors -- vastly more than decision #36's
+6 actual trades -- but this is explicitly NOT evidence of a missed
+opportunity. This harness doesn't track open-trade state, Jade's own
+no-zone-mitigation design lets one real zone satisfy the check across
+many consecutive candles, and `RiskManager.evaluate()` gating
+(`MAX_TRADES_PER_DAY`, RR>=1:2) was out of scope. Flagged as the most
+likely remaining explanation and a well-grounded H7 candidate for a
+future round, matching decision #36's own precedent of naming a next
+step without chasing it in the same round. Full suite 773/773 (up from
+756). No orders placed, no DB writes, no production code touched --
+every Jade module this round touched was read, not modified. Details:
+`ENGINEERING_DECISIONS.md` #68.
+
 ## [Unreleased] - Milestone 29: H5 pre-registered then evaluated at Step 0 -- REJECT, session-quality gradient does not transfer across candidate/timeframe
 
 2026-07-19. Full report: `docs/H5_SESSION_GROUNDING_RESULTS.md` (cite,
