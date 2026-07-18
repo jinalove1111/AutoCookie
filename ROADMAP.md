@@ -412,6 +412,58 @@ equivalent pre-milestone-22 run, confirming the milestone 19/22
 performance work in production-scale use. Read-only -- no orders, no DB
 writes, no code touched.
 
+**Milestone 25 -- CLOSED (2026-07-17/18).** Full evidence: `docs/
+HYPOTHESES_ROUND_1.md`, `docs/H4_SIZING_PARITY_RESULTS.md` (cite, don't
+duplicate here); rationale: `ENGINEERING_DECISIONS.md` #63. Operator
+directive (2026-07-17) formally expanded the operating model to a
+research-company loop with named agent roles (Research/**Hypothesis
+(NEW)**/Experiment/Evaluation/Ranking/Promotion/Shadow/Regime/Risk/
+Monitoring/QA/Performance/Documentation/CTO) -- this milestone is the
+first full Research -> Hypothesis -> Experiment -> Evaluation cycle.
+`docs/HYPOTHESES_ROUND_1.md` produced 5 pre-registered hypotheses
+(mechanism + citation + exact experiment + keep-rule declared before any
+run) plus 7 rejected directions with citations. **H4** (close the
+backtest/live position-sizing gap, ranked #1) ran first and closed a
+verified code-level blind spot: every backtest number in this platform's
+evidence base was computed at a uniform 1.0x sizing scalar while paper
+trading has run Milestone 7's 0.5x high-volatility scalar live since
+2026-07-15. New opt-in `--vol-scaled-sizing` flag, 3-year BTCUSDT
+comparison against the already-recorded unscaled baselines. **VERDICT:
+MIXED** -- the pre-registered 3-branch keep-rule, applied literally per
+year, did not resolve to a single answer across 2024/2025/2026 (only 1 of
+3 years cleared the "confirmed improvement" branch's own 2-of-3 bar);
+reported honestly as MIXED rather than rounded toward a cleaner branch --
+the first real test of this project's pre-registration discipline against
+a keep-rule that didn't cleanly resolve. **Operator-relevant finding,
+disclosed with no recommendation** (same operator-gated boundary as
+`MAX_TRADES_PER_DAY`): the live 0.5x scalar shows a real, asset/year-
+dependent cost, most pronounced in 2026 (-14.4% PnL for a -13.4% relative
+drawdown improvement). Footnote check confirmed `docs/
+LEGACY_DELAY_ROBUSTNESS.md`'s STRUCTURAL verdict is unaffected (all deltas
+noise-level, <=0.002). 701/701 (up from 692). Read-only -- no orders, no
+DB writes, no production code touched.
+
+**Next experiment, per Hypothesis Round 1's own ranking: H1** (quality-
+ranked signal selection within the existing `MAX_TRADES_PER_DAY` cap,
+ranked #2). Directly targets the single largest disclosed, quantified
+opportunity in the evidence base -- 89-92% of Legacy's own signals
+discarded by the FIFO daily cap in all three tested years -- while
+respecting the operator-gated boundary around the cap itself (re-ranks
+WITHIN the fixed cap, does not propose raising it). Pre-registered
+experiment and keep-rule already declared in `docs/HYPOTHESES_ROUND_1.md`
+section 2; not yet run. H2 (passive limit-at-level entry), H3 (regime-
+conditional `structure_tp` delay survival), and H5 (session-conditional
+sizing) remain queued behind it per the same document's ranking.
+
+**Standing awareness item, not an action item**: H4's evaluation flagged
+that any existing finding resting on Net Profit margins narrower than
+roughly 10-15% could plausibly flip under vol-scaled sizing and would
+need a targeted re-check before being treated as final. This is not a
+task queued for a specific milestone -- it is a caveat to keep in mind
+when citing any prior evidence document's headline profit numbers as
+final, until/unless such a re-check is actually warranted by a future
+round touching those numbers.
+
 **Natural next steps after milestone 12** (superseded by the above --
 retained for continuity): the data path to a justified
 `RollingPerformanceSelector` was unchanged from what milestone 11

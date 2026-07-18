@@ -332,6 +332,71 @@ def test_run_backtest_default_min_stop_atr_mult_is_zero(monkeypatch):
     assert captured["min_stop_atr_mult"] == 0.0
 
 
+# --- --vol-scaled-sizing CLI flag threading (Milestone 25, 2026-07-17, H4
+# experiment, docs/HYPOTHESES_ROUND_1.md section 5) ------------------------
+
+
+def test_parse_args_vol_scaled_sizing_defaults_to_false():
+    args = _parse_args([])
+    assert args.vol_scaled_sizing is False
+
+
+def test_parse_args_vol_scaled_sizing_flag_sets_true():
+    args = _parse_args(["--vol-scaled-sizing"])
+    assert args.vol_scaled_sizing is True
+
+
+def test_run_backtest_threads_vol_scaled_sizing_into_engine(monkeypatch):
+    """run_backtest() must forward vol_scaled_sizing straight through to
+    BacktestEngine.run(..., vol_scaled_sizing=...) -- same fake-engine
+    CLI-plumbing proof as test_run_backtest_threads_min_stop_atr_mult_
+    into_engine above.
+    """
+    captured: dict = {}
+
+    class _FakeResult:
+        total_trades = 0
+        win_rate = 0.0
+        total_pnl = 0.0
+        max_drawdown = 0.0
+        trades: list = []
+
+    class _FakeEngine:
+        def run(self, *args, **kwargs):
+            captured.update(kwargs)
+            return _FakeResult()
+
+    monkeypatch.setattr(run_backtest_module, "BacktestEngine", _FakeEngine)
+
+    run_backtest([], [], vol_scaled_sizing=True)
+
+    assert captured["vol_scaled_sizing"] is True
+
+
+def test_run_backtest_default_vol_scaled_sizing_is_false(monkeypatch):
+    """Omitting vol_scaled_sizing (every existing caller) must thread
+    False (disabled) through, unchanged."""
+    captured: dict = {}
+
+    class _FakeResult:
+        total_trades = 0
+        win_rate = 0.0
+        total_pnl = 0.0
+        max_drawdown = 0.0
+        trades: list = []
+
+    class _FakeEngine:
+        def run(self, *args, **kwargs):
+            captured.update(kwargs)
+            return _FakeResult()
+
+    monkeypatch.setattr(run_backtest_module, "BacktestEngine", _FakeEngine)
+
+    run_backtest([], [])
+
+    assert captured["vol_scaled_sizing"] is False
+
+
 # --- format_risk_rejection_line / aggregate_risk_rejections (Milestone 23,
 # 2026-07-17, ENGINEERING_DECISIONS.md #60) --------------------------------
 

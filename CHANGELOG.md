@@ -4,6 +4,72 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Milestone 25: the research-company loop's first full cycle -- Hypothesis Round 1 + H4 position-sizing parity, verdict MIXED
+
+2026-07-17/18. Full reports: `docs/HYPOTHESES_ROUND_1.md`,
+`docs/H4_SIZING_PARITY_RESULTS.md` (cite, don't duplicate here). **The
+change**: operator directive (2026-07-17) formalized the platform's
+operating model as a research company with named agent roles -- Research,
+**Hypothesis (NEW)**, Experiment, Evaluation, Ranking, Promotion, Shadow,
+Regime, Risk, Monitoring, QA, Performance, Documentation, CTO. This
+milestone is the first time the full loop (Research -> Hypothesis ->
+Experiment -> Evaluation) ran end to end.
+
+**Hypothesis Round 1**: 5 falsifiable, mechanism-grounded hypotheses
+(H1-H5), each with an external citation, a pre-registered experiment
+(exact `run_backtest.py` invocation), and a keep-rule declared BEFORE any
+run -- ranked by (evidence-grounding x testability) / cost. 7 other
+directions were surveyed and explicitly rejected, with citations
+(raising `MAX_TRADES_PER_DAY`, Asian-only entry filter, naive ATR floor,
+entry-drift gate, deep RL, HMM regime detection, full L2/spread
+modeling). **H4 (close the backtest/live position-sizing gap) ranked
+#1** and ran first -- not a search for new edge, but a verified code-level
+blind spot: Milestone 7 (2026-07-15) shipped volatility-scaled sizing
+(0.5x in high-volatility regimes) live into paper trading, but
+`BacktestEngine.run()` never passed the volatility argument to
+`calculate_position_size`, meaning every backtest number in this
+platform's evidence base (`docs/REGIME_PERFORMANCE_ANALYSIS.md`,
+`docs/LEGACY_DELAY_ROBUSTNESS.md`, `docs/ATR_FLOOR_EVALUATION.md`,
+`docs/PROFITABILITY_EXPERIMENT_REPORT.md`) was computed at a uniform 1.0x
+scalar that live trading has not actually run since 2026-07-15.
+
+**H4 experiment**: new opt-in `--vol-scaled-sizing` flag (default off,
+byte-identical when unset, mirrors `run_paper.py`'s exact fail-open
+pattern) on a 3-year pre-registered BTCUSDT comparison against the
+already-recorded unscaled baselines:
+
+| Year | Trades | PnL scaled vs. baseline | Delta | Worst-DD scaled vs. baseline | Walk-forward | Delay retention scaled vs. baseline |
+|---|---|---|---|---|---|---|
+| 2026 | 111 | $2,910.07 vs $3,400.62 | -14.42% | 1.42% vs 1.64% (improved) | PASSED both | 0.025 vs 0.023 |
+| 2025 | 65 | $1,593.60 vs $1,714.56 | -7.06% | 0.88% vs 0.88% (unchanged) | FAILED-degrading both | 0.015 vs 0.015 |
+| 2024 | 73 | $1,764.10 vs $1,807.75 | -2.42% | 1.08% vs 1.25% (improved) | PASSED both | 0.025 vs 0.026 |
+
+**VERDICT: MIXED**, applying the pre-registered keep-rule literally, no
+softening. The first bullet ("drawdown improves AND PnL/PF materially
+unchanged, at least 2 of 3 years, same years") clears only 1 of 3 (2024)
+-- 2026's PnL move (-14.4%) exceeds the ~10% materiality band even though
+its drawdown improved, so the conjunction fails there. The second bullet
+("Net Profit materially degrades," no year-count qualifier) is literally
+triggered by 2026 alone, so it fires as the operative branch. **Operator-
+relevant finding, stated as a finding only -- no recommendation to change
+the live scalar**: the live 0.5x volatility scalar shows a real,
+asset/year-dependent cost/benefit tradeoff, most pronounced in 2026
+(-14.4% PnL for a -13.4% relative drawdown improvement), much smaller in
+2024, absent in 2025. Whether to act on this is squarely an operator
+decision, same boundary as `MAX_TRADES_PER_DAY` (decision #62).
+
+**Footnote check**: delay-gate retention moved <=0.002 in all three
+years (noise; all three remain catastrophically below the 0.5 criterion)
+and walk-forward verdicts were unchanged in direction/reason everywhere
+-- `docs/LEGACY_DELAY_ROBUSTNESS.md`'s STRUCTURAL/3-for-3 verdict needs
+no correction, confirmed to hold under vol-scaled sizing too. Open
+caveat, not resolved this round: any finding elsewhere resting on Net
+Profit margins narrower than ~10-15% could plausibly flip and would need
+a targeted re-check.
+
+**Full suite 701/701 at commit time** (up from 692 -- vol-scaled-sizing
+implementation tests).
+
 ## [Unreleased] - Adaptive platform milestone 24: cross-year evidence round on Legacy's own delay fragility -- STRUCTURAL, plus a MAX_TRADES_PER_DAY discovery
 
 2026-07-17. Full report: `docs/LEGACY_DELAY_ROBUSTNESS.md` (cite, don't

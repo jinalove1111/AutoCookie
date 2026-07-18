@@ -20,13 +20,15 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import app.backtesting.backtest_engine as backtest_engine_module
 from app.backtesting.backtest_engine import (
     MIN_CANDLES,
     BacktestEngine,
     _advance_htf_cursor,
 )
 from app.config import settings
-from app.risk.position_sizing import calculate_position_size
+from app.regime.regime_detector import detect_market_regime
+from app.risk.position_sizing import calculate_position_size, volatility_risk_scalar
 from app.risk.risk_manager import RiskManager
 from app.strategy.signal_engine import SignalEngine
 
@@ -1476,3 +1478,218 @@ def test_run_risk_rejections_never_rejects_matches_existing_trade_behavior():
         "rejected": 0,
         "by_reason": {},
     }
+
+
+# --- vol_scaled_sizing: Milestone 25, 2026-07-17, H4 experiment
+# (docs/HYPOTHESES_ROUND_1.md section 5) -- closes the verified backtest/
+# live position-sizing divergence: run_paper.py has passed
+# detect_market_regime(candles).volatility into calculate_position_size(...,
+# volatility=...) since Milestone 7, but BacktestEngine.run()'s own sizing
+# call never did until this parameter existed. -----------------------------
+
+
+def _old_signature_calculate_position_size(account_balance, risk_percent, entry, stop_loss):
+    """Stand-in for `app.risk.position_sizing.calculate_position_size` with
+    the EXACT pre-Milestone-25 signature -- no `volatility` parameter at
+    all. Used to prove `vol_scaled_sizing=False` (default) never passes a
+    `volatility` keyword: a `TypeError` would fail the test immediately
+    (not just an assertion mismatch) if it did. Same guard-pattern
+    discipline as `test_run_min_stop_atr_mult_zero_is_unchanged_behavior`'s
+    `_FakeRiskManager` (whose `evaluate()` signature likewise omits the
+    ATR-floor kwargs).
+    """
+    risk_amount = account_balance * (risk_percent / 100)
+    per_unit_risk = abs(entry - stop_loss)
+    if per_unit_risk == 0:
+        return 0.0
+    return risk_amount / per_unit_risk
+
+
+def test_run_vol_scaled_sizing_false_never_passes_volatility_kwarg(monkeypatch):
+    """vol_scaled_sizing=False (the default) must call
+    calculate_position_size with EXACTLY the same 4 positional arguments as
+    before this parameter existed -- proven by monkeypatching
+    backtest_engine's own `calculate_position_size` reference with
+    `_old_signature_calculate_position_size` above, whose signature doesn't
+    even accept `volatility`.
+    """
+    monkeypatch.setattr(
+        backtest_engine_module,
+        "calculate_position_size",
+        _old_signature_calculate_position_size,
+    )
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=110.0, direction="long")
+    ltf_candles = _flat_ltf_candles(MIN_CANDLES + 1)
+
+    result_default = BacktestEngine().run(
+        ltf_candles, [], _FakeSignalEngineFixedSignal(signal), _FakeRiskManager(),
+        account_balance=10000.0,
+    )
+    result_explicit_false = BacktestEngine().run(
+        ltf_candles, [], _FakeSignalEngineFixedSignal(signal), _FakeRiskManager(),
+        account_balance=10000.0, vol_scaled_sizing=False,
+    )
+
+    assert result_default.total_trades == 1
+    assert result_explicit_false.total_trades == 1
+    assert result_default.trades == result_explicit_false.trades
+
+
+def test_run_vol_scaled_sizing_false_matches_pre_milestone_25_trades():
+    """vol_scaled_sizing left at its default must produce trades
+    byte-for-byte identical to a run against the REAL
+    calculate_position_size with no vol_scaled_sizing parameter passed at
+    all -- proves this milestone is purely additive for every existing
+    caller.
+    """
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=110.0, direction="long")
+    ltf_candles = _flat_ltf_candles(MIN_CANDLES + 1)
+
+    result_before = BacktestEngine().run(
+        ltf_candles, [], _FakeSignalEngineFixedSignal(signal), _FakeRiskManager(),
+        account_balance=10000.0,
+    )
+    result_after = BacktestEngine().run(
+        ltf_candles, [], _FakeSignalEngineFixedSignal(signal), _FakeRiskManager(),
+        account_balance=10000.0, vol_scaled_sizing=True,
+    )
+    # Sanity: the flag does something (this fixture is short, below
+    # detect_market_regime's minimum-history floor, so the two SHOULD
+    # still match -- see the insufficient-history test below -- this test
+    # only asserts the OFF path, not that on/off differ here).
+    del result_after
+
+    assert result_before.total_trades == 1
+    expected_size = calculate_position_size(
+        10000.0, settings.RISK_PER_TRADE_PERCENT, 100.0, 95.0
+    )
+    assert result_before.trades[0]["size"] == expected_size
+
+
+def test_run_vol_scaled_sizing_true_halves_size_in_high_volatility_regime():
+    """vol_scaled_sizing=True, with a fixture that `detect_market_regime`
+    classifies as `high_volatility` (the same `_flat_candles_with_volume`
+    fixture the tag_regimes tests above use -- a perfectly flat OHLC series
+    has zero realized-volatility variance, which resolves to the top of its
+    own percentile distribution, i.e. `high_volatility`, deterministically):
+    the recorded trade size must equal EXACTLY
+    `calculate_position_size(..., volatility="high_volatility")` --
+    `volatility_risk_scalar("high_volatility") == 0.5`
+    (`app.risk.position_sizing`), i.e. precisely half of the unscaled size.
+    """
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=110.0, direction="long")
+    signal_engine = _FakeSignalEngineFiresAfterHistory(signal, min_history=_REGIME_MIN_HISTORY)
+    ltf_candles = _flat_candles_with_volume(_REGIME_MIN_HISTORY + 1)
+
+    # Confirm the fixture's own regime classification directly, so this
+    # test's premise (high_volatility) is verified, not assumed.
+    regime = detect_market_regime(ltf_candles[:_REGIME_MIN_HISTORY])
+    assert regime is not None
+    assert regime.volatility == "high_volatility"
+    assert volatility_risk_scalar("high_volatility") == pytest.approx(0.5)
+
+    result_unscaled = BacktestEngine().run(
+        ltf_candles,
+        [],
+        _FakeSignalEngineFiresAfterHistory(signal, min_history=_REGIME_MIN_HISTORY),
+        _FakeRiskManager(),
+        account_balance=10000.0,
+    )
+    result_scaled = BacktestEngine().run(
+        ltf_candles,
+        [],
+        signal_engine,
+        _FakeRiskManager(),
+        account_balance=10000.0,
+        vol_scaled_sizing=True,
+    )
+
+    assert result_unscaled.total_trades == 1
+    assert result_scaled.total_trades == 1
+    unscaled_size = result_unscaled.trades[0]["size"]
+    scaled_size = result_scaled.trades[0]["size"]
+    expected_unscaled = calculate_position_size(
+        10000.0, settings.RISK_PER_TRADE_PERCENT, 100.0, 95.0
+    )
+    expected_scaled = calculate_position_size(
+        10000.0, settings.RISK_PER_TRADE_PERCENT, 100.0, 95.0, volatility="high_volatility"
+    )
+    assert unscaled_size == pytest.approx(expected_unscaled)
+    assert scaled_size == pytest.approx(expected_scaled)
+    assert scaled_size == pytest.approx(unscaled_size * 0.5)
+
+
+def test_run_vol_scaled_sizing_true_insufficient_history_falls_back_unscaled():
+    """vol_scaled_sizing=True but the fixture is BELOW
+    detect_market_regime's own minimum-history floor (only MIN_CANDLES + 1
+    candles -- detect_market_regime needs >= 121): `detect_market_regime`
+    returns `None` (its own documented "insufficient history" contract),
+    so `current_volatility` stays `None`, which `calculate_position_size`
+    treats identically to `volatility` never being passed at all (`app.
+    risk.position_sizing.volatility_risk_scalar(None) == 1.0`) -- the SAME
+    fail-open fallback `scripts/run_paper.py`'s own sizing call documents
+    (`WARNING: could not compute market regime for sizing ...; defaulting
+    to None`). Size must be UNSCALED, matching the vol_scaled_sizing=False
+    path exactly.
+    """
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=110.0, direction="long")
+    ltf_candles = _flat_ltf_candles(MIN_CANDLES + 1)
+
+    # Confirm the premise directly: this fixture really is below
+    # detect_market_regime's floor.
+    assert detect_market_regime(ltf_candles) is None
+
+    result_scaled_flag = BacktestEngine().run(
+        ltf_candles, [], _FakeSignalEngineFixedSignal(signal), _FakeRiskManager(),
+        account_balance=10000.0, vol_scaled_sizing=True,
+    )
+    result_flag_off = BacktestEngine().run(
+        ltf_candles, [], _FakeSignalEngineFixedSignal(signal), _FakeRiskManager(),
+        account_balance=10000.0, vol_scaled_sizing=False,
+    )
+
+    assert result_scaled_flag.total_trades == 1
+    expected_size = calculate_position_size(
+        10000.0, settings.RISK_PER_TRADE_PERCENT, 100.0, 95.0
+    )
+    assert result_scaled_flag.trades[0]["size"] == expected_size
+    assert result_scaled_flag.trades == result_flag_off.trades
+
+
+def test_run_vol_scaled_sizing_and_tag_regimes_reuse_same_regime_no_double_detect(monkeypatch):
+    """When BOTH vol_scaled_sizing and tag_regimes are True, the regime for
+    a given step's signal must be computed AT MOST ONCE (reused between the
+    sizing call and the trade-tagging step), not recomputed -- proven by
+    monkeypatching detect_market_regime with a call-counting wrapper and
+    asserting the count equals the number of walk-forward steps that
+    actually reached a real signal (not double that).
+    """
+    call_count = {"n": 0}
+    real_detect = backtest_engine_module.detect_market_regime
+
+    def _counting_detect(candles):
+        call_count["n"] += 1
+        return real_detect(candles)
+
+    monkeypatch.setattr(backtest_engine_module, "detect_market_regime", _counting_detect)
+
+    signal = _FakeSignal(entry_price=100.0, stop_loss=95.0, take_profit=110.0, direction="long")
+    signal_engine = _FakeSignalEngineFiresAfterHistory(signal, min_history=_REGIME_MIN_HISTORY)
+    ltf_candles = _flat_candles_with_volume(_REGIME_MIN_HISTORY + 1)
+
+    result = BacktestEngine().run(
+        ltf_candles,
+        [],
+        signal_engine,
+        _FakeRiskManager(),
+        account_balance=10000.0,
+        vol_scaled_sizing=True,
+        tag_regimes=True,
+    )
+
+    assert result.total_trades == 1
+    assert "market_regime" in result.trades[0]
+    assert result.trades[0]["market_regime"]["volatility"] == "high_volatility"
+    # Exactly one detect_market_regime call for the one step that produced
+    # a real, risk-accepted trade -- not two (sizing + tagging).
+    assert call_count["n"] == 1

@@ -314,7 +314,11 @@ fix (tracked in `HANDOFF.md`).
 
 With milestones 1-16 complete, the mandate shifts from feature
 implementation to **continuous CTO-driven improvement**: specialist-agent
-roles (CTO/Research/Strategy/Backtest/Risk/Monitoring/QA/Performance)
+roles (CTO/Research/Strategy/Backtest/Risk/Monitoring/QA/Performance --
+**Hypothesis added 2026-07-17**, see milestone 25 below, as part of the
+research-company operating-model expansion: Research/Hypothesis/
+Experiment/Evaluation/Ranking/Promotion/Shadow/Regime/Risk/Monitoring/QA/
+Performance/Documentation/CTO)
 select the next highest-ROI milestone by bottleneck analysis rather than
 asking what to build next, stopping only for architectural decisions,
 credentials, production deployment, or destructive actions. Promotion
@@ -572,6 +576,53 @@ practice** (`scripts/cto_report.py`, milestone 17b below).
     no DB writes, no code touched. Full report: `docs/
     LEGACY_DELAY_ROBUSTNESS.md`. Full rationale: `ENGINEERING_DECISIONS.md`
     #62.
+
+25. **Research-company loop's first full cycle: Hypothesis Agent + Hypothesis
+    Round 1 + H4 position-sizing parity, verdict MIXED** (2026-07-17/18):
+    operator directive formally expanded the operating model to named agent
+    roles including a new **Hypothesis** role (generates falsifiable,
+    mechanism-grounded, pre-registered strategy hypotheses -- mechanism +
+    citation + exact experiment invocation + keep-rule, all declared before
+    any run). `docs/HYPOTHESES_ROUND_1.md`: 5 hypotheses ranked by
+    (evidence-grounding x testability)/cost, 7 rejected directions logged
+    with citations. **H4** (close the backtest/live position-sizing gap)
+    ranked #1 and ran first -- a verified code fact, not a new-edge search:
+    Milestone 7's volatility-scaled sizing (0.5x in high-volatility regimes)
+    has been live in paper trading since 2026-07-15, but `BacktestEngine.run()`
+    never passed the `volatility` argument to `calculate_position_size`, so
+    every backtest number in this platform's evidence base
+    (`REGIME_PERFORMANCE_ANALYSIS`, `LEGACY_DELAY_ROBUSTNESS`,
+    `ATR_FLOOR_EVALUATION`, `PROFITABILITY_EXPERIMENT_REPORT`) was computed
+    at a uniform 1.0x scalar live trading has not actually run since that
+    date. New opt-in `--vol-scaled-sizing` flag (default off, byte-identical
+    when unset), 3-year BTCUSDT comparison against already-recorded unscaled
+    baselines -- full numbers: `docs/H4_SIZING_PARITY_RESULTS.md`. **VERDICT:
+    MIXED** -- the pre-registered 3-branch keep-rule, applied literally per
+    year, did not resolve to one answer: 2024 matched "confirmed improvement"
+    (drawdown -13.6%, PnL/PF within the ~10% band), 2025 matched "nothing
+    moves materially," and 2026 alone (Net PnL -14.42%, outside the band)
+    triggered "materially degrades" -- the first bullet's own 2-of-3-years
+    bar cleared only 1 of 3, so it does not fire; the honest read is MIXED,
+    not rounded toward either clean branch. **Operator-relevant finding,
+    stated as a finding only, no recommendation made** (same operator-gated
+    boundary as `MAX_TRADES_PER_DAY`, decision #62): the live 0.5x scalar
+    shows a real, asset/year-dependent cost -- most pronounced in 2026
+    (-14.4% PnL for a -13.4% relative drawdown improvement), smaller in 2024,
+    absent in 2025. **Footnote check**: delay-gate retention moved <=0.002
+    in all three years (noise) and walk-forward verdicts were unchanged
+    everywhere -- `LEGACY_DELAY_ROBUSTNESS.md`'s STRUCTURAL/3-for-3 verdict
+    needs no correction, confirmed to hold under vol-scaled sizing too. Open
+    caveat, not resolved this round: findings elsewhere resting on Net
+    Profit margins narrower than ~10-15% could plausibly flip and would need
+    a targeted re-check. **Coordination note**: two agents briefly worked
+    from the same in-progress 2025 backtest output; the orchestrator caught
+    the overlap before either wrote a conclusion from partial data and
+    serialized the two runs -- no data corruption, no incorrect number
+    recorded. Read-only evidence round, no code touched beyond the
+    already-implemented, already-tested `--vol-scaled-sizing` flag. **Full
+    suite 701/701 passed / 0 failed** (up from 692). Full reports:
+    `docs/HYPOTHESES_ROUND_1.md`, `docs/H4_SIZING_PARITY_RESULTS.md`. Full
+    rationale: `ENGINEERING_DECISIONS.md` #63.
 
 **Production-behavior note**: milestones 1-6 were purely additive/
 observational. Milestone 7 was the FIRST to change actual paper-trading

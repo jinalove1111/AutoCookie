@@ -169,6 +169,7 @@ def run_backtest(
     strategy: Any = None,
     tag_regimes: bool = False,
     min_stop_atr_mult: float = 0.0,
+    vol_scaled_sizing: bool = False,
 ) -> Any:
     """Replay `ltf_candles`/`htf_candles` once through the real
     Strategy/Risk/Backtest engines.
@@ -205,6 +206,16 @@ def run_backtest(
     `RiskManager` the actual accept/reject decision). Default `0.0`
     preserves the exact prior behavior (gate disabled, identical
     `risk_manager.evaluate()` call) for every existing caller.
+
+    `vol_scaled_sizing` (default `False`, Milestone 25, 2026-07-17, H4
+    experiment, docs/HYPOTHESES_ROUND_1.md section 5): threaded straight
+    through to `BacktestEngine.run(..., vol_scaled_sizing=...)` -- see
+    that parameter's own docstring for the full rationale (closing the
+    verified divergence between this engine's sizing call and
+    `scripts/run_paper.py`'s live sizing call, which has passed
+    volatility-scaled risk since Milestone 7). Default `False` preserves
+    the exact prior sizing behavior (uniform 1.0x risk scalar) for every
+    existing caller.
     """
     return BacktestEngine().run(
         ltf_candles,
@@ -230,6 +241,7 @@ def run_backtest(
         strategy=strategy,
         tag_regimes=tag_regimes,
         min_stop_atr_mult=min_stop_atr_mult,
+        vol_scaled_sizing=vol_scaled_sizing,
     )
 
 
@@ -857,6 +869,32 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--vol-scaled-sizing",
+        dest="vol_scaled_sizing",
+        action="store_true",
+        default=False,
+        help=(
+            "Close the backtest/live position-sizing gap (opt-in, default "
+            "off, Milestone 25, 2026-07-17, H4 experiment, "
+            "docs/HYPOTHESES_ROUND_1.md section 5). Live paper trading "
+            "(scripts/run_paper.py) has passed a "
+            "detect_market_regime(candles).volatility classification into "
+            "calculate_position_size(..., volatility=...) since Milestone "
+            "7 (ENGINEERING_DECISIONS.md #49, halving risk-percent in "
+            "high_volatility regimes) -- this engine's own sizing call "
+            "never did, so every backtest number in this platform's "
+            "evidence base to date was computed at a uniform 1.0x risk "
+            "scalar. When set, threads BacktestEngine.run(..., "
+            "vol_scaled_sizing=True) -- see that parameter's own "
+            "docstring for the exact no-lookahead, fail-open mechanism "
+            "(mirrors run_paper.py's live sizing call exactly). Default "
+            "off reproduces today's uniform-1.0x-scalar behavior exactly "
+            "-- this flag only measures the gap, it does not decide "
+            "whether backtest's default should change (see "
+            "docs/H4_SIZING_PARITY_RESULTS.md)."
+        ),
+    )
+    parser.add_argument(
         "--end-date",
         default=None,
         help=(
@@ -952,6 +990,10 @@ def main() -> int:
     print(f"Strict confluence (sweep AND choch): {'ENABLED' if args.strict_confluence else 'disabled'}")
     print(f"Regime tagging: {'ENABLED' if args.tag_regimes else 'disabled'}")
     print(
+        "Volatility-scaled sizing (H4 parity): "
+        f"{'ENABLED' if args.vol_scaled_sizing else 'disabled'}"
+    )
+    print(
         "ATR stop-distance floor (min_stop_atr_mult): "
         f"{args.min_stop_atr if args.min_stop_atr > 0.0 else 'disabled'}"
     )
@@ -1030,6 +1072,7 @@ def main() -> int:
                 strategy=strategy_obj,
                 tag_regimes=args.tag_regimes,
                 min_stop_atr_mult=args.min_stop_atr,
+                vol_scaled_sizing=args.vol_scaled_sizing,
             )
         except Exception as exc:  # unexpected engine failure is a genuine failure
             print(f"ERROR: backtest engine raised an exception on period {period_num}: {exc}")
@@ -1104,6 +1147,7 @@ def main() -> int:
                 strategy=strategy_obj,
                 entry_delay_candles=0,
                 min_stop_atr_mult=args.min_stop_atr,
+                vol_scaled_sizing=args.vol_scaled_sizing,
             )
             delayed_result = run_backtest(
                 candles,
@@ -1119,6 +1163,7 @@ def main() -> int:
                 strategy=strategy_obj,
                 entry_delay_candles=1,
                 min_stop_atr_mult=args.min_stop_atr,
+                vol_scaled_sizing=args.vol_scaled_sizing,
             )
         except Exception as exc:  # unexpected engine failure is a genuine failure
             print(f"ERROR: backtest engine raised an exception during --delay-check: {exc}")

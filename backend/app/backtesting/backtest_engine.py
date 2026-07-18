@@ -226,6 +226,7 @@ class BacktestEngine:
         strategy: "Strategy | None" = None,
         tag_regimes: bool = False,
         min_stop_atr_mult: float = 0.0,
+        vol_scaled_sizing: bool = False,
     ) -> "BacktestResult":
         """Replays historical LTF candles (with a time-aligned, no-lookahead
         HTF slice at each step) through the Strategy Engine and Risk Engine
@@ -430,6 +431,38 @@ class BacktestEngine:
         ATR-scaled stop floor fix the execution-delay fragility
         `docs/ROBUSTNESS_REPORT.md` test 2 found?).
 
+        `vol_scaled_sizing` (default `False`, opt-in -- Milestone 25,
+        2026-07-17, H4 experiment, docs/HYPOTHESES_ROUND_1.md section 5:
+        closes a verified, present-tense divergence between this engine
+        and `scripts/run_paper.py`'s live sizing call. Live paper trading
+        has passed `detect_market_regime(candles).volatility` into
+        `calculate_position_size(..., volatility=...)` since Milestone 7
+        (ENGINEERING_DECISIONS.md #49); this engine's own sizing call
+        (below) never did, so every backtest number in this platform's
+        evidence base to date was computed at a uniform 1.0x risk scalar
+        while live has been running a 0.5x scalar in high-volatility
+        regimes. When `True`, this mirrors `run_paper.py`'s exact
+        best-effort/fail-open pattern: `detect_market_regime(ltf_candles[:
+        i + 1])` -- the SAME no-lookahead slice (and, when `tag_regimes`
+        is also `True`, the SAME walk-forward index) `tag_regimes` above
+        already classifies at, computed at most once per step and reused
+        for both purposes rather than recomputed -- wrapped in try/except
+        (`None` on any failure or below `detect_market_regime`'s own
+        minimum-history floor, exactly matching `run_paper.py`'s own
+        `WARNING: could not compute market regime for sizing` fallback).
+        `regime.volatility` (or `None`) is then passed as
+        `calculate_position_size(..., volatility=...)`'s `volatility`
+        argument -- `None` applies `position_sizing.py`'s unchanged 1.0x
+        scalar, never a hard failure. Default `False` calls
+        `calculate_position_size` with the exact same 4 positional
+        arguments as before this parameter existed -- no `volatility`
+        keyword at all -- so every existing caller (including test fakes
+        standing in for `calculate_position_size` with the pre-Milestone-
+        25 signature) is byte-for-byte unaffected. This is a measurement
+        flag, not a default change: the keep-rule and any decision to
+        flip the backtest default live in docs/H4_SIZING_PARITY_RESULTS.md,
+        not here.
+
         Risk-gate rejection observability (Milestone 23, 2026-07-17,
         ENGINEERING_DECISIONS.md #60): purely additive -- see
         `BacktestResult.risk_rejections`'s own docstring for the exact
@@ -586,12 +619,37 @@ class BacktestEngine:
             # entry/stop, exactly mirroring scripts/run_paper.py's pattern,
             # so backtest sizing matches what paper/live trading will
             # actually run.
-            size = calculate_position_size(
-                account_balance,
-                settings.RISK_PER_TRADE_PERCENT,
-                signal.entry_price,
-                signal.stop_loss,
-            )
+            #
+            # vol_scaled_sizing (default off, see that parameter's own
+            # docstring -- Milestone 25, H4 experiment): computed BEFORE
+            # sizing, exactly mirroring run_paper.py's own ordering
+            # (regime classified, then passed into calculate_position_size).
+            # `regime_at_signal` is cached here so the `tag_regimes` block
+            # below can reuse it (same ltf_candles[: i + 1] slice, same
+            # walk-forward index `i`) instead of recomputing.
+            if vol_scaled_sizing:
+                try:
+                    regime_at_signal = detect_market_regime(ltf_candles[: i + 1])
+                except Exception:
+                    regime_at_signal = None
+                current_volatility = (
+                    regime_at_signal.volatility if regime_at_signal is not None else None
+                )
+                size = calculate_position_size(
+                    account_balance,
+                    settings.RISK_PER_TRADE_PERCENT,
+                    signal.entry_price,
+                    signal.stop_loss,
+                    volatility=current_volatility,
+                )
+            else:
+                regime_at_signal = None
+                size = calculate_position_size(
+                    account_balance,
+                    settings.RISK_PER_TRADE_PERCENT,
+                    signal.entry_price,
+                    signal.stop_loss,
+                )
             if size == 0.0:
                 # Degenerate case: calculate_position_size returns 0.0 when
                 # entry == stop_loss (its own division-by-zero guard). A
@@ -653,10 +711,19 @@ class BacktestEngine:
                 # regime as of the SIGNAL's own candle (`ltf_candles[: i +
                 # 1]`) -- best-effort, WARN-and-continue on any failure,
                 # matching run_paper.py's own regime-tagging spirit.
-                try:
-                    regime = detect_market_regime(ltf_candles[: i + 1])
-                except Exception:
-                    regime = None
+                #
+                # Milestone 25 (H4 experiment, see `vol_scaled_sizing`'s
+                # docstring): when vol_scaled_sizing already computed this
+                # SAME regime (same slice, same index `i`) for sizing above,
+                # reuse it here instead of calling detect_market_regime a
+                # second time this step.
+                if vol_scaled_sizing:
+                    regime = regime_at_signal
+                else:
+                    try:
+                        regime = detect_market_regime(ltf_candles[: i + 1])
+                    except Exception:
+                        regime = None
                 trade["market_regime"] = asdict(regime) if regime is not None else None
             trades.append(trade)
             equity_curve.append(account_balance)
