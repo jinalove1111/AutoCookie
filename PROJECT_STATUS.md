@@ -687,6 +687,73 @@ practice** (`scripts/cto_report.py`, milestone 17b below).
     report: `docs/H1_SIGNAL_SELECTION_RESULTS.md`. Full rationale:
     `ENGINEERING_DECISIONS.md` #64.
 
+27. **H3: regime-conditional delay survival of the `structure_tp` family --
+    REJECTED across all three anchors, compounded by regime-bucket
+    evidence scarcity** (2026-07-18): `docs/HYPOTHESES_ROUND_1.md`
+    section 3's H3 (ranked #3 behind milestone 26's H1) asks whether
+    `use_structure_tp`'s already-validated (`docs/
+    PROFITABILITY_EXPERIMENT_REPORT.md` §12-14), already-known
+    aggregate-delay-fragile (`docs/ROBUSTNESS_REPORT.md` Test 2, PF
+    5.24 -> 0.16 at a 5-minute delay) exit family survives a 15-minute
+    execution delay better in some market regimes than others --
+    combining three already-built, already-independently-validated
+    mechanisms (`--structure-tp`, `--tag-regimes`, `--delay-check`) that
+    had never been run together before. New analysis-only harness
+    `scripts/research_regime_delay.py` (+ 23 tests) joins `--tag-regimes`
+    and `--delay-check` output per bucket, computing PF at
+    `entry_delay_candles=0` and `=1` separately per regime bucket instead
+    of only in aggregate -- `RiskManager.evaluate()`'s live
+    sequential-approval logic untouched. **Unlike H1's 2-anchor
+    requirement, H3's own pre-registered keep-rule requires 3 tested
+    years** (2024/2025/2026, matching `docs/LEGACY_DELAY_ROBUSTNESS.md`'s
+    standard) -- all three were run: BTCUSDT 15m, `--candles 3000
+    --periods 6`, uncapped `--structure-tp --tag-regimes`, producing
+    10/9/8 regime buckets respectively (fewer buckets in 2025/2024 purely
+    a regime-occurrence artifact -- `range/high_volatility` and
+    `strong_trend/low_volatility` had zero trades those years -- not a
+    tool bug). **VERDICT: REJECT**, applying H3's own pre-registered
+    keep-rule literally: "a regime bucket counts as a genuine
+    delay-robust pocket only if it clears ... n>=20 trades on the delayed
+    side, PF retention >=0.5, no sign flip, in AT LEAST 2 of the 3 tested
+    years. If no bucket clears this bar in any year, REJECT ...
+    outright." Across all 27 bucket-year cells (10+9+8), not one clears
+    the bar in even a single year -- only ONE cell (2026
+    `weak_trend/normal_volatility`, delayed N=20) reaches the n>=20
+    delayed-side floor at all, and it fails outright on PF retention
+    (0.170, needs >=0.5) with a sign flip. Since no bucket clears the bar
+    even once, this does not reach the rule's own "directional lead"
+    tier (1-of-3) -- a harder, cleaner zero than that. **Evidence-scarcity
+    caveat, the substantive finding of this round**: 26 of the 27
+    bucket-year cells never reach the n>=20 delayed-side threshold needed
+    to evaluate the keep-rule meaningfully in the first place -- mirrors
+    this platform's already-documented regime-bucket scarcity (`docs/
+    REGIME_PERFORMANCE_ANALYSIS.md`: 8 of 9 buckets evidence-starved for
+    Legacy's own signal stream) on a completely different exit-logic
+    family. Honest framing: this REJECT is "insufficient data to test
+    most buckets meaningfully" as much as it is "buckets were tested and
+    failed" -- does not rule out a future round with more history/assets/
+    shadow data surfacing a bucket that clears the floor and then passes
+    or fails on its own merits. **Secondary, non-deciding observation**:
+    the aggregate ("all") row's PF retention for `structure_tp` (0.080
+    2026, 0.051 2025, 0.067 2024) runs ~2-3x HIGHER than Legacy's
+    already-documented default-exit aggregate retention at the same
+    anchors (2026: 0.023, 2025: 0.015, `docs/LEGACY_DELAY_ROBUSTNESS.md`;
+    no prior 2024 default-exit delay-check to compare against). Both
+    remain catastrophically below the 0.5 bar with a sign flip in all
+    three years for `structure_tp` too -- a quantitative footnote, not
+    evidence of practical delay-robustness, and it does not change the
+    REJECT verdict -- it DOES reinforce, as a third independent data
+    point alongside Legacy's own milestone 24 finding, that this
+    platform's execution-delay fragility is STRUCTURAL across strategy/
+    exit-logic variants tested so far, not specific to one exit-logic
+    family. **Promotion path: NONE -- REJECT.** Legacy's live/paper
+    trading behavior is completely unchanged: `RiskManager.evaluate()`,
+    `scripts/run_paper.py`, `BacktestEngine` internals all byte-for-byte
+    unchanged. No orders placed, no DB writes. **Full suite 739/739**
+    (up from 716 -- 23 new `research_regime_delay` tests). Full report:
+    `docs/H3_REGIME_DELAY_RESULTS.md`. Full rationale:
+    `ENGINEERING_DECISIONS.md` #65.
+
 **Production-behavior note**: milestones 1-6 were purely additive/
 observational. Milestone 7 was the FIRST to change actual paper-trading
 sizing/rejection math (more conservative sizing in high volatility;

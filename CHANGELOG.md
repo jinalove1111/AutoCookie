@@ -4,6 +4,75 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Milestone 27: H3 regime-conditional delay survival of structure_tp evaluated -- REJECT across all three anchors, compounded by regime-bucket evidence scarcity
+
+2026-07-18. Full report: `docs/H3_REGIME_DELAY_RESULTS.md` (cite, don't
+duplicate here). **The question**: `docs/HYPOTHESES_ROUND_1.md` section 3
+(H3, ranked #3 behind Milestone 26's H1) asks whether `use_structure_tp`'s
+already-validated (`docs/PROFITABILITY_EXPERIMENT_REPORT.md` §12-14),
+already-known-delay-fragile-in-aggregate (`docs/ROBUSTNESS_REPORT.md`
+Test 2, PF 5.24 -> 0.16 at a 5-minute delay) exit family survives a
+15-minute execution delay better in some market regimes than others --
+combining three already-built, already-independently-validated
+mechanisms (`--structure-tp`, `--tag-regimes`, `--delay-check`) that had
+never been run together before this round.
+
+**H3 experiment**: new analysis-only harness
+`scripts/research_regime_delay.py` (+
+`backend/tests/test_research_regime_delay.py`, 23 tests) joins
+`--tag-regimes` and `--delay-check` output per bucket, computing PF at
+`entry_delay_candles=0` and `=1` separately for each regime bucket
+instead of only in aggregate. `RiskManager.evaluate()`'s live
+sequential-approval logic is untouched -- purely an aggregation layer
+atop already-existing, already-tested mechanics. Unlike H1's two-anchor
+requirement, H3's own pre-registered keep-rule requires **three** tested
+years (2024/2025/2026, matching `docs/LEGACY_DELAY_ROBUSTNESS.md`'s
+standard) -- all three were run: BTCUSDT 15m, `--candles 3000 --periods
+6`, uncapped `--structure-tp --tag-regimes`.
+
+| Anchor | Buckets (incl. all) | "all" Baseline PF | "all" Delayed PF | "all" PF Retention | "all" Sign Flip |
+|---|---|---|---|---|---|
+| 2026 | 10 | 6.723 | 0.536 | 0.080 | true |
+| 2025 | 9 | 6.887 | 0.350 | 0.051 | true |
+| 2024 | 8 | 7.811 | 0.526 | 0.067 | true |
+
+**VERDICT: REJECT**, applying H3's pre-registered keep-rule literally:
+"a regime bucket counts as a genuine delay-robust pocket only if it
+clears ... n>=20 trades on the delayed side, PF retention >=0.5, no sign
+flip, in AT LEAST 2 of the 3 tested years. If no bucket clears this bar
+in any year, REJECT ... outright." Across all 27 bucket-year cells
+(10+9+8), not one clears the bar in even a single year -- only ONE cell
+(2026 `weak_trend/normal_volatility`) reaches the n>=20 delayed-side
+floor at all, and it fails outright on PF retention (0.170) with a sign
+flip. Since no bucket clears the bar even once, this does not reach the
+rule's own "directional lead" tier (1-of-3) -- a harder, cleaner zero.
+
+**Evidence-scarcity caveat (the substantive finding)**: 26 of the 27
+bucket-year cells never reach the n>=20 delayed-side threshold needed to
+evaluate the keep-rule meaningfully in the first place -- consistent with
+this platform's already-documented regime-bucket scarcity
+(`docs/REGIME_PERFORMANCE_ANALYSIS.md`: 8 of 9 buckets evidence-starved
+for Legacy's own signal stream). This REJECT is "insufficient data to
+test most buckets meaningfully" as much as it is "buckets were tested
+and failed."
+
+**Secondary observation, not a keep driver**: the aggregate ("all") PF
+retention for `structure_tp` (0.080/0.051/0.067) runs ~2-3x HIGHER than
+Legacy's already-documented default-exit aggregate retention at the same
+anchors (2026: 0.023, 2025: 0.015, `docs/LEGACY_DELAY_ROBUSTNESS.md`).
+Both remain catastrophically below the 0.5 bar with a sign flip in all
+three years -- a footnote, not evidence of practical robustness, and it
+reinforces (a third data point) that this platform's execution-delay
+fragility is structural across strategy variants, not one exit family.
+
+**Promotion path**: NONE -- REJECT. Legacy's live/paper trading behavior
+is completely unchanged: `RiskManager.evaluate()`, `scripts/run_paper.py`,
+`BacktestEngine` internals all byte-for-byte unchanged. No orders placed,
+no DB writes.
+
+**Full suite 739/739 at evaluation time** (up from 716 -- 23 new
+`research_regime_delay` tests).
+
 ## [Unreleased] - Milestone 26: H1 quality-ranked signal selection evaluated -- REJECT, second confirmation that throughput beats selectivity under the fixed daily cap
 
 2026-07-18. Full report: `docs/H1_SIGNAL_SELECTION_RESULTS.md` (cite,

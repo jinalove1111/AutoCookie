@@ -489,40 +489,100 @@ and this discrepancy should be root-caused before the harness is reused
 for a future hypothesis round. Full suite 716/716 (up from 701). No
 orders placed, no DB writes, no production code touched.
 
-**Next experiment, per Hypothesis Round 1's own ranking: H3** (regime-
-conditional delay survival of the `structure_tp` family, ranked #3).
-Combines three already-built, already-independently-validated mechanisms
-(`--structure-tp`, `--tag-regimes`, `--delay-check`) in a combination no
-prior round has run together. `docs/PROFITABILITY_EXPERIMENT_REPORT.md`
-§12-14 validated `use_structure_tp=True` as the platform's strongest
-candidate family (cross-asset, cross-year on raw profitability), while
-`docs/ROBUSTNESS_REPORT.md` Test 2 found this SAME family catastrophically
-delay-fragile in AGGREGATE (PF 5.24 -> 0.16 at a 5-minute delay) -- the
-finding that started the entire delay-robustness thread, later confirmed
-structural for Legacy itself (`docs/LEGACY_DELAY_ROBUSTNESS.md`). No
-round has ever regime-tagged a `structure_tp` delay-check run. H3 tests
-whether, in regimes with more directional persistence
-(`strong_trend/*`, or BTC's dominant `weak_trend/normal_volatility`
-bucket), a 15-minute delay matters proportionally less -- since
-`structure_tp` targets a real structural level rather than a fixed-RR
-distance, its stop/target geometry varies with market structure, unlike
-the already-rejected uniform ATR floor (`docs/ATR_FLOOR_EVALUATION.md`
-§4). This is a genuinely different mechanism from that rejected fix: H3
-touches no parameter at all, it asks whether an already-built,
-already-validated candidate's EXISTING variable stop/target geometry
-happens to be delay-robust in specific, identifiable regimes.
-**Pre-registered keep-rule (quoted from `docs/HYPOTHESES_ROUND_1.md`
-section 3, declared before any run)**: a regime bucket counts as a
-genuine delay-robust pocket only if it clears the same bar the platform
-already applies everywhere else -- n>=20 trades on the delayed side of
-that bucket, PF retention >=0.5, no sign flip, in AT LEAST 2 of the 3
-tested years. If no bucket clears this bar in any year, REJECT the
-regime-conditional-survival hypothesis outright. A bucket clearing the
-bar in only 1 of 3 years is recorded as a directional lead, not a keep.
+**Milestone 27 -- CLOSED (2026-07-18).** Full evidence: `docs/
+H3_REGIME_DELAY_RESULTS.md` (cite, don't duplicate here); rationale:
+`ENGINEERING_DECISIONS.md` #65. Ran H3 (regime-conditional delay survival
+of the `structure_tp` family, ranked #3 behind milestone 26's H1) via a
+new analysis-only harness, `scripts/research_regime_delay.py` (+23
+tests), which joins `--tag-regimes` and `--delay-check` output per
+regime bucket -- three already-built, already-independently-validated
+mechanisms combined for the first time -- computing PF at
+`entry_delay_candles=0` and `=1` separately per bucket instead of only
+in aggregate; `RiskManager.evaluate()`'s live sequential-approval logic
+untouched throughout. Unlike H1's 2-anchor requirement, H3's own
+pre-registered keep-rule requires 3 tested years -- ran BTCUSDT 15m
+2024/2025/2026 (`--candles 3000 --periods 6`, uncapped `--structure-tp
+--tag-regimes`), producing 10/9/8 regime buckets respectively (fewer
+buckets in 2025/2024 purely a regime-occurrence artifact --
+`range/high_volatility` and `strong_trend/low_volatility` had zero
+trades those years -- not a tool bug). **VERDICT: REJECT**, applying
+H3's own pre-registered keep-rule literally: a regime bucket counts as a
+genuine delay-robust pocket only if it clears n>=20 trades on the
+delayed side, PF retention >=0.5, no sign flip, in at least 2 of the 3
+tested years; if no bucket clears the bar in any year, REJECT outright.
+Across all 27 bucket-year cells (10+9+8), not one clears the bar in even
+a single year -- only ONE cell (2026 `weak_trend/normal_volatility`,
+delayed N=20) reaches the n>=20 delayed-side floor at all, and it fails
+outright on PF retention (0.170, needs >=0.5) with a sign flip. Since no
+bucket clears the bar even once, this does not reach the rule's own
+"directional lead" tier (1-of-3) -- a harder, cleaner zero than that,
+not ambiguous, not MIXED. **Evidence-scarcity caveat, the substantive
+finding of this round**: 26 of the 27 bucket-year cells never reach the
+n>=20 delayed-side threshold needed to evaluate the keep-rule
+meaningfully in the first place -- mirrors this platform's
+already-documented regime-bucket scarcity (`docs/
+REGIME_PERFORMANCE_ANALYSIS.md`: 8 of 9 buckets evidence-starved for
+Legacy's own signal stream) on a completely different exit-logic family.
+This REJECT is "insufficient data to test most buckets meaningfully" as
+much as it is "buckets were tested and failed" -- does not rule out a
+future round with more history/assets/shadow data surfacing a bucket
+that clears the floor and then passes or fails on its own merits.
+**Secondary, non-deciding observation**: the aggregate ("all") row's PF
+retention for `structure_tp` (0.080 2026, 0.051 2025, 0.067 2024) runs
+~2-3x HIGHER than Legacy's already-documented default-exit aggregate
+retention at the same anchors (2026: 0.023, 2025: 0.015, `docs/
+LEGACY_DELAY_ROBUSTNESS.md`) but remains catastrophically below the 0.5
+bar with a sign flip in all three years too -- a quantitative footnote,
+not evidence of practical delay-robustness, that reinforces (a third
+independent data point, alongside Legacy's own milestone 24 finding)
+that this platform's execution-delay fragility is STRUCTURAL across
+strategy/exit-logic variants tested so far, not specific to one family.
+Full suite 739/739 (up from 716). No orders placed, no DB writes, no
+production code touched.
+
+**Next experiment, per Hypothesis Round 1's own ranking: H2** (passive
+limit-at-level entry as a delay-robust alternative to immediate market
+entry, ranked #4 -- highest implementation cost of the five
+hypotheses). Every delay-robustness fix tried so far (ATR floor --
+REJECTED, `docs/ATR_FLOOR_EVALUATION.md`; entry-confirmation drift gate
+-- REJECTED, `docs/CONTINUOUS_RESEARCH_LOG.md` Experiment 4) shares one
+property: it keeps the IMMEDIATE-marketable-fill entry model and tries
+to compensate downstream. H2 targets the entry model itself: instead of
+requiring an immediate fill at (or near) the signal candle's close,
+place a passive limit order at the actual structural entry zone (the
+OB/FVG/sweep level the signal is already built from,
+`docs/strategy_spec.md` §§2-5) and let a subsequent candle's retest fill
+it, with a bounded timeout (expire unfilled after N candles).
+Approximable entirely from existing OHLC candle data -- no tick/L2 feed
+needed. `docs/RESEARCH_ROUND_1.md` §4b already named this technique
+("limit-entry-with-timeout") and deferred it specifically for live
+order-book infrastructure this platform lacks -- but that deferral does
+not fully apply to a backtest-only research question, and that same
+document names the fallback H2 adopts: "a synthetic candle-only
+approximation." **New CLI flags required** (new entry-timing logic in
+`BacktestEngine`/`entry_model.py`, opt-in, default off): `--limit-at-level`
+(rest a limit order at the structural zone edge instead of an immediate
+market fill) and `--limit-timeout-candles N` (disclosed-not-tuned
+default, e.g. 4 -- expire unfilled after N candles). **Pre-registered
+keep-rule, two parts (quoted from `docs/HYPOTHESES_ROUND_1.md` section 4,
+declared before any run)**: (1) **cost-of-passivity check**:
+`--limit-at-level`'s own zero-added-delay Net Profit must retain >=50%
+of Legacy market-order baseline Net Profit in at least 2 of 3 years -- a
+resting-order model that misses too many fills waiting for a retest is
+not a viable substitute regardless of its delay behavior; (2)
+**delay-robustness check**: `--limit-at-level`'s delay-gate PF retention
+must clear >=0.5 with no sign flip in at least 2 of 3 years -- where
+market-order Legacy failed 3-for-3 (`docs/LEGACY_DELAY_ROBUSTNESS.md`
+§3). **Both** must hold for KEEP; either failing alone is REJECT --
+passing (1) while failing (2) means it's just a worse Legacy with the
+same fragility, passing (2) while failing (1) means it "fixed" delay by
+mostly not trading, the same failure shape the ATR floor already showed.
 Pre-registered experiment and keep-rule already declared in
-`docs/HYPOTHESES_ROUND_1.md` section 3; not yet run. H2 (passive
-limit-at-level entry) and H5 (session-conditional sizing) remain queued
-behind it per the same document's ranking.
+`docs/HYPOTHESES_ROUND_1.md` section 4; not yet run -- real new
+execution-simulation code required (medium-high cost, highest of the
+five hypotheses), unlike H1/H3's research-aggregation-only harnesses.
+H5 (session-conditional sizing) remains queued behind it per the same
+document's ranking.
 
 **Standing awareness item, not an action item**: H4's evaluation flagged
 that any existing finding resting on Net Profit margins narrower than

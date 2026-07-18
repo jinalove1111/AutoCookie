@@ -4123,3 +4123,104 @@ placed, no writes to `backend/paper_validation.db`.
 **Status**: read-only evidence round. Full suite 716/716 at evaluation
 time (up from 701). Full report, cited not duplicated:
 `docs/H1_SIGNAL_SELECTION_RESULTS.md`.
+
+---
+
+## 65. Milestone 27: H3 (regime-conditional delay survival of the `structure_tp` family) evaluated and REJECTED across all three standard anchors -- a cleaner, evidence-scarcity-compounded zero than H1's
+
+**Decision context**: `docs/HYPOTHESES_ROUND_1.md` section 3's own
+ranking put H3 third, right after H1 (decision #64) -- it combines three
+already-built, already-independently-validated mechanisms
+(`--structure-tp`, `--tag-regimes`, `--delay-check`) in a combination no
+prior round had ever run together. `docs/PROFITABILITY_EXPERIMENT_REPORT.md`
+§12-14 validated `use_structure_tp=True` as this platform's strongest
+candidate family on raw profitability; `docs/ROBUSTNESS_REPORT.md` Test 2
+separately found the SAME family catastrophically delay-fragile in
+AGGREGATE (PF 5.24 -> 0.16 at a 5-minute delay), later confirmed
+structural for Legacy itself (decision #62). H3 asked whether that
+aggregate collapse concentrates in choppy regimes and spares
+directionally-persistent ones (`strong_trend/*`, or BTC's dominant
+`weak_trend/normal_volatility` bucket) -- a genuinely different
+mechanism from the already-REJECTED ATR floor (decision #60), which
+uniformly widened stops; H3 touches no parameter, it asks whether
+`structure_tp`'s EXISTING variable stop/target geometry happens to be
+delay-robust in specific regimes. New analysis-only harness
+`scripts/research_regime_delay.py` (+
+`backend/tests/test_research_regime_delay.py`, 23 tests) joins
+`tag_regimes` and `delay-check` output per bucket, reusing both
+mechanisms' existing, independently-tested mechanics verbatim.
+`RiskManager.evaluate()`'s live sequential-approval logic is untouched.
+Full suite 739/739 (716 prior + 23 new).
+
+**Unlike H1's two-anchor requirement, H3's own pre-registered keep-rule
+requires THREE tested years** (2024/2025/2026, matching the standard
+`docs/LEGACY_DELAY_ROBUSTNESS.md` established for Legacy's own delay
+fragility) -- all three were run this round: BTCUSDT 15m, `--candles
+3000 --periods 6`, uncapped `--structure-tp --tag-regimes`, zero-delay
+vs `entry_delay_candles=1`. 2026 produced 10 regime buckets (incl.
+`all`), 2025 produced 9 (no `range/high_volatility`, zero trades that
+regime), 2024 produced 8 (also no `strong_trend/low_volatility`) -- a
+regime-occurrence artifact of each year's actual market conditions, not
+a tool bug.
+
+**Result, applying H3's own pre-registered keep-rule literally**:
+quoting it verbatim, "a regime bucket counts as a genuine delay-robust
+pocket only if it clears the SAME bar the platform already applies
+everywhere else: n>=20 trades on the delayed side of that bucket, PF
+retention >=0.5, no sign flip, in AT LEAST 2 of the 3 tested years. If
+no bucket clears this bar in any year, REJECT the regime-conditional-
+survival hypothesis outright." Across all 27 bucket-year cells (10 + 9 +
+8), `meets_keep_bar` is FALSE for every single one -- not one bucket
+clears n>=20 on the delayed side AND PF retention >=0.5 AND no sign flip
+in even a single year, let alone 2-of-3. Only ONE cell reaches the n>=20
+delayed-side floor at all (2026 `weak_trend/normal_volatility`, delayed
+N=20), and it fails outright on PF retention (0.170, needs >=0.5) with a
+sign flip. Since not even one bucket clears the bar in even one year,
+this does not reach the rule's own "directional lead" tier (reserved for
+a bucket clearing the bar in exactly 1 of 3 years) -- it is a harder,
+cleaner zero than that. **VERDICT: REJECT.** Not ambiguous, not MIXED
+(compare Milestone 25's H4, decision #63, which genuinely did not
+resolve to one branch) -- a clean negative result on the rule exactly as
+pre-registered.
+
+**Evidence-scarcity caveat, the substantive finding of this round**:
+this REJECT is compounded by data scarcity, not purely a clean failure
+on well-sampled buckets -- **26 of the 27 bucket-year cells never even
+reach the n>=20 delayed-side threshold** needed to evaluate the keep-rule
+meaningfully in the first place. This mirrors this platform's
+already-documented regime-bucket evidence scarcity
+(`docs/REGIME_PERFORMANCE_ANALYSIS.md`: 8 of 9 buckets evidence-starved
+for Legacy's own signal stream) -- H3's independently-computed
+`structure_tp` regime buckets show the same scarcity pattern on a
+completely different exit-logic family. Honest framing: this REJECT is
+"insufficient data to test most buckets meaningfully" as much as it is
+"buckets were tested and failed" -- it does not rule out that a future
+round with more history, more assets, or accumulated shadow-mode data
+could surface a bucket clearing the n>=20 floor that then passes or
+fails the retention/sign-flip bar on its own merits.
+
+**Secondary, non-deciding observation**: the aggregate (`all`) row's PF
+retention for `structure_tp` -- 0.080 (2026), 0.051 (2025), 0.067 (2024)
+-- runs systematically ~2-3x HIGHER than Legacy's already-documented
+default-exit aggregate retention at the same anchors (2026: 0.023, 2025:
+0.015, from `docs/LEGACY_DELAY_ROBUSTNESS.md`; no prior 2024 default-exit
+delay-check exists to compare against). Both remain catastrophically
+below the 0.5 bar with a sign flip in all three years for `structure_tp`
+too -- a quantitative footnote, not evidence of practical delay-
+robustness, and it does not change the REJECT verdict. It DOES reinforce,
+as a third independent data point alongside Legacy's own Milestone 24
+finding (decision #62), that this platform's execution-delay fragility
+is STRUCTURAL across strategy/exit-logic variants tested so far, not
+specific to one exit-logic family.
+
+**Promotion path**: NONE -- REJECT, matching H3's own pre-registered
+"Promotion path if KEEP" text (`docs/HYPOTHESES_ROUND_1.md` §3), which is
+moot here. Legacy's live/paper trading behavior is completely unchanged
+by this milestone: `RiskManager.evaluate()`, `scripts/run_paper.py`, and
+`BacktestEngine` internals are all byte-for-byte unchanged, confirmed
+during implementation. No orders placed, no writes to
+`backend/paper_validation.db`.
+
+**Status**: read-only evidence round. Full suite 739/739 at evaluation
+time (up from 716). Full report, cited not duplicated:
+`docs/H3_REGIME_DELAY_RESULTS.md`.
