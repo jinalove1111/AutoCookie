@@ -35,6 +35,17 @@ overstate live performance for this strategy family, in every regime
 tested so far. Do not clear gate #4 on backtest/paper numbers alone;
 measured live signal-to-fill latency must be part of the evidence.
 
+**Infrastructure status (2026-07-19, milestone 37)**: the code needed to
+eventually produce this measurement is now real, not a stub --
+`OkxClient.get_balance`/`get_open_positions` implement OKX's actual v5
+authenticated REST calls (`backend/app/exchange/okx_client.py`), and
+`scripts/measure_exchange_readonly_latency.py` exists to measure them.
+This does NOT clear gate #4 -- it still requires real (demo, then real)
+credentials, `OkxClient.place_order`/`cancel_order` (Phase 1, not yet
+implemented), and an actual measured order-placement number, none of
+which exist yet. See `docs/EXCHANGE_LAYER_IMPLEMENTATION_ROADMAP.md`
+for the full phased plan.
+
 ## Failure Behaviors
 
 - **SL placement fails** → immediately close the position.
