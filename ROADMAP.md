@@ -848,6 +848,85 @@ never cleared a single backtest profitability gate regardless of
 mechanism understanding. No hypothesis was run to produce this review;
 no production code touched.
 
+**Milestone 33 -- CLOSED (2026-07-19). Validation Phase begins.** Full
+evidence: `docs/PAPER_TRADING_VALIDATION_REPORT.md` (cite, don't
+duplicate here). Per the phase transition review's own recommendation,
+verified the paper-trading pipeline end-to-end instead of opening a
+ninth hypothesis. Three new, additive, read-only tools built:
+`scripts/measure_pipeline_latency.py`, `scripts/verify_signal_to_fill.py`,
+and the first-ever automated test for `scripts/run_paper.py`'s own
+orchestration logic (`backend/tests/test_run_paper_exit_check.py`).
+`RiskManager.evaluate()`/`scripts/run_paper.py` read and run, never
+modified.
+
+**Finding #1 (CRITICAL)**: `_check_and_close_open_positions()` crashes
+(`TypeError: can't subtract offset-naive and offset-aware datetimes`)
+the first time a real trade's stop-loss or take-profit is actually
+reached on a LATER pass than the one that opened it -- SQLite silently
+drops the timezone-awareness `Trade.opened_at` is declared with, so a
+DB-read `opened_at` (naive) minus a freshly-created `closed_at` (aware)
+raises before `close_trade()` is ever called. The position never
+closes, and `run_once()`'s own concurrency guard then skips ALL future
+signal generation while any position stays open -- **this would
+permanently halt the paper trader the first time it triggers in real
+production.** Reproduced twice, independently, against a throwaway temp
+DB (never the real one); added as a permanent `xfail` regression test.
+Not fixed -- `scripts/run_paper.py` is gated, requires explicit operator
+sign-off.
+
+**Finding #2 (CRITICAL, unresolved)**: cannot confirm which timeframe
+the real production process has actually used. `DEFAULT_TIMEFRAME`
+defaults to `5m` (confirmed live at runtime too) and `.env.example`
+documents `5m` as standard -- but nearly this entire project's
+delay-fragility safety research (Gate #4's own evidentiary basis) was
+conducted at `15m`. The real `.env` is gitignored and not in this
+repository; this review cannot determine which value production
+actually ran with. If it's really 5m, Gate #4's "one candle of delay =
+15 minutes" framing may not describe the deployed system at all.
+**Needs explicit operator confirmation before any further live-trading
+escalation.**
+
+**Finding #3**: Gate #4's "measured signal-to-fill latency" cannot be
+produced by the CURRENT architecture at all, at any measurement
+fidelity -- `PaperBroker` makes no real exchange API round-trip
+whatsoever (verified by source inspection), so no real order-placement
+latency exists anywhere in this codebase to measure yet. This is an
+infrastructure gap, not a measurement gap -- clearing Gate #4 on real
+evidence requires building a real (even demo-mode) exchange
+order-placement integration first.
+
+**Finding #4**: the paper-trading process was not observably running
+during this validation (regime_snapshots activity stopped 2026-07-18
+00:41:05, ~29-30h stale; `trades`/`signals` both empty). Cannot
+distinguish an actual outage from this review running in a different
+environment -- flagged for operator confirmation.
+
+**Finding #5**: `strategy_logs`/`risk_events` are real DB tables that no
+code anywhere writes to -- schema exists, nothing populates it.
+
+**Finding #6**: signal -> risk -> execute -> persist math verified
+correct via a real, hand-checked reproduction (fill price, position
+size, fee, slippage all matched exactly). The open-side pipeline is
+confirmed correct; Finding #1's bug is specifically in the close-side
+exit-check step.
+
+**Latency measured** (with Finding #3's scope limit disclosed
+honestly): OKX candle-fetch round-trip, 10 live samples, median 107.3ms
+/ p95 195.8ms; full `run_once()` pipeline, 10 live passes in one warm
+process, median 235.8ms / p95 745.2ms. All 10 passes `exit_code=0`.
+Neither number is real exchange order latency (Finding #3).
+
+Full suite: 789 passed, 1 xfailed (the new regression test), 0
+unexpected failures. No orders placed, no production code modified.
+
+**Recommended next milestone**: fix Finding #1 (highest-severity,
+narrowly-scoped, root-cause already identified -- `opened_at.replace(tzinfo=timezone.utc)`
+if naive, before the subtraction) with explicit operator sign-off, since
+`scripts/run_paper.py` is gated. Resolve Finding #2 by confirming the
+real `.env`'s `DEFAULT_TIMEFRAME` against the 15m safety-research
+standard. Both are prerequisites to trusting any further live-trading
+progress more than either is a "research" question.
+
 **Standing awareness item, not an action item**: H4's evaluation flagged
 that any existing finding resting on Net Profit margins narrower than
 roughly 10-15% could plausibly flip under vol-scaled sizing and would

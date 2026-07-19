@@ -4,6 +4,62 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Milestone 33: Validation Phase begins -- critical exit-check bug found and root-caused, Gate #4 latency infrastructure gap confirmed
+
+2026-07-19. Full report: `docs/PAPER_TRADING_VALIDATION_REPORT.md`
+(cite, don't duplicate here). Per `docs/PHASE_TRANSITION_REVIEW.md`'s
+own recommendation, verifies the paper-trading pipeline end-to-end
+instead of opening a ninth hypothesis. Three new, additive, read-only
+tools: `scripts/measure_pipeline_latency.py`,
+`scripts/verify_signal_to_fill.py`, and the first-ever automated test
+for `scripts/run_paper.py`'s own orchestration logic
+(`backend/tests/test_run_paper_exit_check.py`). `RiskManager.evaluate()`/
+`scripts/run_paper.py` read and run, never modified.
+
+**Finding #1 (CRITICAL)**: `_check_and_close_open_positions()` crashes
+with `TypeError: can't subtract offset-naive and offset-aware
+datetimes` the first time a real trade's stop-loss or take-profit is
+actually reached on a later pass than the one that opened it -- SQLite
+silently drops the timezone-awareness `Trade.opened_at` is declared
+with, so a DB-read `opened_at` (naive) minus a freshly-created
+`closed_at` (aware) raises before `close_trade()` is ever called. The
+position never closes, and `run_once()`'s own concurrency guard then
+skips ALL future signal generation while any position stays open --
+**this would permanently halt the paper trader the first time it
+triggers in real production.** Reproduced twice independently against a
+throwaway temp DB; added as a permanent `xfail` regression test. Not
+fixed -- `scripts/run_paper.py` is gated, requires explicit operator
+sign-off.
+
+**Finding #2 (CRITICAL, unresolved)**: cannot confirm which timeframe
+the real production process has used. `DEFAULT_TIMEFRAME` defaults to
+`5m` (confirmed live too), but nearly this entire project's
+delay-fragility safety research (Gate #4's evidentiary basis) was
+conducted at `15m`. The real `.env` is gitignored and unavailable.
+Needs explicit operator confirmation before further live-trading
+escalation.
+
+**Finding #3**: Gate #4's "measured signal-to-fill latency" cannot be
+produced by the current architecture at any measurement fidelity --
+`PaperBroker` makes no real exchange API round-trip whatsoever
+(verified by source inspection). Infrastructure gap, not a measurement
+gap.
+
+**Finding #4**: paper-trading process not observably running during
+this validation (~29-30h stale). **Finding #5**: `strategy_logs`/
+`risk_events` are real DB tables nothing ever writes to. **Finding #6**:
+signal -> risk -> execute -> persist math verified correct via a real,
+hand-checked reproduction (fill price/size/fee/slippage all matched
+exactly).
+
+**Latency measured** (scope-limited per Finding #3): OKX candle-fetch
+round-trip median 107.3ms/p95 195.8ms; full `run_once()` pipeline
+median 235.8ms/p95 745.2ms, all 10 live passes `exit_code=0`.
+
+Full suite: 789 passed, 1 xfailed (the new regression test), 0
+unexpected failures. No orders placed, no production code modified.
+Details: `ENGINEERING_DECISIONS.md` #71.
+
 ## [Unreleased] - Milestone 32: H8 validates the RR-geometry bottleneck -- structural on stop_model, and a real bug found in Milestone 30's own harness
 
 2026-07-19. Full report: `docs/H8_JADE_RR_SENSITIVITY_RESULTS.md` (cite,

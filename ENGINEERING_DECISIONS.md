@@ -4821,3 +4821,177 @@ already-existing, already-tested functions verbatim, neither imported by
 any production or paper-trading path). Full suite 789/789 at evaluation
 time (up from 780 -- 9 new tests for the keep-rule and no-stop-model
 fallback logic). Full report, cited not duplicated: `docs/H8_JADE_RR_SENSITIVITY_RESULTS.md`.
+
+## 71. Milestone 33: Validation Phase begins -- a critical exit-check bug found and root-caused, Gate #4's latency infrastructure confirmed not to exist yet, and a real timeframe-configuration ambiguity surfaced
+
+**Decision context**: `docs/PHASE_TRANSITION_REVIEW.md` recommended
+pausing the default hypothesis-research cadence and verifying the
+paper-trading pipeline instead. Operator directive: "You are entering
+Validation Phase... verify the paper trading pipeline end-to-end...
+measure end-to-end execution latency... identify any reliability,
+synchronization, logging, or execution issues." This decision records
+what that verification found, why it matters, and why nothing was fixed
+in the same round.
+
+**New tooling** (all additive, read-only relative to production code):
+`scripts/measure_pipeline_latency.py` (calls `run_paper.run_once()` and
+`CandleFetcher.fetch_ohlcv` directly, unmodified, within one warm
+process -- matching real loop-mode per-iteration cost, not N separate
+process launches); `scripts/verify_signal_to_fill.py` (injects one
+deterministic synthetic `TradeSignal` via `unittest.mock.patch` in place
+of `SignalEngine.generate_signal()`'s real market-dependent output, then
+lets the REAL, unmodified signal -> risk -> execute -> persist -> close
+chain run against a throwaway temp SQLite DB created by the REAL
+`alembic upgrade head` path, never the production DB);
+`backend/tests/test_run_paper_exit_check.py` (the first-ever automated
+test for `scripts/run_paper.py`'s own orchestration logic, using the
+same `migrated_db` fixture every `app.portfolio.*` test already uses).
+
+**Finding #1 (CRITICAL) -- the exit-check step crashes and silently
+halts the pipeline the first time a real trade's stop-loss or
+take-profit is actually reached on a later pass than the one that opened
+it.** Root cause: `Trade.opened_at` is declared `DateTime(timezone=True)`
+(`backend/app/database/models.py`), but SQLite's SQLAlchemy dialect does
+not preserve timezone-awareness across a write/read round-trip --
+`TradeTracker.get_open_positions()` returns `opened_at` as
+timezone-NAIVE regardless of the column's declared type.
+`_check_and_close_open_positions()` (`scripts/run_paper.py` ~line 288)
+computes `closed_at = datetime.now(timezone.utc)` (timezone-AWARE) and
+at line 297 computes `(closed_at - opened_at).total_seconds()` for
+`holding_time_seconds` -- raising `TypeError: can't subtract
+offset-naive and offset-aware datetimes`. The crash happens BEFORE
+`TradeTracker.close_trade()` is called (line 299), so the position is
+NEVER actually closed, and `run_once()`'s own documented
+one-trade-open-at-a-time concurrency guard then skips ALL signal
+generation on every subsequent pass while any position remains open.
+**The first time this triggers in real production, the paper trader
+stops generating new signals, permanently, until manually intervened.**
+Only triggers when an exit condition is actually met (a position that
+never reaches its stop/target never hits this code path) -- consistent
+with, and explaining, why the empty `trades` table (Finding #4) never
+surfaced it before: no trade has ever been recorded as opened at all.
+
+**Reproduced twice, independently, confirming one root cause**: (1) via
+the real `run_once()` pipeline itself -- opened a synthetic trade
+through the unmodified signal -> risk -> execute -> persist chain
+against a throwaway temp DB, then called `run_once()` again; the
+exit-check step that runs at the start of every pass crashed with the
+exact `TypeError`; (2) via a direct call to
+`_check_and_close_open_positions()` with a price forced past the
+take-profit level -- identical crash, same line.
+
+**Why this was never caught**: `scripts/run_paper.py` had NO direct
+pytest coverage of any kind before this round (confirmed by exhaustive
+search, matching `CLAUDE.md`'s own prior disclosure). Every individual
+component this bug touches (`TradeTracker`, `PaperBroker`, `RiskManager`)
+is well-tested in isolation -- 789 passing tests -- but the ORCHESTRATION
+wiring between them, exercised only by actually running the script in
+production, had never been exercised by an automated test until this
+round added the first one.
+
+**A permanent regression test was added**,
+`backend/tests/test_run_paper_exit_check.py`, marked
+`@pytest.mark.xfail(strict=True)` with the full root-cause explanation
+inline. `xfail` (not a plain failing test) keeps the "full suite
+passing" convention intact while making the bug permanently visible in
+CI; it will flip to a hard failure if anyone accidentally "fixes" it
+incorrectly (strict mode) and to a genuine pass once a real fix lands.
+
+**Not fixed in this round.** `scripts/run_paper.py` is one of the two
+files `CLAUDE.md` section 2 gates behind explicit operator sign-off
+before modification, and this round's own instruction was explicit: "do
+not modify production trading logic." Recommended fix direction, not
+implemented: read `opened_at` back as UTC-aware explicitly (e.g.
+`opened_at.replace(tzinfo=timezone.utc)` if naive) before the
+subtraction -- the standard fix for this exact SQLAlchemy+SQLite class
+of bug.
+
+**Finding #2 (CRITICAL, unresolved) -- cannot confirm which timeframe
+the real production process has actually used.** `Settings.DEFAULT_TIMEFRAME`
+defaults to `"5m"` (confirmed both in source and at runtime during this
+round's live measurements), and `.env.example` documents `5m` as the
+standard value, not an accidental default. Nearly this entire project's
+delay-fragility research -- the evidentiary basis for
+`docs/live_trading_checklist.md`'s Gate #4 hardening -- was conducted at
+`15m` (`docs/LEGACY_DELAY_ROBUSTNESS.md`, `docs/ATR_FLOOR_EVALUATION.md`,
+every hypothesis H1-H8). The platform's very first profitability
+validation (`docs/PROFITABILITY_EXPERIMENT_REPORT.md`/
+`docs/ROBUSTNESS_REPORT.md`) was itself conducted at 5m -- the 5m-vs-15m
+split reflects two genuinely different points in this project's history
+that were never explicitly reconciled. `docker-compose.yml` points the
+backend service at a `.env` file; none exists in this repository
+(`.env`/`.env.local` are both gitignored by design), and the process
+that would have used it is not currently running (Finding #4) -- there
+is no way to inspect its actual launch environment from the repository
+alone. If the real deployment has been running at 5m, "one candle of
+delay" there is 5 minutes, not the 15-minute figure Gate #4's entire
+hardened requirement is built around, and the strategy's own
+timeframe-relative stop/target/structural-level computations would
+differ meaningfully. Recommended: verify (and if necessary, align) the
+real `.env`'s `DEFAULT_TIMEFRAME` against the 15m safety-research
+standard, or re-run the core delay-fragility check at 5m if that is
+confirmed to be the real deployed value. Not resolved in this round --
+requires operator access to the actual deployment environment.
+
+**Finding #3 -- Gate #4's "measured signal-to-fill latency" cannot be
+produced by the current architecture at all.** Verified by direct source
+inspection: `app.execution.paper_broker.PaperBroker` contains no
+`requests`/`httpx`/`aiohttp`/network call of any kind (the module's own
+docstring already states "No real HTTP/exchange calls anywhere in this
+module"). The only real network call anywhere in the paper-trading
+pipeline is `CandleFetcher.fetch_ohlcv()`'s OKX market-data fetch. Gate
+#4's own hardened requirement cannot be satisfied by running or
+measuring the EXISTING pipeline more carefully -- there is no real
+exchange order-placement round-trip anywhere in this codebase to measure
+yet. This is an infrastructure gap, not a measurement gap; clearing Gate
+#4 on real evidence requires building a real (at minimum demo-mode)
+exchange order-placement integration first.
+
+**Finding #4 -- the paper-trading process was not observably running
+during this validation.** No matching process for `PROJECT_STATUS.md`'s
+last-recorded PID (24616, milestone 28). `regime_snapshots` activity
+(populated every real pass) runs 2026-07-16 02:14:44 through 2026-07-18
+00:41:05, then stops -- roughly 29-30 hours stale as of this validation.
+Cannot distinguish an actual production outage from this review running
+in a different environment than wherever the real process was deployed
+-- flagged for operator confirmation, not asserted as an incident.
+Separately: `trades`/`signals` are both completely empty (0 rows)
+despite ~2 days of recorded activity -- no real Legacy trade has ever
+opened in this database's recorded history, consistent with (not
+necessarily contradicting) Legacy's known low signal rate.
+
+**Finding #5 -- two real, disclosed dead observability tables.**
+`strategy_logs` and `risk_events` are both real, migration-created
+tables with thoughtfully-designed columns that no code anywhere writes
+to (confirmed via exhaustive grep across `backend/` and `scripts/` --
+zero matches beyond schema/migration definitions). Not fixed (would
+require editing the gated `scripts/run_paper.py`) -- recommended as a
+low-risk observability improvement for a future, explicitly
+operator-approved change.
+
+**Finding #6 -- signal -> risk -> execute -> persist math verified
+correct.** Real reproduction, hand-checked against the actual formulas:
+fill price (50,010.0, 0.02% unfavorable slippage), position size
+(0.025, 0.25% risk / $1,000 stop distance), fee (0.625125, 0.05% flat
+taker), slippage (10.0) -- all matched exactly. The open-side pipeline
+is confirmed mathematically correct; Finding #1's bug is specifically in
+the close-side exit-check step. Concurrency-guard verification is
+INCONCLUSIVE, blocked by Finding #1 (the exit-check crash pre-empted the
+guard's own logic on the second test pass) -- should be re-verified once
+Finding #1 is fixed.
+
+**Latency measured** (Finding #3's scope limit applied honestly, neither
+number is real exchange order latency): OKX candle-fetch round-trip (10
+live samples) median 107.3ms, p95/max 195.8ms; full `run_once()`
+pipeline (10 live passes, one warm process, matching real loop-mode
+cost) median 235.8ms, mean 333.5ms, p95/max 745.2ms. All 10 passes
+`exit_code=0`, no errors.
+
+**Status**: read-only verification round for existing behavior, plus
+new additive test/observability tooling -- `RiskManager.evaluate()` and
+`scripts/run_paper.py` were read and run, never modified. No orders
+placed, no writes to the production `backend/paper_validation.db` (all
+synthetic-signal testing used throwaway temp SQLite databases). Full
+suite 789 passed, 1 xfailed (the new regression test), 0 unexpected
+failures. Full report, cited not duplicated:
+`docs/PAPER_TRADING_VALIDATION_REPORT.md`.
