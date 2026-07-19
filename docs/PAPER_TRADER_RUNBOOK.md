@@ -22,13 +22,24 @@ Or, for continuous monitoring instead of a one-shot check:
 ```
 python ../scripts/paper_trader_health_check.py --watch \
   --poll-interval-seconds 120 --heartbeat-every 30 \
-  --alert-log paper_trader_health_alerts.log
+  --alert-log paper_trader_health_alerts.log \
+  --log-file paper_trader_restart_<date>.log
 ```
 
 `--watch` writes one line to `--alert-log` only when HEALTHY/UNHEALTHY
 *changes*, plus a periodic heartbeat -- read that file, not the raw
 `tail -f` of the trader's own stdout log, to see whether something
 actually changed recently.
+
+`--log-file` (milestone 40, optional, `NOT_CHECKED` if omitted) points
+at the trader's own redirected stdout log and scans its trailing 500
+lines for `ERROR:`/`WARNING:`/`ALERT:` lines -- a category of problem
+the DB-state checks above cannot see at all (a transient fetch failure
+that gets retried next pass, or a best-effort write that silently
+no-ops, never trips the circuit breaker or causes snapshot staleness).
+`ERROR:`/`ALERT:` count as UNHEALTHY; `WARNING:` alone does not (this
+project's own "WARN-and-default" design is intentional degradation, not
+a bug to alarm on).
 
 ## 2. Symptom -> diagnosis -> action
 
@@ -39,6 +50,8 @@ actually changed recently.
 | `Open positions: ANOMALY_MULTIPLE_OPEN_POSITIONS` (count > 1) | Should be structurally impossible per the documented one-trade-open-at-a-time concurrency guard in `scripts/run_paper.py::run_once()` (verified intact in `scripts/verify_signal_to_fill.py`'s Phase 2 check, milestone 37). If you see this, treat it as **evidence of a real bug**, not a fluke. | Do NOT manually close/edit trade rows to "fix" it -- that could mask the actual bug and would be a direct DB write outside the app's own code paths. Stop new signal generation is already automatic (the guard itself blocks it once >0 positions are open, though >1 means something already got past it). Escalate: this needs the same root-cause treatment Finding #1 (milestone 33/34) got -- reproduce against a throwaway temp DB, not the live one. |
 | Health-check itself fails to open the DB (`DB_OPEN_FAILED`) | Wrong `db_path` argument, or the file genuinely doesn't exist yet (fresh environment, migrations never run). | Confirm the path. Run `scripts/migrate_paper_db.py <path>` (detection-only, no `--apply`) to check status before doing anything else. |
 | Trader process alive, health check HEALTHY, but no trades ever appear | Expected, not a bug -- Legacy's real signal rate is roughly one every 1-4 days per backtest evidence (`scripts/verify_signal_to_fill.py`'s own docstring). Use `scripts/verify_signal_to_fill.py` (injects a deterministic synthetic signal into the REAL pipeline against a throwaway temp DB) to verify the wiring is correct without waiting for a real signal. | No action needed; this is normal. |
+| `Log errors: ERRORS_PRESENT` (only visible with `--log-file`, milestone 40) | A real `ERROR:`/`ALERT:` line printed by `scripts/run_paper.py` -- e.g. a candle-fetch failure, risk-evaluation exception, or execution error. Read the `recent_errors` lines the check prints (last 5) to identify which. | If isolated and not recurring, likely transient (network blip) -- the pipeline is designed to retry next pass, confirm freshness stays FRESH on the next check. If recurring across multiple checks, escalate the same way as any other bug: reproduce against a throwaway temp DB, don't patch the live process. |
+| `Log errors: WARNINGS_PRESENT` (only visible with `--log-file`) | A `WARNING:`-only line -- e.g. a best-effort shadow-mode write or a PnL computation defaulting to 0. | No action needed by design (`scripts/run_paper.py`'s own "WARN-and-default" discipline) -- not flagged as UNHEALTHY. Worth a glance if it's the SAME warning recurring every pass, since that could indicate a persistent (if non-fatal) misconfiguration. |
 
 ## 3. Standing, not-yet-resolved findings (don't re-diagnose these from scratch)
 
