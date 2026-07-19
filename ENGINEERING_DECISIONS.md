@@ -5181,3 +5181,155 @@ received a comment-only change (no value changed).
 No orders placed; no writes to the production `backend/paper_validation.db`.
 Full suite 791/791, unchanged. Full report, cited not duplicated:
 `docs/CTO_PLATFORM_EVALUATION.md`.
+
+## 74. Milestone 36: five-priority CTO round -- Exchange Layer roadmap, research-platform ROI ranking, OSS architecture comparison, targeted infra touch-ups, CI failure found and investigated (not silently left broken)
+
+**Decision context**: operator directive combining five priorities in
+one round, each with its own scope and approval boundary. Rationale for
+each recorded here; full content in the dedicated docs cited below
+(cite, don't duplicate).
+
+**Priority 1 -- Exchange Layer roadmap** (`docs/EXCHANGE_LAYER_IMPLEMENTATION_ROADMAP.md`,
+planning only, explicitly not implemented per the operator's own "Do
+NOT implement yet" instruction). The single most important finding,
+made BEFORE writing any plan content: `app.execution.live_broker.LiveBroker`'s
+current stub methods (`place_order`/`cancel_order`/`get_balance`/
+`get_open_positions`) match `BaseExchange`'s contract, not what
+`ExecutionEngine`/`OrderManager` actually call
+(`fill_entry`/`check_exit`, matching `PaperBroker`) -- even though
+`LiveBroker`'s own docstring already states its purpose as "matching the
+paper broker's interface shape." This is not a redesign decision; it is
+recognizing that `LiveBroker` needs to be an ADAPTER wrapping a
+`BaseExchange` instance internally, translating between the two shapes
+-- exactly satisfying "reuse the existing interfaces, do not redesign
+them," since every other file in the chain (`ExecutionEngine`,
+`OrderManager`, `safety_checks.verify_safe_to_trade`,
+`RiskManager.evaluate()`) needs zero changes under this reading. Full
+roadmap: 4-phase rollout (demo-API read-only -> demo-API order placement
+-> default-off `run_paper.py` wiring -> real capital), each phase its
+own approval gate, covering authentication (OKX's existing
+HMAC-SHA256-signed-header scheme, reusing already-gitignored credential
+storage verbatim), order lifecycle (idempotent `clOrdId`, a real design
+decision on resting SL/TP orders vs. polling), position synchronization
+(a genuinely new concern `PaperBroker` never had), websocket/data flow
+(deferred until a first REST-based number exists to judge against),
+retry logic (found `CandleFetcher`, the one real working network call in
+this codebase, has NO retry/backoff at all -- a pre-existing gap, not
+new), error recovery (fail-closed, reusing existing alert functions),
+risk gates (explicitly unchanged -- `RiskManager.evaluate()` stays the
+single gate), testing strategy (generalizing the validation phase's own
+`verify_signal_to_fill.py` pattern), and rollback strategy (the new
+Phase-2 flag IS the rollback mechanism, mirroring every existing
+opt-in-default-off backtest flag's discipline).
+
+**Priority 2 -- research-platform ROI ranking**
+(`docs/RESEARCH_PLATFORM_ROI_RANKING.md`, deliberately narrower than
+Milestone 35's whole-platform ranking, does not re-rank it). Top 10
+ranked by Impact/Cost/Risk/Time/Business-Value. Two Immediate items
+implemented this round, both pure documentation, zero production-code
+touch: `docs/EXPERIMENT_INDEX.md` (every hypothesis H1-H8 indexed by
+verdict/milestone/decision#/report -- built specifically so "has this
+been tested" is a table lookup, not a re-grep of 300KB+ files, which
+every prior round in this session had to do manually) and
+`docs/HYPOTHESIS_BACKLOG.md` (every currently-available candidate
+direction in one table). `scripts/shadow_status.py` was checked directly
+before considering a shadow-data-monitoring item -- already fully covers
+that need (Milestone 13), correctly not re-proposed, per "do not
+recreate existing systems."
+
+**Priority 3 -- OSS architecture comparison**
+(`docs/OSS_AGENT_ARCHITECTURE_COMPARISON.md`), grounded in a live 2026
+web search (CrewAI: 52,800+ stars/5.2M monthly downloads; LangGraph:
+34.5M monthly downloads; AutoGen: merged into Microsoft Agent Framework,
+now maintenance-mode; MetaGPT/ChatDev: full-organization simulation;
+Dify: 144k stars) rather than solely prior training data.
+Multi-agent-software-team frameworks (MetaGPT/ChatDev/CrewAI) duplicate
+the capability this repo's own `.claude/` harness (CTO -> department
+Heads -> sub-agents) already provides -- not adopted, per "do not
+duplicate functionality already present." Autonomous-engineering-workflow
+state management (LangGraph's durable state/checkpointing) is arguably
+outperformed by this project's own append-only documentation discipline
+for its SPECIFIC need (cross-session, human-readable, git-versioned
+audit trail, not single-run execution state) -- not adopted. **One
+genuinely missing capability, found and named precisely**: debate-based
+decision verification. This project's own H7 and H8 results (decisions
+#69, #70) already demonstrate the exact value this class of technique
+provides -- a literal, mechanically-applied keep-rule result that needed
+a second, skeptical pass (re-pooling `by_reason` by category instead of
+exact string for H7; isolating which dimension actually drove H8's
+PARAMETER_SENSITIVE label) before it could be trusted as the real
+finding -- performed manually by one agent catching its own result,
+not by two independent agents formally arguing. Recommended as a
+lightweight PROCESS convention for a future hypothesis round (one
+independent re-check of a literal keep-rule result before it is written
+up as final), explicitly NOT a new dependency, framework, or `.claude/`
+agent -- MCP (tool/data connectivity) noted as a real, current trend
+worth watching for the eventual exchange-layer work, not worth adopting
+for a single integration today.
+
+**Priority 4 -- targeted infrastructure touch-ups, "never rewrite
+working systems"**: `CLAUDE.md`'s milestone count (28 -> 35, a real,
+meaningfully large staleness gap) and "where to look for X" table
+(pointers to this round's new docs) updated -- narrow, targeted edits,
+not a restructure. Agent memory updated (`jadecap-project-state.md`
+brought current; new `gated-file-discipline.md` capturing this
+session's clearest, most-repeated behavioral lesson: the
+`scripts/run_paper.py`/`RiskManager.evaluate()` sign-off gate applies at
+the FILE level regardless of how safe or small a specific change looks,
+confirmed even for Milestone 34's 2-line bookkeeping fix). Agent
+definitions reviewed via Priority 3's own comparison -- no changes
+warranted, existing harness already sound. **CI, found broken this
+round, investigated rather than left silently failing**:
+`.github/workflows/backend-tests.yml` (added Milestone 35) fails at its
+"Run test suite" step, exit code 1. Diagnosed as far as possible without
+authenticated GitHub access: `gh` CLI is not installed in this
+environment; unauthenticated REST API log download returns 403 ("Must
+have admin rights"); unauthenticated page fetches surface only "Process
+completed with exit code 1," not the underlying pytest output. The
+single most likely hypothesis (dependency-version drift, since
+`requirements.txt`'s own comment already discloses "exact patch
+versions should be locked later... once the app is exercised end-to-end"
+as a known, disclosed risk) was tested DIRECTLY, not assumed: a fresh
+virtualenv, installed purely from `requirements.txt` with no other
+history, resolves `pytest==8.4.2` (the locally-used dev `.venv` has
+`9.1.1`, outside `requirements.txt`'s own declared `<9.0` cap) -- running
+the full suite against this exact CI-matching dependency set still
+passes 791/791 on Windows. This rules out simple dependency drift as the
+cause; the failure is specific to the Linux/GitHub-Actions runner
+environment itself, not reproducible locally without either a genuine
+Linux environment or authenticated log access to see the real traceback.
+Flagged clearly as an open item requiring operator action (grant `gh`
+CLI/PAT access, or check the Actions tab directly), not guess-fixed
+blind.
+
+**Priority 5**: no hypothesis fabricated this round (H9 remains
+available, explicitly not auto-started); no backtest-optimization
+attempted; Legacy remains the only production engine throughout.
+
+**Flagged for one explicit go-ahead, not acted on**: relaunching the
+paper-trading process. Agent memory (not a repo file) from a prior
+session documents that the process dying between sandbox restarts is
+EXPECTED behavior with a standing-authorized, known-working relaunch
+command -- combined with Milestone 34's Finding #1 fix now removing the
+one reason relaunching would have been unsafe, this is arguably overdue.
+Deliberately not done unilaterally this round: this session has
+consistently required explicit sign-off for anything touching
+`scripts/run_paper.py`'s running state (including a 2-line bookkeeping
+fix), and starting the live paper-trading loop changes that state
+materially (dormant -> actively evaluating live market data), closer to
+"production behavior" than to routine read-only maintenance -- raised
+for one explicit confirmation instead of assumed.
+
+**Status**: `.github/workflows/backend-tests.yml` unmodified this round
+(added Milestone 35, still failing, root cause not yet found).
+`backend/app/config.py`'s Milestone-35 comment-only change is unchanged.
+`CLAUDE.md` received a narrow, targeted edit (milestone count + doc
+pointers + one phase-progression paragraph). No file on the live-trading
+path (`RiskManager.evaluate()`/`scripts/run_paper.py`) was touched. No
+orders placed; no writes to the production `backend/paper_validation.db`.
+Full suite 791/791 locally (both the normal dev venv and a fresh
+CI-matching venv) -- CI itself remains failing, disclosed not hidden.
+Full reports, cited not duplicated: `docs/EXCHANGE_LAYER_IMPLEMENTATION_ROADMAP.md`,
+`docs/RESEARCH_PLATFORM_ROI_RANKING.md`,
+`docs/OSS_AGENT_ARCHITECTURE_COMPARISON.md`, `docs/EXPERIMENT_INDEX.md`,
+`docs/HYPOTHESIS_BACKLOG.md`.

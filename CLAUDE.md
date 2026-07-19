@@ -189,7 +189,10 @@ confirmed structural across two independent years
 | Chronological history | `CHANGELOG.md` |
 | Why a specific engineering choice was made | `ENGINEERING_DECISIONS.md` (numbered entries) |
 | Session-by-session log (Korean) | `HANDOFF.md` |
-| A specific past research result | the relevant `docs/*_RESULTS.md`, or the originating `docs/HYPOTHESES_ROUND_1.md` / `docs/RESEARCH_ROUND_1.md` section |
+| A specific past research result | the relevant `docs/*_RESULTS.md`, or the originating `docs/HYPOTHESES_ROUND_1.md` / `docs/HYPOTHESES_ROUND_2.md` / `docs/RESEARCH_ROUND_1.md` section |
+| Has hypothesis X already been tested? (check before proposing anything new) | `docs/EXPERIMENT_INDEX.md` |
+| What's the next best hypothesis/improvement to pursue? | `docs/HYPOTHESIS_BACKLOG.md` (research), `docs/CTO_PLATFORM_EVALUATION.md` (whole platform), `docs/RESEARCH_PLATFORM_ROI_RANKING.md` (research tooling specifically) |
+| Plan for real exchange order-placement infrastructure (Gate #4) | `docs/EXCHANGE_LAYER_IMPLEMENTATION_ROADMAP.md` (planning only, not implemented, needs approval) |
 | System architecture (pre-pivot layers) | `docs/architecture.md` |
 | Adaptive-platform design (regime detector, selector, milestones) | `docs/ADAPTIVE_ARCHITECTURE.md` |
 | Legacy strategy logic (the only strategy live) | `docs/strategy_spec.md` |
@@ -202,14 +205,29 @@ confirmed structural across two independent years
 
 ## 7. Milestone count
 
-The current milestone count is **28** as of this writing (2026-07-18,
-commit `879ec0a`). This number increments once per completed
+The current milestone count is **35** as of this writing (2026-07-19,
+commit `91c1f29`). This number increments once per completed
 research/engineering round and both `PROJECT_STATUS.md` and
 `ROADMAP.md`/`docs/ADAPTIVE_ARCHITECTURE.md` section 7 are updated
 together whenever it does. Do not predict or hardcode what the next
-milestone number will contain — `ROADMAP.md`'s "Next experiment" note is
-the live source for that, and it will already be stale by the time this
-file is read again.
+milestone number will contain — `ROADMAP.md`'s "Next experiment"/"Next
+research action" note is the live source for that, and it will already
+be stale by the time this file is read again.
+
+**Phase note (2026-07-19, do not let this go stale without checking
+`ROADMAP.md` first)**: Hypothesis Round 1 (Legacy, milestones 25-29) and
+Round 2 (Jade, milestones 30-32) are both closed — see
+`docs/EXPERIMENT_INDEX.md` for the full per-hypothesis ledger before
+proposing anything new. The project then moved through a phase
+transition review (pausing the default hypothesis cadence,
+`docs/PHASE_TRANSITION_REVIEW.md`), a Validation Phase (milestones
+33-34, direct pipeline verification rather than backtest research —
+found and fixed a critical bug, `docs/PAPER_TRADING_VALIDATION_REPORT.md`),
+and a CTO platform evaluation (milestone 35,
+`docs/CTO_PLATFORM_EVALUATION.md`). Section 4's research-workflow
+discipline below is unchanged and still applies to any FUTURE
+hypothesis — it just isn't the only mode this project operates in
+anymore.
 
 ## A note on the agent/department operating model
 

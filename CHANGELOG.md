@@ -4,6 +4,57 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Milestone 36: Exchange Layer roadmap, research-platform ranking, OSS comparison, CI failure investigated
+
+2026-07-19. Five-priority CTO round. Full deliverables:
+`docs/EXCHANGE_LAYER_IMPLEMENTATION_ROADMAP.md`,
+`docs/RESEARCH_PLATFORM_ROI_RANKING.md`,
+`docs/OSS_AGENT_ARCHITECTURE_COMPARISON.md`, `docs/EXPERIMENT_INDEX.md`,
+`docs/HYPOTHESIS_BACKLOG.md`.
+
+**Priority 1**: production-ready Exchange Layer implementation roadmap
+(planning only, not implemented) reusing the existing `BaseExchange`/
+`OkxClient`/`OrangexClient`/`LiveBroker` interfaces verbatim. Found
+`LiveBroker`'s current stub methods don't match what `ExecutionEngine`/
+`OrderManager` actually call -- the correct fix is an adapter wrapping
+`BaseExchange`, not a redesign. 9 areas covered (auth, order lifecycle,
+position sync, websocket/data flow, retry, error recovery, risk gates,
+testing, rollback) across a 4-phase, each-its-own-approval-gate rollout.
+
+**Priority 2**: research-platform-specific top-10 ROI ranking (distinct
+from Milestone 35's whole-platform ranking). Implemented the two safe
+Immediate items: `docs/EXPERIMENT_INDEX.md` (every hypothesis H1-H8
+indexed) and `docs/HYPOTHESIS_BACKLOG.md` (every available candidate
+direction indexed).
+
+**Priority 3**: OSS multi-agent/debate/autonomous-engineering comparison,
+grounded in a live 2026 web search. Multi-agent-team frameworks
+(MetaGPT/ChatDev/CrewAI) duplicate the existing `.claude/` harness --
+not adopted. One genuinely missing capability found: debate-based
+verification for pre-registered keep-rule results -- recommended as a
+process convention for a future round, not a new dependency.
+
+**Priority 4**: `CLAUDE.md` milestone count and doc pointers updated
+(narrow edit, not a rewrite); memory updated with current state and the
+session's clearest behavioral lesson (gated-file sign-off applies at
+the file level regardless of change size). **CI found failing,
+investigated, not silently left broken**: ruled out dependency-version
+drift directly (a fresh venv matching CI's exact resolved
+`pytest==8.4.2` still passes 791/791 locally) -- failure is
+Linux/GitHub-Actions-specific, needs authenticated access to diagnose
+further.
+
+**Priority 5**: no hypothesis fabricated, Legacy remains the only
+production engine, `RiskManager.evaluate()`/`scripts/run_paper.py`
+untouched throughout.
+
+**Flagged for one explicit go-ahead, not acted on**: relaunching the
+paper-trading process -- a prior session's memory documents this as
+expected/standing-authorized maintenance, and Milestone 34's fix removes
+the one reason it would be unsafe, but this round did not do it
+unilaterally given how consistently sign-off has been required for
+anything touching `run_paper.py`'s running state.
+
 ## [Unreleased] - Milestone 35: CTO platform evaluation -- CI pipeline added, dormant exchange-abstraction layer surfaced, 11 improvements ranked
 
 2026-07-19. Full analysis: `docs/CTO_PLATFORM_EVALUATION.md` (cite,
