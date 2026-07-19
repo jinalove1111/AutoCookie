@@ -59,6 +59,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from _cli_path_utils import normalize_db_path_arg
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(REPO_ROOT / "backend"))
@@ -324,7 +326,7 @@ def run_watch(
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    db_path = Path(args.db_path)
+    db_path = normalize_db_path_arg(args.db_path)
 
     if args.watch:
         return run_watch(

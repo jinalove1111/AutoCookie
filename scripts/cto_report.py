@@ -47,6 +47,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from _cli_path_utils import normalize_db_path_arg
+
 # scripts/ is a sibling of backend/ -- make the app package importable,
 # same convention every other scripts/ entry point (shadow_status.py,
 # selector_dry_run.py, migrate_paper_db.py, ...) already uses. Also add
@@ -622,7 +624,7 @@ def _default_output_path() -> Path:
 
 def main() -> int:
     args = _parse_args()
-    db_path = Path(args.db_path)
+    db_path = normalize_db_path_arg(args.db_path)
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     completed = _gather_completed_work(args.since)

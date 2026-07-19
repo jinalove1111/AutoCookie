@@ -4,7 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased] - Milestone 38: CI-visibility fix corrected, health-check --watch mode deployed, operational runbook and OKX Demo resumption checklist written
+## [Unreleased] - Milestone 39: the real root cause of the CI failure, found and fixed -- a Windows-vs-Linux pathlib bug in five scripts, not a dependency mystery
+
+2026-07-20. Verified Milestone 38's own CI fix before doing anything
+else -- it worked this time, surfacing the real pytest traceback for
+the first time across four milestones. Root cause: `scripts/cto_report.py`
+line 625, `Path(args.db_path)` -- `pathlib.Path` only treats `\` as a
+separator on Windows, so a Windows-style path string silently resolves
+to the wrong, nonexistent file on the real Linux CI runner, degrading
+the report's evidence section. This fully explains the three-milestone
+CI mystery: every prior local reproduction ran on Windows, where the
+bug is structurally invisible.
+
+Grepped `scripts/` before fixing and found the same pattern in 5
+call sites (`cto_report.py`, `selector_dry_run.py`, `shadow_status.py`,
+`migrate_paper_db.py`, `paper_trader_health_check.py`) -- CI's own
+failure summary independently confirmed a second test failing on the
+identical bug. Fixed once in new `scripts/_cli_path_utils.py::normalize_db_path_arg`,
+all 5 scripts updated to import it. New `backend/tests/test_cli_path_utils.py`
+(5 tests). All 5 scripts smoke-tested against the real live DB.
+
+`RiskManager.evaluate()`/`scripts/run_paper.py` untouched. No real
+credentials used, no live trading, no destructive actions, no
+architecture redesign. Full suite 832/832.
+
+## Milestone 38: CI-visibility fix corrected, health-check --watch mode deployed, operational runbook and OKX Demo resumption checklist written
 
 2026-07-19. Operator directive: OKX Demo credentials still unavailable,
 do not block on exchange connectivity, proceed with highest-ROI

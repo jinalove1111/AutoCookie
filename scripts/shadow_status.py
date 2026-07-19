@@ -43,6 +43,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from _cli_path_utils import normalize_db_path_arg
+
 # scripts/ is a sibling of backend/ -- make the app package importable,
 # same convention every other scripts/ entry point (migrate_paper_db.py,
 # analyze_regime_performance.py, ...) already uses.
@@ -144,7 +146,7 @@ def _fetch_shadow_signal_rows(conn: sqlite3.Connection) -> list[dict]:
 
 def main() -> int:
     args = _parse_args()
-    db_path = Path(args.db_path)
+    db_path = normalize_db_path_arg(args.db_path)
 
     if not db_path.exists():
         print(f"ERROR: {db_path} does not exist.")

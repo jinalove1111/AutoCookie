@@ -205,7 +205,7 @@ confirmed structural across two independent years
 
 ## 7. Milestone count
 
-The current milestone count is **38** as of this writing (2026-07-19).
+The current milestone count is **39** as of this writing (2026-07-20).
 This number increments once per completed
 research/engineering round and both `PROJECT_STATUS.md` and
 `ROADMAP.md`/`docs/ADAPTIVE_ARCHITECTURE.md` section 7 are updated
@@ -235,10 +235,13 @@ monitoring/documentation round (milestone 38 — corrected a CI-visibility
 fix that had not actually worked as claimed, added `--watch` mode to
 `scripts/paper_trader_health_check.py`, wrote
 `docs/PAPER_TRADER_RUNBOOK.md` and `docs/OKX_DEMO_RESUMPTION_CHECKLIST.md`;
-see `ENGINEERING_DECISIONS.md` #76). Section 4's research-workflow
-discipline below is unchanged and still applies to any FUTURE
-hypothesis — it just isn't the only mode this project operates in
-anymore.
+see `ENGINEERING_DECISIONS.md` #76), and the CI mystery's actual
+resolution (milestone 39 — root-caused to a genuine Windows-vs-Linux
+`pathlib` bug affecting five `scripts/` entry points, fixed once in
+`scripts/_cli_path_utils.py`; see `ENGINEERING_DECISIONS.md` #77).
+Section 4's research-workflow discipline below is unchanged and still
+applies to any FUTURE hypothesis — it just isn't the only mode this
+project operates in anymore.
 
 ## A note on the agent/department operating model
 

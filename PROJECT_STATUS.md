@@ -1468,6 +1468,48 @@ practice** (`scripts/cto_report.py`, milestone 17b below).
     `.github/workflows/backend-tests.yml` (corrected in place),
     `scripts/paper_trader_health_check.py` (extended in place).
 
+39. **The real root cause of the CI failure, found and fixed — a
+    genuine Windows-vs-Linux `pathlib` bug in five separate `scripts/`
+    entry points, not a dependency mystery after all** (2026-07-20):
+    verified Milestone 38's own CI fix before doing anything else —
+    once GitHub's rate limit reset, checked commit `ad2aaa9`'s
+    check-runs directly. This time the corrected mechanism worked: the
+    real pytest traceback was, for the first time across four
+    milestones of trying, actually readable. **The real failure**:
+    `tests/test_cto_report.py`'s `windows_backslash` regression test —
+    "2 failed, 825 passed" (827 total, matching this project's own
+    local count exactly). Reproduced locally in isolation first (both
+    parametrized variants passed on Windows) before touching any code.
+    **Root cause, read directly from the source, not guessed**:
+    `scripts/cto_report.py` line 625, `Path(args.db_path)` —
+    `pathlib.Path(raw)` only treats `\` as a separator when the process
+    runs on Windows; on the real Linux CI runner a backslash is a
+    literal filename character, so a Windows-style path string silently
+    resolves to the WRONG, nonexistent file, degrading the evidence
+    section this test checks for. **Fully explains the entire
+    three-milestone CI mystery**: every prior local reproduction (dev
+    venv, fresh venv, genuinely fresh `git clone`) ran on Windows, where
+    this bug is structurally invisible — dependency-version drift was
+    never the cause. **Systemic, not a one-off**: grepped `scripts/` for
+    the same pattern before fixing — found FIVE call sites sharing it
+    (`cto_report.py`, `selector_dry_run.py`, `shadow_status.py`,
+    `migrate_paper_db.py`, and this project's own
+    `paper_trader_health_check.py` from milestone 37/38); the CI
+    failure summary itself confirmed a SECOND test failing on the
+    identical bug (`test_selector_dry_run.py`). **Fixed once, not five
+    times**: new `scripts/_cli_path_utils.py::normalize_db_path_arg`
+    (uses `PureWindowsPath(raw).as_posix()`, triggers only when the
+    string contains `\` and no `/`), imported by all five scripts —
+    avoiding five duplicate copies per "do not duplicate completed
+    work." New `backend/tests/test_cli_path_utils.py` (5 tests on the
+    shared helper directly). All 5 touched scripts smoke-tested against
+    the real live `paper_validation.db` after the change.
+    `RiskManager.evaluate()`/`scripts/run_paper.py` untouched; no real
+    credentials used or fabricated; no live trading enabled; no
+    destructive actions; no architecture redesign — this is a bug fix
+    in existing CLI argument handling. **Full suite 832/832** (827 + 5
+    new). Full rationale: `ENGINEERING_DECISIONS.md` #77.
+
 **Production-behavior note**: milestones 1-6 were purely additive/
 observational. Milestone 7 was the FIRST to change actual paper-trading
 sizing/rejection math (more conservative sizing in high volatility;

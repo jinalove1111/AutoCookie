@@ -5572,3 +5572,91 @@ not duplicated: `docs/PAPER_TRADER_RUNBOOK.md`,
 `docs/OKX_DEMO_RESUMPTION_CHECKLIST.md`,
 `.github/workflows/backend-tests.yml` (corrected in place),
 `scripts/paper_trader_health_check.py` (extended in place).
+
+## 77. Milestone 39: the real root cause of the CI failure, found and fixed -- a genuine Windows-vs-Linux `pathlib` bug in five separate `scripts/` entry points, not a dependency or environment mystery after all
+
+**Decision context**: operator directive -- OKX Demo credentials still
+unavailable, do not block on exchange connectivity, continue the
+evidence-first workflow while improving the platform, same five
+priorities as milestones 37-38 (paper-trading reliability; monitoring/
+health checks/logging/failure detection; experiment tracking/decision
+logs/recovery checkpoints; unresolved tests/CI/documentation/technical
+debt; prepare for seamless OKX Demo integration). Do not duplicate
+completed work.
+
+**Verified milestone 38's own CI fix before doing anything else, rather
+than assuming it now worked**: once GitHub's rate limit reset, checked
+the newest pushed commit's (`ad2aaa9`) check-runs directly. This time
+the corrected mechanism (a separate `pytest-failure-detail` check run,
+`actions/github-script`) DID work -- the real pytest traceback was, for
+the first time across four milestones (36-39) of trying, actually
+readable via the public API.
+
+**The real failure, finally visible**: `tests/test_cto_report.py::test_cli_renders_rankings_and_shadow_when_database_url_unset_regression[windows_backslash]`,
+`AssertionError` on a missing evidence table in the rendered report --
+"2 failed, 825 passed" (827 total, matching this project's own local
+count exactly). **Reproduced locally first** (in isolation, both
+parametrized variants passed on Windows -- confirming the bug is
+platform-specific, not test-logic-specific) before touching any code.
+**Root cause, read directly from `scripts/cto_report.py` line 625, not
+guessed**: `db_path = Path(args.db_path)` -- `pathlib.Path(raw)` only
+treats `\` as a path separator when the process itself is running on
+Windows (`WindowsPath`); on the real Linux CI runner (`PosixPath`), a
+backslash is just a literal filename character, so a Windows-style
+path string silently resolves to the WRONG, nonexistent file instead of
+raising -- the DB-open step then degrades to its designed
+"unavailable" fallback (working exactly as intended, just on garbage
+input), quietly emptying the evidence section this test checks for.
+This finally, fully explains the entire three-milestone CI mystery:
+every local reproduction (dev venv, fresh venv, genuinely fresh `git
+clone` -- all three from milestone 37) ran on Windows, where
+`WindowsPath` already handles backslashes natively, completely masking
+a bug that can only ever manifest on a genuinely POSIX runner. It also
+explains why dependency-version drift (pytest, pytest-asyncio) was
+never the cause -- it was never a dependency issue at all.
+
+**Systemic, not a one-off**: before writing a fix, grepped `scripts/`
+for the same `db_path = Path(args.db_path)` pattern -- found FIVE call
+sites sharing it (`cto_report.py`, `selector_dry_run.py`,
+`shadow_status.py`, `migrate_paper_db.py`, and this project's own
+`paper_trader_health_check.py` from milestone 37/38). The CI failure
+summary itself confirmed a SECOND test failing on the identical bug
+class (`tests/test_selector_dry_run.py`'s own `windows_backslash`
+regression test) -- not hypothesized, read directly from the same
+failure summary. **Fixed once, not five times**: new
+`scripts/_cli_path_utils.py::normalize_db_path_arg` (uses
+`PureWindowsPath(raw).as_posix()` to correctly parse backslash-separated
+segments, including a drive letter, regardless of the runtime OS;
+triggers only when the string contains `\` and no `/`, so a genuine
+POSIX path is never misinterpreted), imported by all five scripts --
+`cto_report.py`'s own prior fix attempt (`d60b708`, pre-dating this
+session, which handled the DATABASE_URL cold-import half of the
+original bug but not this path-separator half) had its local
+`_normalize_db_path_arg` removed in favor of the shared one, avoiding
+five duplicate copies of the same logic per "do not duplicate completed
+work."
+
+**Test coverage**: new `backend/tests/test_cli_path_utils.py` (5 tests
+covering the shared helper directly -- drive-letter backslash paths,
+relative backslash paths, forward-slash paths left untouched, plain
+filenames, and a mixed-separator edge case that must NOT be
+misinterpreted). The pre-existing `windows_backslash` regression tests
+in `test_cto_report.py`/`test_selector_dry_run.py` are unchanged and
+now genuinely exercise the fixed code path (not just re-confirm what
+already passed on Windows). All 5 touched scripts smoke-tested against
+the real live `paper_validation.db` after the change, not just unit
+tests. Full suite 832/832 (827 + 5 new).
+
+**Status**: `RiskManager.evaluate()`/`scripts/run_paper.py` untouched.
+No real OKX credentials used or fabricated; no live trading enabled; no
+destructive actions -- every touched script is read-only against the
+trading DB (`migrate_paper_db.py`'s `--apply` mutation path itself is
+unchanged, only its path-argument parsing is). No architecture
+redesign -- this is a bug fix in existing CLI argument handling, not a
+new component. This push (once verified against CI directly, not
+assumed) is the first time this project's CI is expected to actually
+pass, not just produce a more-diagnosable failure. Full rationale
+recorded here; the fix itself is small enough not to warrant a separate
+results doc (`scripts/_cli_path_utils.py`'s own docstring carries the
+full context, cite-don't-duplicate applies to future readers of that
+file directly).

@@ -56,6 +56,8 @@ import argparse
 import sys
 from pathlib import Path
 
+from _cli_path_utils import normalize_db_path_arg
+
 # scripts/ is a sibling of backend/ -- make the app package importable,
 # same convention every other scripts/ entry point (shadow_status.py,
 # migrate_paper_db.py, analyze_regime_performance.py, ...) already uses.
@@ -201,7 +203,7 @@ def _render_table(rows: list[tuple[str, str, str]]) -> str:
 
 def main() -> int:
     args = _parse_args()
-    db_path = Path(args.db_path)
+    db_path = normalize_db_path_arg(args.db_path)
 
     if not db_path.exists():
         print(f"ERROR: {db_path} does not exist.")
