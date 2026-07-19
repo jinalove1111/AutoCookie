@@ -35,4 +35,26 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run test suite
-        run: python -m pytest tests/ -q
+        # Milestone 37: the plain one-liner this replaced gave no way to see
+        # *why* a run failed without authenticated GitHub API/gh-CLI access
+        # to job logs (confirmed the hard way -- a prior CI failure took
+        # three separate local reproduction attempts, all passing, without
+        # ever finding the Linux-specific root cause, purely because the
+        # actual pytest traceback was unreachable). Piping through `tee` and
+        # appending the tail to $GITHUB_STEP_SUMMARY makes the real failure
+        # output show up in the Checks UI's `output.summary` field, which
+        # IS readable via the public, unauthenticated check-runs API even
+        # for a failing run -- no token needed for the next diagnosis.
+        # `PIPESTATUS[0]` (not `$?`, which would read `tee`'s own exit code)
+        # preserves pytest's real pass/fail signal through the pipe.
+        run: |
+          set +e
+          python -m pytest tests/ -q 2>&1 | tee pytest_output.log
+          exit_code=${PIPESTATUS[0]}
+          {
+            echo '## pytest output (last 150 lines)'
+            echo '```'
+            tail -n 150 pytest_output.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$exit_code"

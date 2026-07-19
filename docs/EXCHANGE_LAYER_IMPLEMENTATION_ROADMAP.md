@@ -1,4 +1,24 @@
-# Exchange Layer Implementation Roadmap (Priority 1) — Planning Only, Not Implemented
+# Exchange Layer Implementation Roadmap (Priority 1)
+
+> **UPDATE (2026-07-19, Milestone 37)**: operator approval received for
+> "Demo Trading readiness" work that stops short of real credentials/live
+> secrets. Phase 0's read-only scope (`OkxClient.fetch_ohlcv`/
+> `get_balance`/`get_open_positions`, real HTTP + real OKX v5 auth
+> signing, `place_order`/`cancel_order` still `NotImplementedError`) is
+> now **implemented and unit-tested against mocked HTTP responses**
+> (`backend/tests/test_okx_client.py`, 17 tests) — see
+> `PROJECT_STATUS.md` Milestone 37. No real network call has ever been
+> made by this code or its tests; nothing is wired into
+> `scripts/run_paper.py`. The standalone measurement harness Phase 0
+> calls for also now exists (`scripts/measure_exchange_readonly_latency.py`)
+> and correctly refuses to run without real
+> `OKX_API_KEY`/`OKX_API_SECRET`/`OKX_API_PASSPHRASE` — those three
+> values, and the decision to actually exercise this against OKX's demo
+> endpoint, remain an explicit operator action this milestone does not
+> take. Section 2's header names below have also been corrected
+> (`OK-ACCESS-KEY`, not `OKX-ACCESS-KEY`) after verifying against OKX's
+> live v5 API docs during implementation. Phases 1-3 are unchanged and
+> still require their own separate approval.
 
 CTO deliverable (2026-07-19), operator directive: "Inspect the existing
 Exchange Layer. Reuse the existing `BaseExchange`, `OKXClient`,

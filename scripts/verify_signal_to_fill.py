@@ -48,9 +48,15 @@ FEE_PERCENT = 0.05
 RISK_PER_TRADE_PERCENT = 0.25
 ACCOUNT_BALANCE = 10000.0
 
+# Anchored to a freshly fetched real current close at runtime (see main()),
+# not hardcoded -- a fixed SYNTHETIC_TARGET drifts stale as real market price
+# moves over calendar time, and once real price crosses a stale hardcoded
+# target, Phase 2's real exit-check (which reads the real last candle close,
+# not the synthetic signal) closes the position via a genuine take-profit
+# hit before the concurrency-guard scenario it's meant to test ever runs.
 SYNTHETIC_ENTRY = 50000.0
 SYNTHETIC_STOP = 49000.0
-SYNTHETIC_TARGET = 52500.0  # RR = 2.5, clears the 1:2 minimum
+SYNTHETIC_TARGET = 52500.0  # RR = 2.5, clears the 1:2 minimum; overwritten below
 
 
 def _fail(check: str, expected: Any, actual: Any) -> dict:
@@ -77,9 +83,24 @@ def main() -> int:
     print("Real alembic migrations applied to temp DB.")
 
     import run_paper
+    from app.config import settings
+    from app.data.candle_fetcher import CandleFetcher
     from app.strategy.signal_engine import TradeSignal
 
     checks: list[dict] = []
+
+    # Anchor the synthetic entry/stop/target to a real, freshly fetched
+    # current close so Phase 2's real exit-check (which reads real market
+    # data, not the synthetic signal) can't spuriously fire a take-profit
+    # before the concurrency-guard scenario it's testing ever runs -- see
+    # the module-level comment on SYNTHETIC_TARGET above.
+    global SYNTHETIC_ENTRY, SYNTHETIC_STOP, SYNTHETIC_TARGET
+    real_current_price = CandleFetcher().fetch_ohlcv(
+        settings.SYMBOL, settings.DEFAULT_TIMEFRAME, limit=1
+    )[-1]["close"]
+    SYNTHETIC_ENTRY = real_current_price
+    SYNTHETIC_STOP = real_current_price * 0.98
+    SYNTHETIC_TARGET = real_current_price * 1.05  # RR = 2.5, clears the 1:2 minimum
 
     synthetic_signal = TradeSignal(
         symbol="BTCUSDT",

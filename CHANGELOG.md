@@ -4,7 +4,60 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased] - Milestone 36: Exchange Layer roadmap, research-platform ranking, OSS comparison, CI failure investigated
+## [Unreleased] - Milestone 37: paper trader restarted and lifecycle-verified, Exchange Layer Phase 0 implemented, health-check tool built, CI diagnosis gap closed structurally
+
+2026-07-19. Operator-approved paper-trading restart with a full
+lifecycle verification checklist, followed by an autonomous
+continuation across six ranked priorities. Full deliverables:
+`scripts/verify_signal_to_fill.py` (fixed), `backend/app/exchange/okx_client.py`
+(Phase 0 implemented), `backend/tests/test_okx_client.py` (17 tests),
+`scripts/measure_exchange_readonly_latency.py` (new),
+`scripts/paper_trader_health_check.py` (new),
+`backend/tests/test_paper_trader_health_check.py` (14 tests),
+`.github/workflows/backend-tests.yml` (diagnosis-visibility fix),
+`docs/EXCHANGE_LAYER_IMPLEMENTATION_ROADMAP.md` (updated in place).
+
+**Paper trader restart + lifecycle verification**: relaunched
+`scripts/run_paper.py` after bringing `paper_validation.db` to
+migration head; clean startup, no crashes. Re-ran
+`scripts/verify_signal_to_fill.py` and found a real bug in the tool
+itself -- a hardcoded synthetic take-profit price had drifted below
+real BTC market price, causing its own concurrency-guard check to
+spuriously fail via a genuine market take-profit hit. Fixed by
+anchoring the synthetic price levels to a freshly fetched real current
+price at runtime; all 21/21 checks now pass, confirming signal
+generation, order flow, SL/TP, and the one-trade-open-at-a-time
+concurrency guard all work correctly. Graceful shutdown and restart
+recovery confirmed by reading (not modifying) existing
+`KeyboardInterrupt`/`PersistentCircuitBreaker` handling.
+
+**CI**: three independent local reproductions (dev venv, a fresh venv
+matching today's exact `requirements.txt` resolution -- which also
+surfaced a real `pytest-asyncio` major-version drift, 0.26.0 vs. the
+dev venv's 1.4.0, tested directly and still passing -- and a genuinely
+fresh `git clone` into a new venv) all pass 791/791 on Windows. Root
+cause remains unreachable without authenticated GitHub access.
+Structural fix: the workflow now tees pytest's real output into
+`$GITHUB_STEP_SUMMARY`, visible via the public unauthenticated
+check-runs API for every future run.
+
+**Exchange Layer Phase 0**: implemented `OkxClient.fetch_ohlcv`/
+`get_balance`/`get_open_positions` with real OKX v5 HMAC-SHA256 auth
+(verified against OKX's live docs). `place_order`/`cancel_order` remain
+unimplemented (Phase 1, separate gate). 17 new tests, all mocked, zero
+real network calls, no real credentials used. Built the standalone
+measurement harness Phase 0 calls for; confirmed it correctly refuses
+to run without real credentials.
+
+**Monitoring**: built `scripts/paper_trader_health_check.py` (a
+genuinely missing read-only liveness check -- circuit breaker state,
+snapshot freshness, open-position anomaly detection), 14 new tests.
+Detection only, no auto-restart.
+
+`RiskManager.evaluate()`/`scripts/run_paper.py` untouched. No live
+trading enabled, no destructive actions.
+
+## Milestone 36: Exchange Layer roadmap, research-platform ranking, OSS comparison, CI failure investigated
 
 2026-07-19. Five-priority CTO round. Full deliverables:
 `docs/EXCHANGE_LAYER_IMPLEMENTATION_ROADMAP.md`,

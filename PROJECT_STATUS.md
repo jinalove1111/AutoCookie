@@ -1303,6 +1303,116 @@ practice** (`scripts/cto_report.py`, milestone 17b below).
     `docs/OSS_AGENT_ARCHITECTURE_COMPARISON.md`,
     `docs/EXPERIMENT_INDEX.md`, `docs/HYPOTHESIS_BACKLOG.md`.
 
+37. **Paper trader restarted and lifecycle-verified (operator-approved);
+    Exchange Layer Phase 0 implemented read-only-and-mocked; a genuinely
+    missing health-check tool built; CI diagnosis gap closed
+    structurally** (2026-07-19): operator approved restarting
+    `scripts/run_paper.py` with an explicit lifecycle checklist
+    (startup, market data, signal generation, order execution, position
+    management, stop-loss, take-profit, logging, `strategy_logs`,
+    `risk_events`, graceful shutdown, restart recovery), then separately
+    authorized continuing autonomously up to three hours across six
+    ranked priorities, stopping only for live trading, real credentials
+    beyond what's configured, production strategy changes, external
+    secrets, or destructive actions. **Restart + lifecycle**: relaunched
+    via the memory-verified working invocation after bringing
+    `paper_validation.db` to migration head (`scripts/migrate_paper_db.py
+    --apply`, auto-backed-up); clean startup, no crashes across the
+    whole session. Re-ran `scripts/verify_signal_to_fill.py` and found a
+    real bug in the tool itself, not production code: its hardcoded
+    `SYNTHETIC_TARGET=52500.0` had drifted below real BTC market price
+    (~$64,716 now), so Phase 2's real exit-check (which reads real
+    market data) spuriously closed the still-open synthetic position via
+    a genuine take-profit hit before the concurrency-guard scenario it
+    tests ever ran — a false negative, confirmed by reading the
+    concurrency-guard code itself, which behaves exactly as documented
+    (re-queries open positions AFTER the exit-check step, by design, so
+    a same-pass close-then-reopen is intentional). Fixed by anchoring
+    the synthetic entry/stop/target to a freshly fetched real current
+    price at runtime; 21/21 checks now pass, confirming signal
+    generation, order flow, SL/TP, and the one-trade-open-at-a-time
+    guard all work correctly post-Milestone-34-fix. `strategy_logs`/
+    `risk_events` confirmed still genuinely unwritten (Milestone 33
+    Finding #5, unchanged, not a new regression). Graceful shutdown /
+    restart recovery confirmed by reading (not modifying)
+    `scripts/run_paper.py::main()`'s existing `KeyboardInterrupt`
+    handling and `PersistentCircuitBreaker`'s DB-backed state reload.
+    **CI**: three independent local reproductions this round (a fresh
+    venv installed purely from today's `requirements.txt`, which now
+    also surfaces `pytest-asyncio` resolving to `0.26.0` vs. the dev
+    venv's `1.4.0` — a real major-version drift, tested directly and
+    still passing 791/791; and a genuinely fresh `git clone` of
+    `origin/master` into a new venv, ruling out local-checkout
+    contamination) all pass cleanly on Windows. Also ruled out: a local
+    Redis dependency (unused by any test), real unmocked network calls
+    in `backend/tests/`, hardcoded Windows-style paths, and naive
+    `datetime.now()` usage anywhere in `app/`/`tests/`/`scripts/` (grep
+    confirmed zero hits). Root cause remains unreachable without
+    authenticated GitHub access (`gh` CLI/PAT) to the Linux runner's
+    real pytest traceback. **Structural fix instead of a guess-fix**:
+    `.github/workflows/backend-tests.yml`'s "Run test suite" step now
+    pipes pytest's real output through `tee` and appends its tail to
+    `$GITHUB_STEP_SUMMARY` (`PIPESTATUS[0]` preserves the real exit code
+    through the pipe) — makes the actual failure text show up in the
+    Checks UI's `output.summary` field, readable via the public,
+    unauthenticated check-runs API even for a failing run. Does not fix
+    today's failure by itself, but permanently closes the diagnosis gap
+    for every future run. **Exchange Layer Phase 0 (Demo Trading
+    readiness), stopped exactly at the credentials boundary**:
+    implemented `OkxClient.fetch_ohlcv` (delegates to the existing
+    `CandleFetcher`), `get_balance`/`get_open_positions` (real OKX v5
+    authenticated REST: `OK-ACCESS-KEY`/`OK-ACCESS-SIGN`/
+    `OK-ACCESS-TIMESTAMP`/`OK-ACCESS-PASSPHRASE`, HMAC-SHA256 of
+    `timestamp+method+requestPath+body`, base64-encoded,
+    `x-simulated-trading: 1` for demo) — verified against OKX's own live
+    v5 API docs via WebFetch at implementation time, which also caught
+    and corrected an inaccuracy in the existing roadmap doc
+    (`OK-ACCESS-KEY`, not the previously-written `OKX-ACCESS-KEY`).
+    `place_order`/`cancel_order` remain `NotImplementedError` on purpose
+    — Phase 1 scope, its own approval gate. 17 new tests
+    (`backend/tests/test_okx_client.py`), every one mocking `httpx.get`
+    directly; the signing test recomputes the expected HMAC
+    independently rather than re-deriving it through the same code path
+    being tested — no real network call has ever been made by this code
+    or its tests. Also built the standalone measurement harness Phase 0
+    calls for (`scripts/measure_exchange_readonly_latency.py`),
+    confirmed it correctly refuses to run without real
+    `OKX_API_KEY`/`OKX_API_SECRET`/`OKX_API_PASSPHRASE` configured — 
+    getting Phase 0's actual latency number remains an explicit operator
+    action (supply demo credentials) this milestone does not take.
+    Nothing wires `OkxClient` into `scripts/run_paper.py` or any live
+    path. **Monitoring and recovery**: found a genuine gap —
+    `scripts/shadow_status.py` already answers "how close is
+    shadow-signal evidence to the future selector's floor," but nothing
+    answered "is the live process itself actually healthy right now."
+    Built `scripts/paper_trader_health_check.py` (strictly read-only,
+    `mode=ro` SQLite URI, same safety pattern as `shadow_status.py`):
+    circuit-breaker state, `regime_snapshots` freshness vs. an expected
+    interval, and open-position-count anomaly detection (>1 flagged,
+    matching the documented one-trade-open-at-a-time invariant). Ran
+    against the live `paper_validation.db` mid-session: reported HEALTHY
+    throughout. Deliberately does NOT auto-restart the process —
+    restarting live paper-trading state is a decision with real
+    operational consequences (e.g., silently resuming after a
+    circuit-breaker trip that tripped for a good reason), consistent
+    with this project's gated-file discipline around
+    `scripts/run_paper.py`'s running state; this tool's job is
+    detection, recovery stays a human-in-the-loop call. 14 new tests
+    (`backend/tests/test_paper_trader_health_check.py`). No hypothesis
+    fabricated (Priority 5); Legacy remains the only production engine
+    throughout; no changes needed to `CLAUDE.md`/memory/CI infra beyond
+    the structural fix above (Priorities 4/6 re-checked, none of
+    Milestone 36's touch-ups had gone stale). `RiskManager.evaluate()`/
+    `scripts/run_paper.py` themselves untouched (the paper trader was
+    restarted, not modified). No real OKX credentials used anywhere; no
+    live trading enabled; no destructive actions. **Full suite
+    822/822** (791 + 17 + 14 new). Full rationale:
+    `ENGINEERING_DECISIONS.md` #75. Full reports:
+    `scripts/verify_signal_to_fill.py` (fixed in place),
+    `docs/EXCHANGE_LAYER_IMPLEMENTATION_ROADMAP.md` (updated in place
+    with a dated UPDATE banner), `backend/tests/test_okx_client.py`,
+    `backend/tests/test_paper_trader_health_check.py`.
+
 **Production-behavior note**: milestones 1-6 were purely additive/
 observational. Milestone 7 was the FIRST to change actual paper-trading
 sizing/rejection math (more conservative sizing in high volatility;

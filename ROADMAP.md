@@ -1090,7 +1090,12 @@ suite 791/791 locally (both the normal dev venv and the fresh
 CI-matching venv) -- CI itself remains failing per Priority 4 above.
 `RiskManager.evaluate()`/`scripts/run_paper.py` untouched all round.
 
-**Flagged, not acted on**: a prior session's operator directive (agent
+**Resolved in Milestone 37**: the paper-trading relaunch flagged below
+as "not acted on" was explicitly approved by the operator and completed
+-- see the Milestone 37 section below. Original note retained for
+continuity:
+
+~~**Flagged, not acted on**: a prior session's operator directive (agent
 memory, not a repo file) documents
 that the paper-trading process dying between sandbox sessions is
 EXPECTED, with a standing-authorized relaunch command from a prior
@@ -1098,7 +1103,92 @@ session -- combined with Finding #1 (Milestone 34) now being fixed,
 relaunching is arguably overdue. Deliberately NOT done unilaterally this
 round, given how consistently this session's operator has required
 explicit sign-off for anything touching `scripts/run_paper.py`'s running
-state -- raised for one explicit go-ahead instead.
+state -- raised for one explicit go-ahead instead.~~
+
+**Milestone 37 -- CLOSED (2026-07-19). Paper trader restarted
+(operator-approved) and lifecycle-verified; a real stale-fixture bug
+found and fixed in validation tooling; Exchange Layer Phase 0
+implemented read-only-and-mocked; a genuinely missing health-check tool
+built; CI's diagnosis gap closed structurally.**
+Full deliverables: `scripts/verify_signal_to_fill.py` (fixed in place),
+`backend/app/exchange/okx_client.py` (Phase 0 implemented),
+`backend/tests/test_okx_client.py` (17 tests),
+`scripts/measure_exchange_readonly_latency.py` (new),
+`scripts/paper_trader_health_check.py` (new),
+`backend/tests/test_paper_trader_health_check.py` (14 tests),
+`.github/workflows/backend-tests.yml` (structural diagnosis-visibility
+fix), `docs/EXCHANGE_LAYER_IMPLEMENTATION_ROADMAP.md` (updated in
+place). Full rationale: `ENGINEERING_DECISIONS.md` #75.
+
+Operator approved the paper-trading restart with an explicit lifecycle
+checklist (startup, market data, signal generation, order execution,
+position management, stop-loss, take-profit, logging, `strategy_logs`,
+`risk_events`, graceful shutdown, restart recovery), then separately
+authorized continuing autonomously up to three hours against six ranked
+priorities (Demo Trading readiness; CI diagnosis and fixes; monitoring
+and recovery; validation tooling; production-neutral improvements;
+documentation), stopping only for live trading, real credentials beyond
+what's configured, production strategy changes, external secrets, or
+destructive actions.
+
+**Restart + lifecycle verification**: relaunched via the
+memory-verified working invocation after bringing `paper_validation.db`
+to migration head. Clean startup, no crashes across the whole session.
+Re-ran `scripts/verify_signal_to_fill.py` to verify signal generation,
+order flow, SL/TP, and the concurrency guard end-to-end -- found and
+fixed a real bug in the tool itself (below), then confirmed 21/21
+checks pass. `strategy_logs`/`risk_events` confirmed still genuinely
+unwritten (Milestone 33 Finding #5, unchanged). Graceful shutdown and
+restart recovery confirmed by reading (not modifying)
+`scripts/run_paper.py::main()`'s existing `KeyboardInterrupt` handling
+and `PersistentCircuitBreaker`'s DB-backed state reload.
+
+**Real bug found in validation tooling, not production code**:
+`verify_signal_to_fill.py`'s hardcoded `SYNTHETIC_TARGET=52500.0` had
+drifted below real BTC market price (~$64,716 now) -- causing its own
+Phase 2 concurrency-guard check to spuriously fail via a genuine
+real-market take-profit hit before the scenario it tests ever ran.
+Fixed by anchoring the synthetic entry/stop/target to a freshly fetched
+real current price at runtime.
+
+**CI**: three independent local reproductions this round (a fresh venv
+matching today's exact `requirements.txt` resolution, which now also
+surfaces `pytest-asyncio 0.26.0` vs. the dev venv's `1.4.0` -- tested
+directly, still 791/791; and a genuinely fresh `git clone` + fresh venv,
+ruling out local-checkout contamination) all pass cleanly on Windows.
+Redis, real network calls, hardcoded paths, and naive `datetime.now()`
+usage all checked and ruled out. Root cause remains unreachable without
+authenticated GitHub access. **Structural fix instead of a guess-fix**:
+the workflow now tees pytest's real output into `$GITHUB_STEP_SUMMARY`,
+which IS visible via the public, unauthenticated check-runs API --
+closes the diagnosis gap for every future run, even though it doesn't
+retroactively explain this one.
+
+**Exchange Layer Phase 0 (Demo Trading readiness), stopped exactly at
+the credentials boundary**: implemented `OkxClient.fetch_ohlcv`/
+`get_balance`/`get_open_positions` with real OKX v5 HMAC-SHA256 auth
+(verified against OKX's live docs, correcting a header-name inaccuracy
+in the roadmap doc itself). `place_order`/`cancel_order` remain
+`NotImplementedError` (Phase 1, separate gate). 17 new tests, all
+mocking `httpx.get`, zero real network calls. Built the standalone
+measurement harness Phase 0 calls for
+(`scripts/measure_exchange_readonly_latency.py`) -- confirmed it
+correctly refuses to run without real OKX credentials, which this
+milestone does not have or fabricate. Nothing wires `OkxClient` into
+`scripts/run_paper.py`.
+
+**Monitoring and recovery**: found a genuine gap -- nothing answered
+"is the live paper-trading process actually healthy right now."
+Built `scripts/paper_trader_health_check.py` (read-only: circuit
+breaker state, snapshot freshness, open-position anomaly detection),
+14 new tests, confirmed HEALTHY against the live DB mid-session.
+Deliberately does not auto-restart -- detection only, recovery stays a
+human decision.
+
+`RiskManager.evaluate()`/`scripts/run_paper.py` themselves untouched.
+No real OKX credentials used; no live trading enabled; no destructive
+actions. Full suite green with all new tests included -- see
+`PROJECT_STATUS.md` item 37 for the exact count.
 
 **Standing awareness item, not an action item**: H4's evaluation flagged
 that any existing finding resting on Net Profit margins narrower than
