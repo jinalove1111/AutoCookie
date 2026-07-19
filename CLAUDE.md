@@ -205,8 +205,8 @@ confirmed structural across two independent years
 
 ## 7. Milestone count
 
-The current milestone count is **37** as of this writing (2026-07-19,
-commit `498791f`). This number increments once per completed
+The current milestone count is **38** as of this writing (2026-07-19).
+This number increments once per completed
 research/engineering round and both `PROJECT_STATUS.md` and
 `ROADMAP.md`/`docs/ADAPTIVE_ARCHITECTURE.md` section 7 are updated
 together whenever it does. Do not predict or hardcode what the next
@@ -230,7 +230,12 @@ a CTO platform evaluation (milestone 35,
 paper-trader restart plus Exchange Layer Phase 0 implementation
 (milestone 37 — `OkxClient`'s read-only methods are now real, not
 stubs, though not wired into any live path; see
-`ENGINEERING_DECISIONS.md` #75). Section 4's research-workflow
+`ENGINEERING_DECISIONS.md` #75), and a credential-free reliability/
+monitoring/documentation round (milestone 38 — corrected a CI-visibility
+fix that had not actually worked as claimed, added `--watch` mode to
+`scripts/paper_trader_health_check.py`, wrote
+`docs/PAPER_TRADER_RUNBOOK.md` and `docs/OKX_DEMO_RESUMPTION_CHECKLIST.md`;
+see `ENGINEERING_DECISIONS.md` #76). Section 4's research-workflow
 discipline below is unchanged and still applies to any FUTURE
 hypothesis — it just isn't the only mode this project operates in
 anymore.

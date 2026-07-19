@@ -282,3 +282,131 @@ def test_main_fails_gracefully_on_missing_db_file(tmp_path):
     missing = tmp_path / "does_not_exist.db"
     exit_code = hc.main([str(missing)])
     assert exit_code == 1
+
+
+# --- --watch mode: transition-only alert logging (Milestone 38) --------
+
+
+def _fake_result(unhealthy: bool) -> dict:
+    return {
+        "breaker": {"status": "TRIPPED" if unhealthy else "OK", "tripped": unhealthy, "reason": None, "tripped_at": None},
+        "freshness": {"status": "FRESH", "latest": "x", "staleness_seconds": 1.0, "stale_threshold_seconds": 900},
+        "positions": {"status": "OK", "count": 0, "open_trades": []},
+    }
+
+
+def test_run_watch_logs_a_line_only_on_transition_not_every_poll(monkeypatch, tmp_path):
+    hc = _fresh_health_check()
+    monkeypatch.setattr(hc.time, "sleep", lambda _s: None)
+
+    # HEALTHY, HEALTHY, UNHEALTHY, UNHEALTHY, HEALTHY -- exactly 2 transitions.
+    sequence = [False, False, True, True, False]
+    calls = {"n": 0}
+
+    def fake_check(db_path, expected_interval_seconds):
+        unhealthy = sequence[calls["n"]]
+        calls["n"] += 1
+        return unhealthy, _fake_result(unhealthy)
+
+    monkeypatch.setattr(hc, "run_single_check", fake_check)
+
+    alert_log = tmp_path / "alerts.log"
+    hc.run_watch(
+        db_path=Path("unused.db"),
+        expected_interval_seconds=300,
+        poll_interval_seconds=1,
+        heartbeat_every=0,  # disable heartbeats to isolate transition-only behavior
+        max_checks=len(sequence),
+        alert_log_path=alert_log,
+    )
+
+    lines = alert_log.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 2
+    assert "HEALTHY -> UNHEALTHY" in lines[0]
+    assert "UNHEALTHY -> HEALTHY" in lines[1]
+
+
+def test_run_watch_writes_heartbeat_at_configured_interval(monkeypatch, tmp_path):
+    hc = _fresh_health_check()
+    monkeypatch.setattr(hc.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(hc, "run_single_check", lambda db_path, expected_interval_seconds: (False, _fake_result(False)))
+
+    alert_log = tmp_path / "alerts.log"
+    hc.run_watch(
+        db_path=Path("unused.db"),
+        expected_interval_seconds=300,
+        poll_interval_seconds=1,
+        heartbeat_every=2,
+        max_checks=6,
+        alert_log_path=alert_log,
+    )
+
+    lines = alert_log.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 3  # checks 2, 4, 6
+    assert all("HEARTBEAT HEALTHY" in line for line in lines)
+
+
+def test_run_watch_no_alert_on_first_check_with_no_prior_state(monkeypatch, tmp_path):
+    hc = _fresh_health_check()
+    monkeypatch.setattr(hc.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(hc, "run_single_check", lambda db_path, expected_interval_seconds: (True, _fake_result(True)))
+
+    alert_log = tmp_path / "alerts.log"
+    hc.run_watch(
+        db_path=Path("unused.db"),
+        expected_interval_seconds=300,
+        poll_interval_seconds=1,
+        heartbeat_every=0,
+        max_checks=1,
+        alert_log_path=alert_log,
+    )
+
+    assert not alert_log.exists()
+
+
+def test_run_watch_treats_db_open_failure_as_unhealthy_not_a_crash(monkeypatch, tmp_path):
+    hc = _fresh_health_check()
+    monkeypatch.setattr(hc.time, "sleep", lambda _s: None)
+
+    calls = {"n": 0}
+
+    def flaky_check(db_path, expected_interval_seconds):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return False, _fake_result(False)
+        raise sqlite3.OperationalError("unable to open database file")
+
+    monkeypatch.setattr(hc, "run_single_check", flaky_check)
+
+    alert_log = tmp_path / "alerts.log"
+    hc.run_watch(
+        db_path=Path("unused.db"),
+        expected_interval_seconds=300,
+        poll_interval_seconds=1,
+        heartbeat_every=0,
+        max_checks=2,
+        alert_log_path=alert_log,
+    )
+
+    lines = alert_log.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    assert "HEALTHY -> UNHEALTHY" in lines[0]
+    assert "DB_OPEN_FAILED" in lines[0]
+
+
+def test_main_watch_flag_dispatches_to_run_watch(monkeypatch, tmp_path):
+    hc = _fresh_health_check()
+    called = {}
+
+    def fake_run_watch(db_path, expected_interval_seconds, poll_interval_seconds, heartbeat_every, max_checks, alert_log_path):
+        called["invoked"] = True
+        called["max_checks"] = max_checks
+        return 0
+
+    monkeypatch.setattr(hc, "run_watch", fake_run_watch)
+
+    exit_code = hc.main([str(tmp_path / "db.db"), "--watch", "--max-checks", "3"])
+
+    assert exit_code == 0
+    assert called["invoked"] is True
+    assert called["max_checks"] == 3

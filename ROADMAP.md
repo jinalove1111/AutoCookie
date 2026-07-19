@@ -1190,6 +1190,60 @@ No real OKX credentials used; no live trading enabled; no destructive
 actions. Full suite green with all new tests included -- see
 `PROJECT_STATUS.md` item 37 for the exact count.
 
+**Milestone 38 -- CLOSED (2026-07-19). CI-visibility fix corrected
+(Milestone 37's own fix didn't actually work); health-check `--watch`
+mode deployed; operational runbook and OKX Demo resumption checklist
+written.**
+Full deliverables: `.github/workflows/backend-tests.yml` (corrected in
+place), `scripts/paper_trader_health_check.py` (extended in place),
+`docs/PAPER_TRADER_RUNBOOK.md` (new), `docs/OKX_DEMO_RESUMPTION_CHECKLIST.md`
+(new). Full rationale: `ENGINEERING_DECISIONS.md` #76.
+
+Operator directive: OKX Demo credentials still unavailable, do not
+block on exchange connectivity, proceed with the highest-ROI
+credential-free / production-neutral work in order: (1) paper-trading
+reliability, (2) monitoring/logging/failure detection, (3) decision
+logs/experiment records/recovery checkpoints, (4) unresolved test/CI/
+documentation issues, (5) an OKX Demo resumption checklist.
+
+**Priority 4 surfaced first, out of order, because it falsified
+Milestone 37's own claim**: checked whether the pushed CI fix (tee
+pytest output into `$GITHUB_STEP_SUMMARY`) had actually worked once
+GitHub's rate limit reset -- it had not, the check-run's
+`output.summary` was still `null`. Root cause found directly, not
+guessed: `$GITHUB_STEP_SUMMARY` populates the run's web-UI "Summary"
+tab (confirmed via WebFetch returning a client-side loading error, not
+real content) -- a different surface entirely from a check run's
+`output` field, which the public unauthenticated check-runs API
+actually exposes. Real fix: publishes a SEPARATE purpose-built check
+run (`pytest-failure-detail`) with the real pytest tail as its
+`output.summary`, via `actions/github-script@v7` using the workflow's
+own auto-provisioned `GITHUB_TOKEN` (not an operator secret,
+`permissions: checks: write` added to guarantee scope).
+
+**Priority 1/2**: `scripts/paper_trader_health_check.py` gains
+`--watch` mode -- polls on an interval, appends to a local alert log
+only on a HEALTHY<->UNHEALTHY transition plus a periodic heartbeat, not
+one line per poll. DB-open failure mid-poll is treated as an UNHEALTHY
+transition, not a watcher crash. Smoke-tested against the live DB, then
+deployed as a real background process alongside the paper trader. 5 new
+tests.
+
+**Priority 3**: new `docs/PAPER_TRADER_RUNBOOK.md` -- symptom ->
+diagnosis -> action table plus an explicit "what this runbook does NOT
+authorize" section (gated-file boundary still applies regardless of how
+obvious a fix looks).
+
+**Priority 5**: new `docs/OKX_DEMO_RESUMPTION_CHECKLIST.md` -- what's
+already done, the exact step-by-step for when credentials exist, and
+what does NOT get unlocked by Phase 0 alone. `OrangexClient`
+re-confirmed untouched this round -- no production references, no
+established business need.
+
+`RiskManager.evaluate()`/`scripts/run_paper.py` untouched. No real OKX
+credentials used or fabricated; no live trading enabled; no destructive
+actions. Full suite 827/827 (822 + 5 new).
+
 **Standing awareness item, not an action item**: H4's evaluation flagged
 that any existing finding resting on Net Profit margins narrower than
 roughly 10-15% could plausibly flip under vol-scaled sizing and would

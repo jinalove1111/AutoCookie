@@ -1413,6 +1413,61 @@ practice** (`scripts/cto_report.py`, milestone 17b below).
     with a dated UPDATE banner), `backend/tests/test_okx_client.py`,
     `backend/tests/test_paper_trader_health_check.py`.
 
+38. **CI-visibility fix corrected (Milestone 37's own fix didn't
+    actually work); health-check `--watch` mode deployed; operational
+    runbook and OKX Demo resumption checklist written** (2026-07-19):
+    operator directive — OKX Demo credentials still unavailable, do not
+    block on exchange connectivity, proceed with the highest-ROI
+    credential-free work in order: (1) paper-trading reliability, (2)
+    monitoring/logging/failure detection, (3) decision logs/experiment
+    records/recovery checkpoints, (4) unresolved test/CI/documentation
+    issues, (5) an OKX Demo resumption checklist. **Priority 4 surfaced
+    first, out of order**: checked whether Milestone 37's CI fix (tee
+    pytest output into `$GITHUB_STEP_SUMMARY`) had actually worked once
+    GitHub's rate limit reset — it had not; the check-run's
+    `output.summary` was still `null`. **Root cause found directly**:
+    `$GITHUB_STEP_SUMMARY` populates the run's web-UI "Summary" tab
+    (React-rendered, confirmed via WebFetch returning a client-side
+    loading error, not real content) — a different surface entirely
+    from a check run's `output` field, which the public unauthenticated
+    check-runs API actually exposes. **Real fix**:
+    `.github/workflows/backend-tests.yml` now publishes a SEPARATE
+    purpose-built check run (`pytest-failure-detail`,
+    `actions/github-script@v7`, `github.rest.checks.create`) with the
+    real pytest tail as its `output.summary`, using the workflow's own
+    auto-provisioned `GITHUB_TOKEN` (`permissions: checks: write` added
+    to guarantee scope) — not an operator secret. Recorded explicitly as
+    a fix that shipped without independently verifying the exact API
+    surface it claimed to populate — worth remembering. **Priority 1/2**:
+    `scripts/paper_trader_health_check.py` gains `--watch` mode — polls
+    on an interval, logs to a local append-only alert log only on a
+    HEALTHY↔UNHEALTHY transition plus a periodic heartbeat, not one line
+    per poll. DB-open failure during a poll is treated as an UNHEALTHY
+    transition, not a watcher crash (verified by test). Smoke-tested
+    against the live DB, then deployed as a real background process
+    alongside the paper trader (120s poll, heartbeat every 30). 5 new
+    tests; all 14 existing tests unchanged. **Priority 3**: new
+    `docs/PAPER_TRADER_RUNBOOK.md` — symptom → diagnosis → action table
+    (TRIPPED breaker, STALE snapshots, multiple open positions, DB-open
+    failure, "no trades yet"), plus an explicit "what this runbook does
+    NOT authorize" section reiterating the gated-file boundary.
+    **Priority 5**: new `docs/OKX_DEMO_RESUMPTION_CHECKLIST.md` — what's
+    already done (Phase 0, code-complete and tested), the exact
+    step-by-step for the moment credentials exist, and what does NOT get
+    unlocked by Phase 0 alone (Phase 1's order-placement/adapter/SL-TP
+    design decision, Phase 2's `run_paper.py` wiring, Phase 3's real
+    capital — each a separate approval gate). `OrangexClient`
+    re-confirmed untouched — no production references, no established
+    business need. `RiskManager.evaluate()`/`scripts/run_paper.py`
+    themselves untouched throughout. No real OKX credentials used or
+    fabricated; no live trading enabled; no destructive actions — the
+    paper-trading DB was only ever read via `mode=ro` connections. **Full
+    suite 827/827** (822 + 5 new). Full rationale:
+    `ENGINEERING_DECISIONS.md` #76. Full reports:
+    `docs/PAPER_TRADER_RUNBOOK.md`, `docs/OKX_DEMO_RESUMPTION_CHECKLIST.md`,
+    `.github/workflows/backend-tests.yml` (corrected in place),
+    `scripts/paper_trader_health_check.py` (extended in place).
+
 **Production-behavior note**: milestones 1-6 were purely additive/
 observational. Milestone 7 was the FIRST to change actual paper-trading
 sizing/rejection math (more conservative sizing in high volatility;

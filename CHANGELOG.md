@@ -4,7 +4,39 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased] - Milestone 37: paper trader restarted and lifecycle-verified, Exchange Layer Phase 0 implemented, health-check tool built, CI diagnosis gap closed structurally
+## [Unreleased] - Milestone 38: CI-visibility fix corrected, health-check --watch mode deployed, operational runbook and OKX Demo resumption checklist written
+
+2026-07-19. Operator directive: OKX Demo credentials still unavailable,
+do not block on exchange connectivity, proceed with highest-ROI
+credential-free work in priority order. Full deliverables:
+`.github/workflows/backend-tests.yml` (corrected), `scripts/paper_trader_health_check.py`
+(extended with `--watch`), `docs/PAPER_TRADER_RUNBOOK.md` (new),
+`docs/OKX_DEMO_RESUMPTION_CHECKLIST.md` (new).
+
+**CI (surfaced first, out of order)**: checked whether Milestone 37's
+CI fix had actually worked once GitHub's rate limit reset -- it had
+not. Root cause found directly: `$GITHUB_STEP_SUMMARY` populates the
+run's web-UI Summary tab, not a check run's `output` field, which is
+what the public unauthenticated check-runs API actually exposes. Real
+fix: publishes a separate check run (`pytest-failure-detail`) with the
+real pytest tail via `actions/github-script@v7`, using the workflow's
+own auto-provisioned `GITHUB_TOKEN`.
+
+**Monitoring**: `scripts/paper_trader_health_check.py` gains `--watch`
+mode -- transition-only + periodic-heartbeat alert logging instead of
+one line per poll. Smoke-tested against the live DB, then deployed as a
+real background process. 5 new tests.
+
+**Documentation**: `docs/PAPER_TRADER_RUNBOOK.md` (symptom -> diagnosis
+-> action table, plus an explicit gated-file boundary reminder) and
+`docs/OKX_DEMO_RESUMPTION_CHECKLIST.md` (exact steps for when
+credentials arrive, and what Phase 0 does NOT unlock).
+
+`RiskManager.evaluate()`/`scripts/run_paper.py` untouched. No real
+credentials used or fabricated; no live trading enabled; no destructive
+actions. Full suite 827/827.
+
+## Milestone 37: paper trader restarted and lifecycle-verified, Exchange Layer Phase 0 implemented, health-check tool built, CI diagnosis gap closed structurally
 
 2026-07-19. Operator-approved paper-trading restart with a full
 lifecycle verification checklist, followed by an autonomous

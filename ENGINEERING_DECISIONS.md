@@ -5480,3 +5480,95 @@ suite green with all new tests included (see `PROJECT_STATUS.md` item
 `docs/EXCHANGE_LAYER_IMPLEMENTATION_ROADMAP.md` (updated in place with
 a dated UPDATE banner), `backend/tests/test_okx_client.py`,
 `backend/tests/test_paper_trader_health_check.py`.
+
+## 76. Milestone 38: a real fix to the real fix -- Milestone 37's CI-visibility change didn't actually work, corrected and verified against the mechanism it should have used from the start; `--watch` mode added to the health-check tool; an operational runbook and an OKX-resumption checklist written
+
+**Decision context**: operator directive -- OKX Demo credentials still
+unavailable, do not block on exchange connectivity, proceed with the
+highest-ROI credential-free / production-behavior-neutral work in
+priority order: (1) paper-trading reliability, (2) monitoring/logging/
+failure detection, (3) decision logs/experiment records/recovery
+checkpoints, (4) unresolved test/CI/documentation issues, (5) an OKX
+Demo resumption checklist. No live order placement, no real
+credentials, no architecture redesign.
+
+**Priority 4 surfaced first, out of order, because it falsified
+Milestone 37's own claim**: before starting new work, checked whether
+the pushed CI fix (tee pytest output into `$GITHUB_STEP_SUMMARY`) had
+actually worked, once GitHub's unauthenticated rate limit (hit at the
+end of the milestone-37 session) reset. It had not: the check-run's
+`output.summary` field for the newest run was still `null`.
+**Root cause of the failed fix, found by direct verification, not
+assumed**: `$GITHUB_STEP_SUMMARY` populates the workflow run's
+"Summary" tab in the web UI (a React-rendered page, confirmed via
+WebFetch returning a client-side loading error, not the actual
+content) -- a genuinely different surface from a check run's `output`
+field, which is what the public, unauthenticated check-runs REST API
+exposes and what actually needed to change. **Real fix**:
+`.github/workflows/backend-tests.yml` now adds a step
+(`actions/github-script@v7`, `if: failure()`) that calls
+`github.rest.checks.create(...)` directly, publishing a SEPARATE
+purpose-built check run (`pytest-failure-detail`) whose `output.summary`
+is the real pytest tail -- using the workflow's own automatically-
+provisioned `GITHUB_TOKEN` (ephemeral, scoped to this run only, not an
+operator-supplied secret; `permissions: checks: write` added at the
+workflow level to guarantee the scope regardless of repo default token
+settings). This is the class of mistake worth recording explicitly: a
+fix that looked plausible and shipped without independently verifying
+the exact API surface it claimed to populate. Verification of the
+corrected version is queued for this milestone's own CI-triggering
+push (see Status below) rather than claimed without re-checking.
+
+**Priority 1/2 (paper-trading reliability + monitoring/logging/failure
+detection)**: `scripts/paper_trader_health_check.py` (milestone 37)
+gains `--watch` mode -- polls on an interval and appends to a local,
+append-only alert log ONLY on a HEALTHY<->UNHEALTHY transition, plus a
+periodic heartbeat every N checks (default 30) -- deliberately not one
+line per poll, which would make the actual signal (something changed)
+invisible in the noise. Still strictly read-only against the trading
+DB; a DB-open failure during a poll is treated as an UNHEALTHY
+transition, not a crash of the watcher itself (verified via a dedicated
+test). Deployed as a real background process alongside the live paper
+trader (`--poll-interval-seconds 120 --heartbeat-every 30`), not just
+written and left unused -- smoke-tested against the live DB first (3
+quick polls, correct output) before the longer-interval production
+launch. 5 new tests (`run_watch`'s transition-only/heartbeat/no-alert-
+on-first-check/DB-failure-handling/CLI-dispatch behavior), all existing
+14 tests unchanged and still passing.
+
+**Priority 3 (decision logs, experiment records, recovery
+checkpoints)**: `ENGINEERING_DECISIONS.md`/`docs/EXPERIMENT_INDEX.md`
+already exist and are actively maintained -- the genuinely missing
+piece was "recovery checkpoints" in the operational sense: what to
+actually DO when the health-check tool reports a problem. New
+`docs/PAPER_TRADER_RUNBOOK.md`: a symptom -> diagnosis -> action table
+(TRIPPED circuit breaker, STALE snapshots, multiple open positions,
+DB-open failure, "no trades yet") plus an explicit "what this runbook
+does NOT authorize" section reiterating the gated-file boundary
+(`scripts/run_paper.py`/`RiskManager.evaluate()` still need explicit
+sign-off regardless of how obvious a fix looks) -- cites, does not
+duplicate, `docs/risk_rules.md`/`[[paper-trader-launch]]` memory/
+`docs/PAPER_TRADING_VALIDATION_REPORT.md`'s open Findings.
+
+**Priority 5 (OKX Demo resumption checklist)**: new
+`docs/OKX_DEMO_RESUMPTION_CHECKLIST.md` -- what's already done
+(code-complete, tested, waiting on credentials only, per milestone 37),
+the exact step-by-step for the moment credentials exist (env vars,
+exact harness invocation, expected output path, sanity-check guidance),
+and an explicit list of what does NOT get unlocked by finishing Phase 0
+(Phase 1's order-placement + `LiveBroker` adapter + SL/TP design
+decision, Phase 2's `run_paper.py` wiring, Phase 3's real capital --
+each its own separate approval gate, not pre-authorized by this
+checklist). Also explicitly re-confirmed and documented: `OrangexClient`
+remains untouched -- checked again this round, still zero production
+references, no established business need, correctly not built.
+
+**Status**: `RiskManager.evaluate()`/`scripts/run_paper.py` themselves
+untouched. No real OKX credentials used or fabricated anywhere. No live
+trading enabled. No destructive actions -- the paper-trading DB was
+only ever read via `mode=ro` connections throughout this round. Full
+suite 827/827 (822 + 5 new `--watch`-mode tests). Full reports, cited
+not duplicated: `docs/PAPER_TRADER_RUNBOOK.md`,
+`docs/OKX_DEMO_RESUMPTION_CHECKLIST.md`,
+`.github/workflows/backend-tests.yml` (corrected in place),
+`scripts/paper_trader_health_check.py` (extended in place).

@@ -10,6 +10,10 @@ name: backend-tests
 # network/exchange calls in the suite itself beyond what individual
 # tests already mock or explicitly skip).
 
+permissions:
+  contents: read
+  checks: write
+
 on:
   push:
     branches: [master]
@@ -35,26 +39,64 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run test suite
-        # Milestone 37: the plain one-liner this replaced gave no way to see
-        # *why* a run failed without authenticated GitHub API/gh-CLI access
-        # to job logs (confirmed the hard way -- a prior CI failure took
-        # three separate local reproduction attempts, all passing, without
-        # ever finding the Linux-specific root cause, purely because the
-        # actual pytest traceback was unreachable). Piping through `tee` and
-        # appending the tail to $GITHUB_STEP_SUMMARY makes the real failure
-        # output show up in the Checks UI's `output.summary` field, which
-        # IS readable via the public, unauthenticated check-runs API even
-        # for a failing run -- no token needed for the next diagnosis.
-        # `PIPESTATUS[0]` (not `$?`, which would read `tee`'s own exit code)
-        # preserves pytest's real pass/fail signal through the pipe.
+        # Milestone 37: the plain one-liner this replaced gave no way to
+        # see *why* a run failed without authenticated GitHub API/gh-CLI
+        # access to job logs (confirmed the hard way -- three separate
+        # local reproduction attempts, all passing, never found the
+        # Linux-specific root cause, purely because the pytest traceback
+        # was unreachable). `PIPESTATUS[0]` (not `$?`, which would read
+        # `tee`'s own exit code) preserves pytest's real pass/fail signal
+        # through the pipe; the log file feeds the two visibility steps
+        # below.
         run: |
           set +e
           python -m pytest tests/ -q 2>&1 | tee pytest_output.log
           exit_code=${PIPESTATUS[0]}
+          exit "$exit_code"
+
+      - name: Write job summary (human-readable, needs the Summary tab UI)
+        if: always()
+        run: |
           {
             echo '## pytest output (last 150 lines)'
             echo '```'
             tail -n 150 pytest_output.log
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          exit "$exit_code"
+
+      - name: Publish pytest failure detail as a check run (Milestone 38 fix)
+        # Milestone 37's original fix (appending to $GITHUB_STEP_SUMMARY
+        # alone) turned out not to work as intended -- confirmed directly
+        # by checking the resulting check-run's `output.summary` field via
+        # the public API after that fix shipped: it was still `null`.
+        # $GITHUB_STEP_SUMMARY only populates the run's "Summary" tab in
+        # the web UI (needs JS to render, no public REST endpoint reads
+        # it) -- a genuinely different surface from a check run's `output`
+        # field, which the public, unauthenticated check-runs API DOES
+        # expose. This step creates a SEPARATE, purpose-built check run
+        # (github.rest.checks.create) whose `output.summary` is the real
+        # pytest tail, using the workflow's own automatically-provisioned
+        # `GITHUB_TOKEN` (ephemeral, scoped only to this run, not an
+        # operator-supplied secret) -- `permissions.checks: write` above
+        # grants it the needed scope explicitly regardless of repo
+        # default token settings.
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const log = fs.readFileSync('backend/pytest_output.log', 'utf8');
+            const lines = log.split('\n');
+            const tail = lines.slice(-150).join('\n');
+            await github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'pytest-failure-detail',
+              head_sha: context.sha,
+              status: 'completed',
+              conclusion: 'neutral',
+              output: {
+                title: 'pytest output (last 150 lines)',
+                summary: '```\n' + tail + '\n```',
+              },
+            });
