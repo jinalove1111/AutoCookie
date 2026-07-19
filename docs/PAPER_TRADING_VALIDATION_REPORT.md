@@ -1,5 +1,14 @@
 # Paper Trading Pipeline Validation Report — Milestone 33
 
+> **UPDATE (2026-07-19, operator-approved fix, Milestone 34,
+> `ENGINEERING_DECISIONS.md` #72): Finding #1 is FIXED.**
+> `_check_and_close_open_positions()` now normalizes `opened_at` to
+> UTC-aware before the subtraction. Both the stop-loss and take-profit
+> close paths are verified via two passing regression tests (replacing
+> the original `xfail`) — `backend/tests/test_run_paper_exit_check.py`.
+> Findings #2-#6 below remain open/unresolved as originally reported;
+> only Finding #1 is updated by this note.
+
 Validation-phase deliverable (2026-07-19), operator directive: "You are
 entering Validation Phase... verify the paper trading pipeline
 end-to-end... measure end-to-end execution latency... identify any

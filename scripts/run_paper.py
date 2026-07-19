@@ -292,7 +292,25 @@ def _check_and_close_open_positions(current_price: float) -> list[int]:
             if risk_per_unit > 0 and position["size"] > 0
             else None
         )
+        # Fix (2026-07-19, docs/PAPER_TRADING_VALIDATION_REPORT.md Finding
+        # #1, ENGINEERING_DECISIONS.md #71/#72): Trade.opened_at is
+        # declared DateTime(timezone=True), but SQLite's SQLAlchemy dialect
+        # does not preserve timezone-awareness across a write/read
+        # round-trip -- `position["opened_at"]` (read back via
+        # TradeTracker.get_open_positions()) comes back timezone-NAIVE
+        # regardless of the column's declared type, while `closed_at`
+        # above is freshly created as timezone-AWARE
+        # (datetime.now(timezone.utc)). Subtracting an aware datetime from
+        # a naive one raises TypeError -- BEFORE close_trade() below ever
+        # runs, so the position never actually closed and every later
+        # pass's one-trade-open-at-a-time concurrency guard then skipped
+        # signal generation forever. Bookkeeping-only fix (normalizes
+        # opened_at to UTC-aware if naive before the subtraction); does
+        # not touch signal generation, risk evaluation, or exit-trigger
+        # logic (PaperBroker.check_exit already ran above, unchanged).
         opened_at = position.get("opened_at")
+        if opened_at is not None and opened_at.tzinfo is None:
+            opened_at = opened_at.replace(tzinfo=timezone.utc)
         holding_time_seconds = (
             (closed_at - opened_at).total_seconds() if opened_at is not None else None
         )

@@ -919,13 +919,32 @@ Neither number is real exchange order latency (Finding #3).
 Full suite: 789 passed, 1 xfailed (the new regression test), 0
 unexpected failures. No orders placed, no production code modified.
 
-**Recommended next milestone**: fix Finding #1 (highest-severity,
-narrowly-scoped, root-cause already identified -- `opened_at.replace(tzinfo=timezone.utc)`
-if naive, before the subtraction) with explicit operator sign-off, since
-`scripts/run_paper.py` is gated. Resolve Finding #2 by confirming the
-real `.env`'s `DEFAULT_TIMEFRAME` against the 15m safety-research
-standard. Both are prerequisites to trusting any further live-trading
-progress more than either is a "research" question.
+**Milestone 34 -- CLOSED (2026-07-19). Finding #1 FIXED, operator-approved.**
+`_check_and_close_open_positions()` (`scripts/run_paper.py`) now
+normalizes `opened_at` to UTC-aware before the `holding_time_seconds`
+subtraction (`opened_at.replace(tzinfo=timezone.utc)` if naive) -- the
+exact minimal fix recommended in Milestone 33. Bookkeeping-only change;
+no signal generation, risk evaluation, or exit-trigger logic touched.
+The original `xfail(strict=True)` regression test was replaced by two
+real, passing tests -- one forcing a take-profit close, one forcing a
+stop-loss close -- both verified against a throwaway temp DB, both now
+green, confirming a real trade's exit no longer permanently halts the
+pipeline. Full suite: 791 passed, 0 xfailed, 0 failures (up from 789
+passed + 1 xfailed). No orders placed, no strategy logic modified. See
+`ENGINEERING_DECISIONS.md` #72.
+
+**Remaining deployment blockers, unchanged from Milestone 33**: Finding
+#2 (cannot confirm which timeframe -- 5m or 15m -- the real production
+`.env` has actually used; needs operator access to the real deployment
+environment), Finding #3 (Gate #4's measured signal-to-fill latency
+requires new exchange order-placement infrastructure that does not
+exist yet -- not a research or measurement task), Finding #4 (the
+paper-trading process was not observably running during validation --
+needs operator confirmation of current deployment status), Finding #5
+(two dead observability tables, `strategy_logs`/`risk_events`, low
+priority). None of these are backtest-research questions -- all require
+either operator access to the real deployment or a genuine
+infrastructure build decision.
 
 **Standing awareness item, not an action item**: H4's evaluation flagged
 that any existing finding resting on Net Profit margins narrower than

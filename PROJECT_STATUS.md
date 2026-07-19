@@ -1145,6 +1145,43 @@ practice** (`scripts/cto_report.py`, milestone 17b below).
     failures. Full report: `docs/PAPER_TRADING_VALIDATION_REPORT.md`.
     Full rationale: `ENGINEERING_DECISIONS.md` #71.
 
+34. **Finding #1 fixed (operator-approved): exit-check no longer halts
+    the paper trader** (2026-07-19): operator approved the minimal fix
+    for milestone 33's Finding #1. `_check_and_close_open_positions()`
+    (`scripts/run_paper.py`) now normalizes `opened_at` to UTC-aware
+    (`opened_at.replace(tzinfo=timezone.utc)` if naive) immediately
+    before the `holding_time_seconds` subtraction, since SQLite silently
+    drops `Trade.opened_at`'s declared timezone-awareness on round-trip.
+    **Bookkeeping-only change**: `PaperBroker.check_exit()`'s actual
+    exit-trigger decision, `SignalEngine.generate_signal()`, and
+    `RiskManager.evaluate()` are all completely untouched -- per the
+    explicit "do not modify strategy logic" instruction, only the
+    `holding_time_seconds` metrics computation changed. The original
+    `xfail(strict=True)` regression test
+    (`backend/tests/test_run_paper_exit_check.py`) was replaced with two
+    independently-passing tests -- one forcing a take-profit close, one
+    forcing a stop-loss close -- both against a throwaway temp DB, both
+    now confirm the position actually reaches `status="closed"` with the
+    correct `exit_reason` and a valid `holding_time_seconds`. A real
+    test-isolation bug (unrelated to the production fix) was found and
+    fixed along the way: `run_paper` isn't purged from `sys.modules`
+    between tests by the shared `app.*`-purging fixture in
+    `conftest.py`, so a second test in the same file would otherwise
+    silently reuse a module still bound to the first test's
+    already-torn-down temp database. **Full suite: 791 passed, 0
+    xfailed, 0 failures** (up from 789 passed + 1 xfailed). No orders
+    placed, no strategy logic modified. **Remaining deployment
+    blockers, unchanged**: Finding #2 (cannot confirm which timeframe --
+    5m or 15m -- the real production `.env` has actually used), Finding
+    #3 (Gate #4's measured signal-to-fill latency requires new exchange
+    order-placement infrastructure that does not exist yet), Finding #4
+    (paper-trading process not observably running during validation),
+    Finding #5 (two dead observability tables, low priority) -- all
+    require either operator access to the real deployment environment or
+    a genuine infrastructure build decision, not further backtest
+    research. Full rationale: `ENGINEERING_DECISIONS.md` #72. Updated
+    report: `docs/PAPER_TRADING_VALIDATION_REPORT.md`.
+
 **Production-behavior note**: milestones 1-6 were purely additive/
 observational. Milestone 7 was the FIRST to change actual paper-trading
 sizing/rejection math (more conservative sizing in high volatility;

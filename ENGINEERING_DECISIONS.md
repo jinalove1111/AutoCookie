@@ -4995,3 +4995,78 @@ synthetic-signal testing used throwaway temp SQLite databases). Full
 suite 789 passed, 1 xfailed (the new regression test), 0 unexpected
 failures. Full report, cited not duplicated:
 `docs/PAPER_TRADING_VALIDATION_REPORT.md`.
+
+## 72. Milestone 34: Finding #1 fixed (operator-approved) -- `opened_at` normalized to UTC-aware before the holding-time subtraction, exit-check no longer halts the pipeline
+
+**Decision context**: decision #71 (Milestone 33) found and precisely
+root-caused a critical bug -- `_check_and_close_open_positions()`
+(`scripts/run_paper.py`) crashed with `TypeError: can't subtract
+offset-naive and offset-aware datetimes` the first time a real trade's
+stop-loss or take-profit was actually reached on a pass after the one
+that opened it, because SQLite's SQLAlchemy dialect silently drops
+`Trade.opened_at`'s declared `DateTime(timezone=True)` timezone-awareness
+on round-trip. The crash happened BEFORE `TradeTracker.close_trade()`
+ran, so the position never closed, and `run_once()`'s own
+one-trade-open-at-a-time concurrency guard then skipped all future
+signal generation while the stuck position remained open --
+permanently halting the paper trader. That decision recorded the finding
+and a recommended fix but did not implement it, since `scripts/run_paper.py`
+is one of the two files `CLAUDE.md` section 2 gates behind explicit
+operator sign-off. **Operator approved the fix this round** ("Proceed
+with Fix Finding #1. Implement the minimal safe fix... Do not modify
+strategy logic").
+
+**The fix**: `_check_and_close_open_positions()` now normalizes
+`opened_at` to UTC-aware if it comes back naive from the database,
+immediately before the `holding_time_seconds` subtraction:
+
+```python
+opened_at = position.get("opened_at")
+if opened_at is not None and opened_at.tzinfo is None:
+    opened_at = opened_at.replace(tzinfo=timezone.utc)
+holding_time_seconds = (
+    (closed_at - opened_at).total_seconds() if opened_at is not None else None
+)
+```
+
+**Scope, precisely bounded per the operator's "do not modify strategy
+logic" instruction**: this changes ONE bookkeeping computation
+(`holding_time_seconds`, an observability/metrics field) and nothing
+else. `PaperBroker.check_exit()` (the actual stop-loss/take-profit
+trigger decision) runs completely unchanged, before this code is ever
+reached -- the fix does not touch, and could not affect, whether or
+when a position's exit condition fires. `SignalEngine.generate_signal()`
+and `RiskManager.evaluate()` are untouched. This is exactly the class of
+change CLAUDE.md's gating exists to require sign-off for (a change to
+`scripts/run_paper.py`'s behavior) without being a change to any trading
+DECISION.
+
+**Verification**: the original `xfail(strict=True)` regression test
+(`backend/tests/test_run_paper_exit_check.py`, added in decision #71) was
+replaced with two real, independently-passing tests -- one forcing a
+take-profit exit, one forcing a stop-loss exit, both against a throwaway
+temp SQLite database (never the production DB), both asserting the
+position actually reaches `status="closed"` with the correct
+`exit_reason` and a non-`None`, non-negative `holding_time_seconds`. A
+real test-isolation issue was found and fixed along the way (unrelated
+to the production bug): `conftest.py`'s `fresh_app_env` fixture purges
+`app`/`app.*` from `sys.modules` between tests but not `run_paper`
+itself (outside that namespace), so a second test in the same file
+would otherwise reuse a `run_paper` module still bound to the FIRST
+test's already-torn-down temp database -- fixed by explicitly purging
+`run_paper` from `sys.modules` before each test's import, mirroring
+`conftest.py`'s own `_purge_app_modules` reasoning.
+
+**Result**: full suite 791 passed, 0 xfailed, 0 failures (up from 789
+passed + 1 xfailed) -- both close paths (stop-loss and take-profit)
+confirmed working correctly, no crash, no stuck position, no permanently
+halted pipeline.
+
+**Status**: `scripts/run_paper.py` was modified, with explicit prior
+operator sign-off, scoped to exactly the recommended minimal fix -- no
+other line in the file was touched. `RiskManager.evaluate()` was not
+touched. No orders placed; no writes to the production
+`backend/paper_validation.db`. Findings #2-#6 from decision #71 remain
+open and unresolved -- this decision closes out Finding #1 only. Full
+report, updated in place (correction banner, not a silent rewrite):
+`docs/PAPER_TRADING_VALIDATION_REPORT.md`.

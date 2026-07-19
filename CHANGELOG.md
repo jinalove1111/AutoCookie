@@ -4,6 +4,32 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Milestone 34: Finding #1 fixed (operator-approved) -- exit-check no longer halts the paper trader
+
+2026-07-19. Full detail: `ENGINEERING_DECISIONS.md` #72 (cite, don't
+duplicate here); updated report: `docs/PAPER_TRADING_VALIDATION_REPORT.md`.
+Operator approved the fix for Milestone 33's Finding #1:
+`_check_and_close_open_positions()` now normalizes `opened_at` to
+UTC-aware (`opened_at.replace(tzinfo=timezone.utc)` if naive) before the
+`holding_time_seconds` subtraction, since SQLite silently drops
+`Trade.opened_at`'s declared timezone-awareness on round-trip. This is a
+bookkeeping-only fix -- `PaperBroker.check_exit()`'s actual exit-trigger
+decision, `SignalEngine.generate_signal()`, and `RiskManager.evaluate()`
+are all untouched, per the explicit "do not modify strategy logic"
+instruction.
+
+The original `xfail(strict=True)` regression test was replaced with two
+independently-passing tests (forced take-profit close, forced
+stop-loss close), both verified against a throwaway temp DB. A real
+test-isolation bug was found and fixed along the way (unrelated to
+production): `run_paper` isn't purged from `sys.modules` between tests
+by the shared `app.*`-purging fixture, so a second test would silently
+reuse a module still bound to the first test's torn-down temp DB.
+
+Full suite: 791 passed, 0 xfailed, 0 failures (up from 789 passed + 1
+xfailed). No orders placed, no strategy logic modified. Remaining
+deployment blockers (Findings #2-#6) unchanged, still open.
+
 ## [Unreleased] - Milestone 33: Validation Phase begins -- critical exit-check bug found and root-caused, Gate #4 latency infrastructure gap confirmed
 
 2026-07-19. Full report: `docs/PAPER_TRADING_VALIDATION_REPORT.md`
