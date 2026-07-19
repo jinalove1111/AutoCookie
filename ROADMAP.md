@@ -946,6 +946,59 @@ priority). None of these are backtest-research questions -- all require
 either operator access to the real deployment or a genuine
 infrastructure build decision.
 
+**Milestone 35 -- CLOSED (2026-07-19). CTO platform evaluation.** Full
+analysis: `docs/CTO_PLATFORM_EVALUATION.md` (cite, don't duplicate
+here). Operator directive: "Evaluate the entire platform as the CTO...
+identify the highest ROI improvements... rank them." Surveyed the full
+platform (strategy layer, adaptive-platform infrastructure, validation
+findings, and previously-uncovered ground: frontend, API layer,
+CI/dev-infra, exchange/execution abstraction layer) and ranked 11
+improvements by Impact/Cost/Risk/Long-term-Value across
+Immediate/Short-term/Long-term buckets.
+
+**Two things newly surfaced this round, not previously documented
+anywhere**: (1) **no CI pipeline existed** -- 791 tests, entirely
+manually run, nothing automatically caught a regression on push/PR
+until this round; (2) **a dormant, fully-unimplemented exchange
+abstraction layer** -- `app.exchange.base_exchange.BaseExchange`
+(`fetch_ohlcv`/`place_order`/`cancel_order`/`get_balance`/
+`get_open_positions`) plus `OkxClient`/`OrangexClient` stubs and
+`app.execution.live_broker.LiveBroker` are 100% `NotImplementedError`,
+referenced nowhere in the active codebase, zero test coverage --
+directly relevant to Finding #3, since this already-designed contract
+is exactly the interface Gate #4's missing order-placement
+infrastructure would need. Building it means filling in an existing
+contract, not designing a new one -- and it duplicates
+`CandleFetcher`'s already-working job through a separate, unrelated
+class hierarchy, an architectural incoherence worth resolving
+deliberately when that work is scoped.
+
+**Top-ranked item**: real signal-to-fill latency measurement
+infrastructure (fill in `OkxClient`/`LiveBroker` against OKX's
+demo-trading API, wired into a NEW standalone measurement harness only,
+never into `run_paper.py`'s live path) -- the single highest-leverage
+remaining blocker, since it's the one item every other live-trading
+question is blocked BEHIND. **Raised for approval, not started** -- real
+external credentials and an architecture decision, outside what this
+evaluation can execute alone.
+
+**Done autonomously this round** (safe, zero production-behavior
+touch): (1) CI pipeline, `.github/workflows/backend-tests.yml`, runs
+the full suite on every push/PR; (2) a permanent warning comment on
+`Settings.DEFAULT_TIMEFRAME` (`backend/app/config.py`) cross-referencing
+Finding #2 -- comment only, the setting's VALUE is unchanged and the
+underlying ambiguity remains unresolved, still requiring operator access
+to the real deployment `.env`. Full suite 791/791 unchanged before and
+after both edits. `RiskManager.evaluate()`/`scripts/run_paper.py`
+untouched.
+
+**Explicitly not auto-started**: a genuinely constructive Jade
+hypothesis (H9: does a farther-target selection convention improve real
+Net Profit/win-rate) remains available and backtest-only-safe, but was
+not started -- honors the standing "do not create new hypotheses unless
+validation reveals a clear evidence gap" instruction; this evaluation
+did not surface a new evidence gap of that kind.
+
 **Standing awareness item, not an action item**: H4's evaluation flagged
 that any existing finding resting on Net Profit margins narrower than
 roughly 10-15% could plausibly flip under vol-scaled sizing and would

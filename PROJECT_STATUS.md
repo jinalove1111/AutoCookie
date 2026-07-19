@@ -1182,6 +1182,56 @@ practice** (`scripts/cto_report.py`, milestone 17b below).
     research. Full rationale: `ENGINEERING_DECISIONS.md` #72. Updated
     report: `docs/PAPER_TRADING_VALIDATION_REPORT.md`.
 
+35. **CTO platform evaluation: CI pipeline stood up, dormant
+    exchange-abstraction layer surfaced, 11 improvements ranked**
+    (2026-07-19): operator directive to evaluate the entire platform as
+    CTO and rank the highest-ROI improvements by Impact/Cost/Risk/
+    Long-term-Value across Immediate/Short-term/Long-term. Full-platform
+    survey covering previously-uncovered ground: frontend, API layer,
+    CI/dev-infra, exchange/execution abstraction layer. **Two things
+    newly surfaced, not previously documented anywhere**: (1) **no CI
+    pipeline existed** -- 791 tests, entirely manually run, nothing
+    automatically caught a regression on push/PR until this round; (2)
+    **a dormant, fully-unimplemented exchange-abstraction layer** --
+    `app.exchange.base_exchange.BaseExchange`
+    (`fetch_ohlcv`/`place_order`/`cancel_order`/`get_balance`/
+    `get_open_positions`) plus `OkxClient`/`OrangexClient` stubs and
+    `app.execution.live_broker.LiveBroker` are 100%
+    `NotImplementedError`, referenced nowhere in the active codebase,
+    zero test coverage -- directly relevant to Finding #3: this
+    already-designed contract is exactly the interface Gate #4's
+    missing order-placement infrastructure needs, so building it means
+    filling in an existing contract, not designing a new one; it also
+    duplicates `CandleFetcher`'s already-working job through a separate,
+    unrelated class hierarchy. Separately confirmed: the
+    `/dashboard/logs` route and frontend `LogsPanel` are both fully
+    built and already handle the empty state correctly -- not a
+    frontend bug, Finding #5's gap is entirely backend-side.
+    **Top-ranked item**: real signal-to-fill latency measurement
+    infrastructure (fill in `OkxClient`/`LiveBroker` against OKX's
+    demo-trading API, wired into a NEW standalone measurement harness
+    only, never into `run_paper.py`'s live path) -- the single
+    highest-leverage remaining blocker, since every other live-trading
+    question is blocked behind it. **Raised for approval, not started**:
+    requires real credentials and an architecture decision. **Done
+    autonomously this round** (safe, zero production-behavior touch):
+    (1) CI pipeline, `.github/workflows/backend-tests.yml`, runs the
+    full suite on every push/PR; (2) a permanent warning comment on
+    `Settings.DEFAULT_TIMEFRAME` (`backend/app/config.py`)
+    cross-referencing Finding #2 -- comment only, the setting's VALUE is
+    unchanged and the underlying ambiguity remains unresolved, still
+    requiring operator access to the real deployment `.env`. Full suite
+    791/791 unchanged before and after both edits.
+    `RiskManager.evaluate()`/`scripts/run_paper.py` untouched.
+    **Explicitly not auto-started**: a genuinely constructive Jade
+    hypothesis (H9: does a farther-target selection convention improve
+    real Net Profit/win-rate) remains available and backtest-only-safe,
+    but honors the standing "do not create new hypotheses unless
+    validation reveals a clear evidence gap" instruction -- this
+    evaluation did not surface a new evidence gap of that kind. Full
+    rationale: `ENGINEERING_DECISIONS.md` #73. Full report:
+    `docs/CTO_PLATFORM_EVALUATION.md`.
+
 **Production-behavior note**: milestones 1-6 were purely additive/
 observational. Milestone 7 was the FIRST to change actual paper-trading
 sizing/rejection math (more conservative sizing in high volatility;

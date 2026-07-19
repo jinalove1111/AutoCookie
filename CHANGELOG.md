@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - Milestone 35: CTO platform evaluation -- CI pipeline added, dormant exchange-abstraction layer surfaced, 11 improvements ranked
+
+2026-07-19. Full analysis: `docs/CTO_PLATFORM_EVALUATION.md` (cite,
+don't duplicate here). Operator directive: evaluate the entire platform
+as CTO, identify and rank the highest-ROI improvements by
+Impact/Cost/Risk/Long-term-Value, separate into
+Immediate/Short-term/Long-term.
+
+Two things newly surfaced, not previously documented: no CI pipeline
+existed (791 tests, entirely manually run); a dormant, fully-unimplemented
+exchange-abstraction layer (`BaseExchange`/`OkxClient`/`OrangexClient`/
+`LiveBroker`, all `NotImplementedError`, zero references, zero tests) --
+directly relevant to Finding #3, since it's the exact interface Gate
+#4's missing order-placement infrastructure needs; building it means
+filling in an existing contract, not designing a new one.
+
+Top-ranked item: real signal-to-fill latency measurement infrastructure
+-- raised for approval, not started (real credentials + architecture
+decision required).
+
+Done autonomously (safe, zero production-behavior touch): CI pipeline
+(`.github/workflows/backend-tests.yml`); a permanent warning comment on
+`Settings.DEFAULT_TIMEFRAME` cross-referencing Finding #2 (comment
+only, value unchanged). Full suite 791/791 unchanged before and after.
+`RiskManager.evaluate()`/`scripts/run_paper.py` untouched. H9 (a
+genuinely constructive Jade hypothesis) remains available but was not
+auto-started, per the standing "no new hypotheses without a clear
+evidence gap" instruction. Details: `ENGINEERING_DECISIONS.md` #73.
+
 ## [Unreleased] - Milestone 34: Finding #1 fixed (operator-approved) -- exit-check no longer halts the paper trader
 
 2026-07-19. Full detail: `ENGINEERING_DECISIONS.md` #72 (cite, don't

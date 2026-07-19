@@ -5070,3 +5070,114 @@ touched. No orders placed; no writes to the production
 open and unresolved -- this decision closes out Finding #1 only. Full
 report, updated in place (correction banner, not a silent rewrite):
 `docs/PAPER_TRADING_VALIDATION_REPORT.md`.
+
+## 73. Milestone 35: CTO platform evaluation -- CI pipeline stood up, a dormant fully-unimplemented exchange-abstraction layer surfaced, 11 improvements ranked by Impact/Cost/Risk/Long-term-Value
+
+**Decision context**: operator directive: "Evaluate the entire platform
+as the CTO. Identify the highest ROI improvements. Rank them... Separate
+them into Immediate/Short-term/Long-term. If a task can be completed
+safely without changing production trading behavior, implement it
+autonomously. If a task changes production behavior, financial risk, or
+system architecture, stop and request approval first." This is a
+full-platform survey, not a hypothesis and not another validation-pipeline
+check -- informed by everything already established (H1-H8,
+`docs/PHASE_TRANSITION_REVIEW.md`, `docs/PAPER_TRADING_VALIDATION_REPORT.md`)
+plus fresh inspection of ground not previously covered: the frontend,
+the API layer, CI/dev-infra, and the exchange/execution abstraction
+layer.
+
+**Two things surfaced this round that were not previously documented
+anywhere in this evidence base**:
+
+1. **No CI pipeline existed.** 791 tests, entirely manually run --
+   nothing automatically caught a regression on push/PR until this
+   round.
+2. **A dormant, parallel, fully-unimplemented exchange-abstraction
+   layer.** `app.exchange.base_exchange.BaseExchange` (an abstract
+   contract: `fetch_ohlcv`/`place_order`/`cancel_order`/`get_balance`/
+   `get_open_positions`) and its two concrete stubs,
+   `app.exchange.okx_client.OkxClient` and
+   `app.exchange.orangex_client.OrangexClient`, are 100%
+   `NotImplementedError` -- confirmed by direct source inspection.
+   `app.execution.live_broker.LiveBroker` (the real-money counterpart to
+   the working `PaperBroker`) is the same. None of these four classes is
+   referenced anywhere in the active codebase beyond their own
+   definitions (confirmed via exhaustive grep across `backend/` and
+   `scripts/`) -- completely dormant, zero test coverage. **Directly
+   relevant to Finding #3** (decision #71): this stub hierarchy already
+   defines the exact interface Gate #4's missing order-placement
+   infrastructure would need. Building it means filling in an
+   already-designed contract, not designing a new one. It also means the
+   REAL, working candle-fetch path (`app.data.candle_fetcher.CandleFetcher`,
+   confirmed live during the validation phase with real measured
+   latency) duplicates `BaseExchange.fetch_ohlcv`'s job through a
+   completely separate, unrelated class hierarchy -- a real
+   architectural incoherence worth resolving deliberately whenever the
+   latency-infrastructure item below is scoped, not accidentally.
+   Separately confirmed: the `/dashboard/logs` API route and the
+   frontend `LogsPanel` component are both fully built and already
+   correctly handle the empty state ("No recent log entries.") -- not a
+   frontend bug; Finding #5's `strategy_logs` gap (decision #71) is
+   entirely backend-side.
+
+**Ranking method**: 11 improvements scored 1 (low) - 5 (high) on
+Expected Impact, Development Cost, Risk, and Long-term Value (Risk
+inverted so 5 = highest risk, matching the other columns' convention),
+separated into Immediate/Short-term/Long-term. Full table:
+`docs/CTO_PLATFORM_EVALUATION.md` section 2.
+
+**Top-ranked item**: real signal-to-fill latency measurement
+infrastructure -- fill in `OkxClient`/`LiveBroker` against OKX's
+demo-trading API (never the real-money endpoint), wired into a NEW
+standalone measurement harness only (same pattern as
+`scripts/measure_pipeline_latency.py` from the validation phase), never
+into `run_paper.py`'s live path. The single highest-leverage remaining
+blocker -- every other live-trading question is blocked BEHIND it, not
+beside it. **Raised for approval, not started**: requires real OKX API
+credentials (even demo-mode credentials are real secrets per
+`docs/api_keys_security.md`) and an operator decision on which API
+tier/endpoint is appropriate -- outside what this evaluation can supply
+or decide alone.
+
+**Done autonomously this round** (safe, zero production-behavior touch,
+per the operator's own stated authorization boundary):
+
+1. **CI pipeline**, `.github/workflows/backend-tests.yml` -- runs the
+   full `backend/tests/` suite via `pytest` on every push/PR to
+   `master`. Pure repo/dev-infra: does not touch `scripts/run_paper.py`,
+   `RiskManager.evaluate()`, or any trading-decision code; only runs the
+   existing, already-passing suite.
+2. **Finding #2 recurrence-prevention**: a prominent, permanent warning
+   comment directly on `Settings.DEFAULT_TIMEFRAME`
+   (`backend/app/config.py`), cross-referencing the 5m/15m discrepancy
+   and citing `docs/PAPER_TRADING_VALIDATION_REPORT.md`/decision #71
+   directly. **Does not change the setting's VALUE** -- the underlying
+   ambiguity (Finding #2 itself) remains unresolved and still requires
+   operator access to the real deployment `.env`; this only ensures a
+   future session or direct reader of `config.py` cannot miss the
+   warning.
+
+Both changes verified against the full test suite (791 passed, 0
+failures, 0 xfailed -- unchanged from before either edit) before
+committing.
+
+**Explicitly not done this round, and why**: a genuinely constructive
+Jade hypothesis (H9: does a farther-target selection convention improve
+real Net Profit/win-rate, H8's own disclosed candidate) was NOT
+auto-started, honoring the standing "do not create new hypotheses unless
+validation reveals a clear evidence gap" instruction from the prior
+validation-phase turn -- this evaluation did not surface a new evidence
+gap of that kind, only re-confirmed H8's own already-disclosed one.
+Broader test-coverage work and a full security/secrets review (both
+flagged as safe and available, ranked items 6 and 8) were not executed
+in full, to keep this deliverable's own scope bounded to what was
+explicitly asked (evaluate, rank, implement what's safe) rather than
+expanding into an open-ended engineering sprint unprompted.
+
+**Status**: `.github/workflows/backend-tests.yml` added (new file, pure
+CI config, cannot affect trading behavior). `backend/app/config.py`
+received a comment-only change (no value changed).
+`RiskManager.evaluate()` and `scripts/run_paper.py` were not touched.
+No orders placed; no writes to the production `backend/paper_validation.db`.
+Full suite 791/791, unchanged. Full report, cited not duplicated:
+`docs/CTO_PLATFORM_EVALUATION.md`.

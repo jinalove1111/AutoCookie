@@ -37,6 +37,22 @@ class Settings(BaseSettings):
     # --- Market / exchange selection ---
     EXCHANGE: str = "okx"
     SYMBOL: str = "BTCUSDT"
+    # WARNING (docs/PAPER_TRADING_VALIDATION_REPORT.md Finding #2,
+    # ENGINEERING_DECISIONS.md #71, unresolved): this default (and
+    # .env.example's documented value) is "5m", but nearly this entire
+    # project's delay-fragility safety research -- the evidentiary basis
+    # for docs/live_trading_checklist.md's Gate #4 hardening -- was
+    # conducted at "15m" (docs/LEGACY_DELAY_ROBUSTNESS.md,
+    # docs/ATR_FLOOR_EVALUATION.md, every hypothesis H1-H8). If the real
+    # deployment's .env has been running this at the 5m default, "one
+    # candle of delay" there is 5 minutes, not the 15-minute figure Gate
+    # #4 is built around, and the strategy's own timeframe-relative
+    # stop/target/structural-level computations would differ
+    # meaningfully. NOT resolved by this comment -- confirming the real
+    # deployed value requires operator access to the actual .env (which
+    # is gitignored and not in this repository). Do not change this
+    # default's VALUE without that confirmation and without re-running
+    # the delay-fragility check at whichever timeframe is confirmed real.
     DEFAULT_TIMEFRAME: str = "5m"
     HTF_TIMEFRAME: str = "4h"
 

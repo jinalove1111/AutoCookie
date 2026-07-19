@@ -1,0 +1,38 @@
+name: backend-tests
+
+# CTO evaluation (2026-07-19, docs/CTO_PLATFORM_EVALUATION.md): the first
+# CI pipeline this repository has ever had. 791 tests existed and were
+# run manually before this file -- nothing automatically caught a
+# regression on push/PR until now. Pure repo/dev-infra: does not touch
+# scripts/run_paper.py, RiskManager.evaluate(), or any trading-decision
+# code, and cannot affect production trading behavior -- it only runs
+# the existing test suite (backend/tests/, sqlite-backed, no real
+# network/exchange calls in the suite itself beyond what individual
+# tests already mock or explicitly skip).
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run test suite
+        run: python -m pytest tests/ -q
