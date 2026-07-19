@@ -62,6 +62,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from _cli_path_utils import normalize_path_arg  # noqa: E402
 from app.backtesting.regime_analysis import aggregate_by_regime, comparison_table  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.strategy.experimental import EXPERIMENTAL_STRATEGIES, all_strategies  # noqa: E402
@@ -276,7 +277,7 @@ def main() -> int:
     # other printing surprise) can never lose already-computed results. ---
     table = comparison_table(rows_by_strategy)
 
-    output_path = Path(args.output).resolve()
+    output_path = normalize_path_arg(args.output).resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(table, encoding="utf-8")
 

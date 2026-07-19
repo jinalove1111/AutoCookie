@@ -4,7 +4,32 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased] - Milestone 39: the real root cause of the CI failure, found and fixed -- a Windows-vs-Linux pathlib bug in five scripts, not a dependency mystery
+## [Unreleased] - Milestone 40: path-argument fix generalized to write-target arguments; paper-trader log-content scanning added to health checks
+
+2026-07-20. Operator directive: treat CI verification as a background
+task, continue improving research quality, monitoring, paper-trading
+robustness, and technical debt.
+
+**Systemic fix, part 2**: a follow-up grep found the same
+Windows-vs-Linux path bug (Milestone 39) on write-target
+(`--output`/`--alert-log`) arguments in 6 more scripts
+(`cto_report.py`, `paper_trader_health_check.py`,
+`analyze_regime_performance.py`, `research_regime_delay.py`,
+`research_signal_selection.py`, `run_backtest.py`). Fixed with the same
+shared helper, renamed `normalize_db_path_arg` -> `normalize_path_arg`
+since it's no longer DB-specific.
+
+**Monitoring**: `scripts/paper_trader_health_check.py` gains
+`check_log_errors()`/`--log-file` -- scans the trader's own stdout log
+for `ERROR:`/`WARNING:`/`ALERT:` lines that never trip the circuit
+breaker or cause snapshot staleness. 11 new tests. Deployed against the
+live trader's log.
+
+`RiskManager.evaluate()`/`scripts/run_paper.py` untouched. No real
+credentials used, no live trading, no destructive actions, no
+architecture redesign. Full suite 849/849.
+
+## Milestone 39: the real root cause of the CI failure, found and fixed -- a Windows-vs-Linux pathlib bug in five scripts, not a dependency mystery
 
 2026-07-20. Verified Milestone 38's own CI fix before doing anything
 else -- it worked this time, surfacing the real pytest traceback for

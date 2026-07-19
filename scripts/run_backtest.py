@@ -72,6 +72,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from _cli_path_utils import normalize_path_arg
+
 from app.config import settings
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -1298,7 +1300,7 @@ def main() -> int:
                 print(f"  OVERALL                 : {'PASSED' if overall_passed else 'FAILED'}")
 
     # --- 4. Write markdown report(s) + CSV trade export(s) ---
-    output_path = Path(args.output).resolve()
+    output_path = normalize_path_arg(args.output).resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     report_generator = ReportGenerator()
 

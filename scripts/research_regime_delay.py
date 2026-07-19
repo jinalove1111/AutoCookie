@@ -95,6 +95,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from _cli_path_utils import normalize_path_arg  # noqa: E402
 from app.backtesting.regime_analysis import (  # noqa: E402
     ALL_BUCKET,
     MIN_TRADES_FOR_CONFIDENCE,
@@ -398,7 +399,7 @@ def main(argv: list[str] | None = None) -> int:
     print()
     print(table)
 
-    output_path = Path(args.output).resolve()
+    output_path = normalize_path_arg(args.output).resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_payload = {
         "symbol": args.symbol,

@@ -5660,3 +5660,84 @@ recorded here; the fix itself is small enough not to warrant a separate
 results doc (`scripts/_cli_path_utils.py`'s own docstring carries the
 full context, cite-don't-duplicate applies to future readers of that
 file directly).
+
+## 78. Milestone 40: the same path-argument bug generalized to write-target (`--output`/`--alert-log`) arguments across six more scripts, and a genuine gap closed in `paper_trader_health_check.py` -- log-content scanning, not just DB-state checks
+
+**Decision context**: operator directive -- treat CI verification as a
+background task rather than blocking on GitHub's rate limit; continue
+improving the platform (research quality, monitoring, paper-trading
+robustness, technical debt) while periodically rechecking CI in the
+background. A background poll loop (`Monitor`, 15-minute interval,
+respecting the rate limit) was set up for that purpose; this decision
+covers the platform work done while it ran.
+
+**Systemic fix, part 2**: `ENGINEERING_DECISIONS.md` #77 fixed the
+read-path half of the Windows-vs-Linux `pathlib` bug (`db_path =
+Path(args.db_path)`) in five scripts. A follow-up grep for
+`Path(args.` (not just `args.db_path` specifically) found the SAME bug
+class on WRITE-target arguments (`--output`, `--alert-log`) in six more
+call sites: `scripts/cto_report.py` (`--output`),
+`scripts/paper_trader_health_check.py` (`--alert-log`),
+`scripts/analyze_regime_performance.py`, `scripts/research_regime_delay.py`,
+`scripts/research_signal_selection.py`, and `scripts/run_backtest.py`
+(all `--output`). Unlike the read-path bug (which failed loudly via a
+missing-file check, degrading gracefully), a mis-parsed WRITE path on a
+real POSIX runner would silently create a file with a literal-backslash
+name in the wrong location instead of erroring -- a real, if less
+immediately visible, instance of the same class of bug, never yet
+triggered in practice (no evidence any of these scripts has actually
+been invoked this way in production) but preventatively fixed on the
+same reasoning that made the read-path version worth fixing everywhere
+at once. **Renamed** `normalize_db_path_arg` to the now-accurate
+`normalize_path_arg` before it had callers outside `_cli_path_utils.py`
+itself -- the narrower name was this session's original, discovered-in-
+the-moment name from `ENGINEERING_DECISIONS.md` #77 and no longer fit
+once the same helper applied to non-DB paths. All 6 new call sites
+verified importable (`python -c "import <module>"` against each,
+`PYTHONPATH` set) before running tests, not just syntax-checked.
+
+**Genuine monitoring gap closed**: `scripts/paper_trader_health_check.py`
+(milestones 37-38) checked only DB STATE (circuit breaker, snapshot
+freshness, open-position count) -- never the trader's own redirected
+stdout log CONTENT, where `scripts/run_paper.py`'s own established
+"honesty discipline" (per its module docstring) prints `ERROR:`/
+`WARNING:`/`ALERT:`-prefixed lines for every degraded-but-not-fatal
+step. A transient fetch failure that gets retried next pass, or a
+best-effort shadow-mode write that silently no-ops, would never trip
+the circuit breaker or cause snapshot staleness -- invisible to anyone
+not manually reading the raw log. New `check_log_errors(log_path,
+tail_lines=500)`: scans the trailing N lines for these prefixes;
+`ERROR:`/`ALERT:` count as UNHEALTHY, `WARNING:` alone does not (this
+project's own "WARN-and-default" design is intentional, working-as-
+designed degradation, not a bug to alarm on). New `--log-file` CLI flag
+(optional; `NOT_CHECKED` status when omitted, so existing invocations
+without it are unaffected). 11 new tests (missing file, clean log,
+warnings-only, error detection, alert detection, tail-window
+boundedness, recent-errors capped to 5, `run_single_check`/`main`
+integration) -- two of the integration tests initially had a real bug
+in the TEST itself (not the code): asserting `unhealthy is False`/`True`
+without inserting a `RegimeSnapshot` row first, so `NO_SNAPSHOTS_YET`
+freshness silently drove the assertion instead of the log-error path
+being tested -- caught by running the tests, not assumed correct,
+fixed by isolating each check with a fresh snapshot row. Smoke-tested
+against the real live trader log (currently CLEAN, 0 errors/warnings
+across 130+ iterations) before deploying. **Deployed**: killed the two
+stale `--watch` processes running the pre-fix code (parent/child pair
+from the milestone-38 launch) and relaunched a single instance with
+`--log-file` pointed at the live trader's log, same production interval
+(120s poll, heartbeat every 30).
+
+**Research quality (Priority 1 of this round's instruction)**: reviewed
+`docs/HYPOTHESIS_BACKLOG.md`/`docs/EXPERIMENT_INDEX.md` for staleness --
+both still accurate, nothing resolved or newly identified this round,
+correctly left untouched rather than padded with a restatement. No
+hypothesis fabricated; H9 remains available, not auto-started.
+
+**Status**: `RiskManager.evaluate()`/`scripts/run_paper.py` themselves
+untouched. No real credentials used or fabricated; no live trading
+enabled; no destructive actions (killing/relaunching the health-check
+watcher is monitoring tooling, not the gated live-trading process
+itself). No architecture redesign. Full suite 849/849 (838 + 11 new).
+CI verification itself handled as a genuine background task (`Monitor`,
+15-minute poll interval) rather than blocking this round's work on
+GitHub's rate limit, per explicit operator instruction.

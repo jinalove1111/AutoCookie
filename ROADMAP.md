@@ -1289,6 +1289,52 @@ five scripts updated to import it instead of duplicating the logic. All
 credentials used or fabricated; no live trading enabled; no destructive
 actions; no architecture redesign. Full suite 832/832 (827 + 5 new).
 
+**Milestone 40 -- CLOSED (2026-07-20). The same path-argument bug
+generalized to write-target arguments across six more scripts; a
+genuine gap closed in `paper_trader_health_check.py` -- log-content
+scanning, not just DB state.**
+Full deliverables: `scripts/_cli_path_utils.py` (renamed + extended),
+`scripts/cto_report.py`/`analyze_regime_performance.py`/
+`research_regime_delay.py`/`research_signal_selection.py`/
+`run_backtest.py` (write-path fix applied), `scripts/paper_trader_health_check.py`
+(`check_log_errors`, `--log-file`). Full rationale:
+`ENGINEERING_DECISIONS.md` #78.
+
+Operator directive: treat CI verification as a background task (a
+15-minute-interval poll `Monitor` set up for this) rather than blocking
+on GitHub's rate limit; continue improving research quality,
+monitoring, paper-trading robustness, and technical debt.
+
+**Systemic fix, part 2**: a follow-up grep for `Path(args.` (not just
+`args.db_path`) found the same bug on WRITE-target arguments
+(`--output`/`--alert-log`) in 6 more call sites. A mis-parsed write path
+on real Linux would silently create a file with a literal-backslash
+name in the wrong location instead of erroring -- never triggered in
+practice, fixed preventatively on the same reasoning as the read-path
+fix. Renamed `normalize_db_path_arg` -> `normalize_path_arg` before it
+had callers outside its own module. All 6 new call sites verified
+importable, not just syntax-checked.
+
+**Genuine monitoring gap closed**: the health-check tool only ever
+checked DB state, never the trader's own stdout log CONTENT, where
+`run_paper.py`'s own established discipline prints `ERROR:`/
+`WARNING:`/`ALERT:`-prefixed lines for degraded-but-not-fatal steps that
+never trip the circuit breaker or cause staleness. New
+`check_log_errors()` (errors/alerts -> UNHEALTHY, warnings alone do
+not) and a new `--log-file` flag. 11 new tests -- 2 integration tests
+initially had a real bug in the TEST itself, caught by running them,
+not assumed correct. Smoke-tested against the real live trader log
+(CLEAN), then deployed -- killed two stale pre-fix watch processes and
+relaunched one instance with `--log-file` wired in.
+
+**Research quality**: reviewed the hypothesis backlog/experiment index
+for staleness -- both accurate, correctly left untouched; no hypothesis
+fabricated.
+
+`RiskManager.evaluate()`/`scripts/run_paper.py` untouched. No real
+credentials used or fabricated; no live trading enabled; no destructive
+actions; no architecture redesign. Full suite 849/849 (838 + 11 new).
+
 **Standing awareness item, not an action item**: H4's evaluation flagged
 that any existing finding resting on Net Profit margins narrower than
 roughly 10-15% could plausibly flip under vol-scaled sizing and would

@@ -106,6 +106,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from _cli_path_utils import normalize_path_arg  # noqa: E402
 from app.backtesting.backtest_engine import (  # noqa: E402
     MIN_CANDLES,
     BacktestEngine,
@@ -599,7 +600,7 @@ def main(argv: list[str] | None = None) -> int:
         report["variants"][variant] = entry
         print(json.dumps(entry, indent=2, default=str))
 
-    output_path = Path(args.output)
+    output_path = normalize_path_arg(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report, indent=2, default=str))
     print(f"\nWritten to {output_path}")

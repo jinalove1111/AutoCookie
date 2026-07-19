@@ -1510,6 +1510,52 @@ practice** (`scripts/cto_report.py`, milestone 17b below).
     in existing CLI argument handling. **Full suite 832/832** (827 + 5
     new). Full rationale: `ENGINEERING_DECISIONS.md` #77.
 
+40. **The same path-argument bug generalized to write-target arguments
+    across six more scripts; a genuine gap closed in
+    `paper_trader_health_check.py` — log-content scanning, not just DB
+    state** (2026-07-20): operator directive — treat CI verification as
+    a background task (a 15-minute-interval poll `Monitor` set up for
+    this) rather than blocking on GitHub's rate limit; continue
+    improving research quality, monitoring, paper-trading robustness,
+    and technical debt. **Systemic fix, part 2**: a follow-up grep for
+    `Path(args.` (not just `args.db_path`) found the same Windows-vs-
+    Linux bug on WRITE-target arguments (`--output`/`--alert-log`) in 6
+    more call sites (`cto_report.py`, `paper_trader_health_check.py`,
+    `analyze_regime_performance.py`, `research_regime_delay.py`,
+    `research_signal_selection.py`, `run_backtest.py`) — a mis-parsed
+    write path on real Linux would silently create a file with a
+    literal-backslash name in the wrong location instead of erroring;
+    never triggered in practice, fixed preventatively on the same
+    reasoning as the read-path version. Renamed the shared helper
+    `normalize_db_path_arg` → `normalize_path_arg` before it had callers
+    outside its own module. All 6 new call sites verified importable,
+    not just syntax-checked. **Genuine monitoring gap closed**:
+    `scripts/paper_trader_health_check.py` only ever checked DB state,
+    never the trader's own stdout log CONTENT, where
+    `scripts/run_paper.py`'s own established discipline prints
+    `ERROR:`/`WARNING:`/`ALERT:`-prefixed lines for degraded-but-not-
+    fatal steps that never trip the circuit breaker or cause staleness.
+    New `check_log_errors()` (`ERROR:`/`ALERT:` → UNHEALTHY,
+    `WARNING:` alone does not, matching this project's intentional
+    "WARN-and-default" design) and a new optional `--log-file` flag. 11
+    new tests — 2 integration tests initially had a real bug in the
+    TEST itself (asserting on `unhealthy` without inserting a
+    `RegimeSnapshot` row, so `NO_SNAPSHOTS_YET` silently drove the
+    result instead of the log-error path being tested) — caught by
+    running the tests, not assumed correct, fixed by isolating each
+    check properly. Smoke-tested against the real live trader log
+    (CLEAN, 0 errors/warnings across 130+ iterations), then deployed —
+    killed two stale pre-fix `--watch` processes and relaunched one
+    instance with `--log-file` wired in, same production interval.
+    **Research quality**: reviewed `docs/HYPOTHESIS_BACKLOG.md`/
+    `docs/EXPERIMENT_INDEX.md` for staleness — both still accurate,
+    correctly left untouched rather than padded; no hypothesis
+    fabricated. `RiskManager.evaluate()`/`scripts/run_paper.py`
+    untouched; no real credentials used or fabricated; no live trading
+    enabled; no destructive actions; no architecture redesign. **Full
+    suite 849/849** (838 + 11 new). Full rationale:
+    `ENGINEERING_DECISIONS.md` #78.
+
 **Production-behavior note**: milestones 1-6 were purely additive/
 observational. Milestone 7 was the FIRST to change actual paper-trading
 sizing/rejection math (more conservative sizing in high volatility;

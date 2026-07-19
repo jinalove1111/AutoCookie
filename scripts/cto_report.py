@@ -47,7 +47,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from _cli_path_utils import normalize_db_path_arg
+from _cli_path_utils import normalize_path_arg
 
 # scripts/ is a sibling of backend/ -- make the app package importable,
 # same convention every other scripts/ entry point (shadow_status.py,
@@ -624,7 +624,7 @@ def _default_output_path() -> Path:
 
 def main() -> int:
     args = _parse_args()
-    db_path = normalize_db_path_arg(args.db_path)
+    db_path = normalize_path_arg(args.db_path)
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     completed = _gather_completed_work(args.since)
@@ -655,7 +655,7 @@ def main() -> int:
 
     report = compose_report(sections, title="Daily CTO Report", generated_at=generated_at)
 
-    output_path = Path(args.output) if args.output else _default_output_path()
+    output_path = normalize_path_arg(args.output) if args.output else _default_output_path()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     # File write BEFORE print (decision #54).
     output_path.write_text(report, encoding="ascii")

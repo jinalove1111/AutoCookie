@@ -59,7 +59,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from _cli_path_utils import normalize_db_path_arg
+from _cli_path_utils import normalize_path_arg
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
@@ -70,6 +70,7 @@ DEFAULT_EXPECTED_INTERVAL_SECONDS = 300
 DEFAULT_ALERT_LOG_PATH = SCRIPT_DIR / "reports" / "paper_trader_health_alerts.log"
 DEFAULT_POLL_INTERVAL_SECONDS = 60
 DEFAULT_HEARTBEAT_EVERY = 30
+DEFAULT_LOG_TAIL_LINES = 500
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -126,6 +127,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--alert-log",
         default=str(DEFAULT_ALERT_LOG_PATH),
         help=f"Append-only log path for --watch mode (default: {DEFAULT_ALERT_LOG_PATH}).",
+    )
+    parser.add_argument(
+        "--log-file",
+        default=None,
+        help=(
+            "Optional path to the paper trader's own redirected stdout "
+            "log -- when given, the trailing "
+            f"{DEFAULT_LOG_TAIL_LINES} lines are scanned for "
+            "ERROR:/WARNING:/ALERT: lines (ERROR:/ALERT: count as "
+            "UNHEALTHY; WARNING: alone does not). Not checked if omitted."
+        ),
     )
     return parser.parse_args(argv)
 
@@ -218,7 +230,51 @@ def check_open_positions(conn: sqlite3.Connection) -> dict:
     return {"status": status, "count": n, "open_trades": open_trades}
 
 
-def run_single_check(db_path: Path, expected_interval_seconds: int) -> tuple[bool, dict]:
+def check_log_errors(log_path: Path | None, tail_lines: int = DEFAULT_LOG_TAIL_LINES) -> dict:
+    """Scan the trailing `tail_lines` of the trader's own stdout log (if
+    `log_path` is provided) for `ERROR:`/`WARNING:`/`ALERT:`-prefixed
+    lines -- `scripts/run_paper.py`'s own established print convention
+    for every degraded-but-not-fatal step (see its module docstring's
+    "honesty discipline"). These don't always trip the circuit breaker
+    or cause `regime_snapshots` staleness (e.g. a transient fetch
+    failure that gets retried next pass, or a best-effort shadow-mode
+    write that silently no-ops) -- without this check they're invisible
+    to anyone not manually reading the raw redirected stdout log.
+    `WARNING:` alone is not treated as unhealthy (this project's own
+    "WARN-and-default" design is intentional, working-as-designed
+    degradation); `ERROR:`/`ALERT:` lines are.
+    """
+    if log_path is None:
+        return {"status": "NOT_CHECKED", "error_count": 0, "warning_count": 0, "recent_errors": []}
+    if not log_path.exists():
+        return {"status": "LOG_FILE_MISSING", "error_count": 0, "warning_count": 0, "recent_errors": []}
+
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as exc:
+        return {"status": f"LOG_READ_FAILED: {exc}", "error_count": 0, "warning_count": 0, "recent_errors": []}
+
+    tail = lines[-tail_lines:]
+    errors = [line for line in tail if line.startswith("ERROR:") or line.startswith("ALERT:")]
+    warnings = [line for line in tail if line.startswith("WARNING:")]
+
+    if errors:
+        status = "ERRORS_PRESENT"
+    elif warnings:
+        status = "WARNINGS_PRESENT"
+    else:
+        status = "CLEAN"
+    return {
+        "status": status,
+        "error_count": len(errors),
+        "warning_count": len(warnings),
+        "recent_errors": errors[-5:],
+    }
+
+
+def run_single_check(
+    db_path: Path, expected_interval_seconds: int, log_path: Path | None = None
+) -> tuple[bool, dict]:
     """Run one full check against `db_path`. Returns (unhealthy, results).
     Raises `sqlite3.OperationalError` if the DB can't be opened read-only
     -- callers decide how to report that (a one-shot exit vs. a --watch
@@ -232,18 +288,27 @@ def run_single_check(db_path: Path, expected_interval_seconds: int) -> tuple[boo
     finally:
         conn.close()
 
+    log_errors = check_log_errors(log_path)
+
     unhealthy = (
         breaker["status"] == "TRIPPED"
         or freshness["status"] in ("STALE", "NO_SNAPSHOTS_YET")
         or positions["status"] != "OK"
+        or log_errors["status"] == "ERRORS_PRESENT"
     )
-    return unhealthy, {"breaker": breaker, "freshness": freshness, "positions": positions}
+    return unhealthy, {
+        "breaker": breaker,
+        "freshness": freshness,
+        "positions": positions,
+        "log_errors": log_errors,
+    }
 
 
 def _print_report(db_path: Path, results: dict, unhealthy: bool) -> None:
     breaker = results["breaker"]
     freshness = results["freshness"]
     positions = results["positions"]
+    log_errors = results["log_errors"]
     print(f"Paper trader health check -- {db_path}")
     print(f"  Circuit breaker : {breaker['status']}"
           + (f" (reason={breaker['reason']!r}, tripped_at={breaker['tripped_at']})"
@@ -255,6 +320,13 @@ def _print_report(db_path: Path, results: dict, unhealthy: bool) -> None:
     print(f"  Open positions  : {positions['status']} (count={positions['count']})")
     for t in positions["open_trades"]:
         print(f"    - id={t['id']} {t['symbol']} {t['direction']} opened_at={t['opened_at']}")
+    if log_errors["status"] != "NOT_CHECKED":
+        print(
+            f"  Log errors      : {log_errors['status']} "
+            f"(errors={log_errors['error_count']}, warnings={log_errors['warning_count']})"
+        )
+        for line in log_errors["recent_errors"]:
+            print(f"    - {line}")
     print(f"\nOverall: {'UNHEALTHY' if unhealthy else 'HEALTHY'}")
 
 
@@ -262,7 +334,8 @@ def _summarize(results: dict) -> str:
     return (
         f"breaker={results['breaker']['status']} "
         f"freshness={results['freshness']['status']} "
-        f"positions={results['positions']['status']}(count={results['positions']['count']})"
+        f"positions={results['positions']['status']}(count={results['positions']['count']}) "
+        f"log_errors={results['log_errors']['status']}"
     )
 
 
@@ -279,6 +352,7 @@ def run_watch(
     heartbeat_every: int,
     max_checks: int,
     alert_log_path: Path,
+    log_path: Path | None = None,
 ) -> int:
     """Poll indefinitely (or `max_checks` times), logging to
     `alert_log_path` only on a HEALTHY<->UNHEALTHY transition or every
@@ -296,7 +370,7 @@ def run_watch(
         while max_checks == 0 or checks_done < max_checks:
             now = datetime.now(timezone.utc).isoformat()
             try:
-                unhealthy, results = run_single_check(db_path, expected_interval_seconds)
+                unhealthy, results = run_single_check(db_path, expected_interval_seconds, log_path)
                 summary = _summarize(results)
             except sqlite3.OperationalError as exc:
                 unhealthy, summary = True, f"DB_OPEN_FAILED: {exc}"
@@ -326,7 +400,8 @@ def run_watch(
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    db_path = normalize_db_path_arg(args.db_path)
+    db_path = normalize_path_arg(args.db_path)
+    log_path = normalize_path_arg(args.log_file) if args.log_file else None
 
     if args.watch:
         return run_watch(
@@ -335,11 +410,12 @@ def main(argv: list[str] | None = None) -> int:
             args.poll_interval_seconds,
             args.heartbeat_every,
             args.max_checks,
-            Path(args.alert_log),
+            normalize_path_arg(args.alert_log),
+            log_path,
         )
 
     try:
-        unhealthy, results = run_single_check(db_path, args.expected_interval_seconds)
+        unhealthy, results = run_single_check(db_path, args.expected_interval_seconds, log_path)
     except sqlite3.OperationalError as exc:
         print(f"REFUSING/FAILED TO OPEN {db_path} read-only: {exc}")
         return 1
