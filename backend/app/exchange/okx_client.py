@@ -5,9 +5,18 @@ implements the BaseExchange contract's READ-ONLY methods
 (`fetch_ohlcv`/`get_balance`/`get_open_positions`) against OKX's real v5
 REST API, with the private (authenticated) request/signing plumbing built
 and tested against mocked HTTP responses only -- no real network call has
-ever been made by this module or its tests. `place_order`/`cancel_order`
-remain `NotImplementedError` on purpose: they are Phase 1 scope (a
-separate approval gate in the roadmap), not implemented here.
+ever been made by this module or its tests.
+
+Phase 1 (this addition): implements `place_order`/`cancel_order` (demo-
+only order placement/cancellation) plus a new, OKX-specific
+`get_order_status` method (not part of `BaseExchange`'s abstract
+contract). Still tested against mocked HTTP responses only -- no real
+network call is made by this module or its tests; the separate demo-
+account verification step is out of scope for this change. Idempotency
+(client-generated `clOrdId`, no blind retry on order-mutating POSTs, and
+safe-no-op cancellation of an already-filled/canceled/nonexistent order)
+follows `docs/EXCHANGE_LAYER_IMPLEMENTATION_ROADMAP.md` sections 3 and 6
+-- see the per-method docstrings below for the specifics.
 
 Authentication scheme confirmed against OKX's own v5 API docs (not
 guessed) at implementation time: `OK-ACCESS-KEY` / `OK-ACCESS-SIGN`
@@ -33,20 +42,31 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
 import httpx
 
 from app.config import settings
-from app.data.candle_fetcher import CandleFetcher
+from app.data.candle_fetcher import CandleFetcher, to_okx_symbol
 
 from .base_exchange import BaseExchange
 
 OKX_BASE_URL = "https://www.okx.com"
 OKX_BALANCE_PATH = "/api/v5/account/balance"
 OKX_POSITIONS_PATH = "/api/v5/account/positions"
+
+# Phase 1 (order lifecycle) paths. Confirmed against OKX's real v5 API
+# reference at implementation time, not guessed:
+#   POST /api/v5/trade/order          -- place order
+#   POST /api/v5/trade/cancel-order   -- cancel order
+#   GET  /api/v5/trade/order          -- get order details (same path as
+#                                         placement, different HTTP verb)
+OKX_PLACE_ORDER_PATH = "/api/v5/trade/order"
+OKX_CANCEL_ORDER_PATH = "/api/v5/trade/cancel-order"
 
 # Applied only to the new private (authenticated) read calls this module
 # adds -- deliberately NOT applied to CandleFetcher's existing public-data
@@ -63,7 +83,8 @@ class OkxAuthError(RuntimeError):
 
 
 class OkxClient(BaseExchange):
-    """OKX-specific implementation of the BaseExchange contract (Phase 0: read-only)."""
+    """OKX-specific implementation of the BaseExchange contract (Phase 0
+    read-only methods plus Phase 1 order lifecycle: place/cancel/status)."""
 
     def __init__(
         self,
@@ -165,6 +186,47 @@ class OkxClient(BaseExchange):
             f"Failed to reach OKX private endpoint {request_path_with_query}: {last_exc}"
         )
 
+    def _private_post(self, request_path: str, body: dict[str, Any]) -> dict[str, Any]:
+        """POST a JSON body to a private OKX endpoint.
+
+        The body is serialized to a string exactly once, and that same
+        string is both signed (`_sign`'s `body` parameter, per OKX's
+        `timestamp + method + requestPath + body` signing spec) and sent
+        on the wire -- they must match byte-for-byte or OKX rejects the
+        signature.
+
+        Deliberately NO retry here, unlike `_private_get`. Per
+        docs/EXCHANGE_LAYER_IMPLEMENTATION_ROADMAP.md section 6: a lost
+        response to a POST that mutates exchange state (order placement,
+        cancellation) is ambiguous -- the order may or may not have
+        reached OKX -- so a blind retry risks a duplicate order/cancel.
+        Safe retry would require checking order status first via
+        `get_order_status`, which this phase does not wire up
+        automatically. Do not "fix" this into a retry loop.
+        """
+        body_str = json.dumps(body, separators=(",", ":")) if body else ""
+        headers = self._private_headers("POST", request_path, body_str)
+        try:
+            response = httpx.post(
+                f"{OKX_BASE_URL}{request_path}",
+                headers=headers,
+                content=body_str,
+                timeout=self._timeout,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise ConnectionError(
+                f"Failed to reach OKX private endpoint {request_path}: {exc}"
+            ) from exc
+
+        payload = response.json()
+        if payload.get("code") != "0":
+            raise RuntimeError(
+                f"OKX private request failed for {request_path}: "
+                f"code={payload.get('code')!r} msg={payload.get('msg')!r}"
+            )
+        return payload
+
     def fetch_ohlcv(
         self, symbol: str, timeframe: str, limit: int = 100
     ) -> list[dict[str, Any]]:
@@ -183,6 +245,21 @@ class OkxClient(BaseExchange):
         """
         return CandleFetcher(timeout=self._timeout).fetch_ohlcv(symbol, timeframe, limit=limit)
 
+    # Order-type mapping for `place_order`'s `order_type` -> OKX's `ordType`.
+    _ORD_TYPE_MAP = {"limit": "limit", "market": "market"}
+
+    # Per-order `sCode` values OKX's cancel-order endpoint returns when
+    # there is nothing left to cancel (order doesn't exist / already
+    # canceled / already fully filled). Confirmed against OKX's v5 order-
+    # management error code reference (cancellation error range, 514xx).
+    # Any of these must be a safe no-op (`False`), not a raised exception
+    # -- docs/EXCHANGE_LAYER_IMPLEMENTATION_ROADMAP.md section 3.
+    _CANCEL_NOOP_SCODES = {
+        "51400",  # Cancellation failed as the order does not exist.
+        "51401",  # Cancellation failed as the order is already canceled.
+        "51402",  # Cancellation failed as the order is already completed (filled).
+    }
+
     def place_order(
         self,
         symbol: str,
@@ -190,19 +267,127 @@ class OkxClient(BaseExchange):
         order_type: str,
         size: float,
         price: float | None = None,
+        client_order_id: str | None = None,
+        td_mode: str = "cash",
     ) -> dict[str, Any]:
-        """Place an order on OKX. Phase 1 scope (its own approval gate) -- not implemented."""
-        raise NotImplementedError(
-            "OkxClient.place_order is Phase 1 scope "
-            "(docs/EXCHANGE_LAYER_IMPLEMENTATION_ROADMAP.md); not implemented in Phase 0."
+        """Place an order on OKX (Phase 1, demo-only in this session).
+
+        POSTs `OKX_PLACE_ORDER_PATH`. `td_mode` defaults to `"cash"`
+        (spot, no margin) -- matches this demo account's actual holdings
+        (BTC/ETH/OKB/USDT spot balances, confirmed against real OKX demo
+        data this session).
+
+        Idempotency (docs/EXCHANGE_LAYER_IMPLEMENTATION_ROADMAP.md
+        section 3, "the single most important correctness property of
+        the entire order-lifecycle design"): if `client_order_id` is not
+        supplied, one is generated here via `uuid.uuid4().hex` -- 32
+        lowercase-hex characters, satisfying OKX's `clOrdId` constraint
+        of up to 32 alphanumeric characters (confirmed against OKX's v5
+        place-order docs) -- and always sent as `clOrdId`. This lets a
+        retried/ambiguous request be matched back to the same intended
+        order via `get_order_status` afterward, instead of risking a
+        duplicate fill from a blind retry.
+
+        No retry on failure: see `_private_post`'s docstring and roadmap
+        section 6 -- a POST that mutates exchange state must not be
+        blindly retried from here.
+        """
+        if order_type not in self._ORD_TYPE_MAP:
+            raise ValueError(
+                f"OkxClient.place_order: unsupported order_type {order_type!r} "
+                f"(expected one of {sorted(self._ORD_TYPE_MAP)})"
+            )
+
+        used_client_order_id = (
+            client_order_id if client_order_id is not None else uuid.uuid4().hex
         )
 
+        body: dict[str, Any] = {
+            "instId": to_okx_symbol(symbol),
+            "tdMode": td_mode,
+            "side": side,
+            "ordType": self._ORD_TYPE_MAP[order_type],
+            "sz": str(size),
+            "clOrdId": used_client_order_id,
+        }
+        if order_type == "limit":
+            if price is None:
+                raise ValueError("OkxClient.place_order: price is required for limit orders")
+            body["px"] = str(price)
+
+        payload = self._private_post(OKX_PLACE_ORDER_PATH, body)
+        data = payload.get("data", [])
+        if not data:
+            raise RuntimeError(
+                f"OKX place_order returned no order data for "
+                f"clOrdId={used_client_order_id!r}: {payload!r}"
+            )
+
+        result = dict(data[0])
+        if result.get("sCode") != "0":
+            raise RuntimeError(
+                f"OKX place_order failed for clOrdId={used_client_order_id!r}: "
+                f"sCode={result.get('sCode')!r} sMsg={result.get('sMsg')!r}"
+            )
+        # Ensure the clOrdId actually used is recoverable from the return
+        # value even if OKX's echo were ever absent -- Phase 1's separate
+        # verification script needs this to look up order status after.
+        result.setdefault("clOrdId", used_client_order_id)
+        return result
+
     def cancel_order(self, symbol: str, order_id: str) -> bool:
-        """Cancel an existing OKX order by id. Phase 1 scope -- not implemented."""
-        raise NotImplementedError(
-            "OkxClient.cancel_order is Phase 1 scope "
-            "(docs/EXCHANGE_LAYER_IMPLEMENTATION_ROADMAP.md); not implemented in Phase 0."
+        """Cancel an existing OKX order by id (Phase 1).
+
+        POSTs `OKX_CANCEL_ORDER_PATH`. Idempotent per
+        docs/EXCHANGE_LAYER_IMPLEMENTATION_ROADMAP.md section 3:
+        cancelling an order that's already filled, already canceled, or
+        unknown to OKX is a safe no-op (`False`), not a raised exception
+        that would propagate as a pipeline failure. Genuinely unexpected
+        errors (auth failure, network failure, malformed request) still
+        raise -- those come from `_private_post`'s top-level `code` check
+        or `OkxAuthError`/`ConnectionError`, unmodified here.
+        """
+        body = {"instId": to_okx_symbol(symbol), "ordId": order_id}
+        payload = self._private_post(OKX_CANCEL_ORDER_PATH, body)
+        data = payload.get("data", [])
+        if not data:
+            raise RuntimeError(
+                f"OKX cancel_order returned no data for ordId={order_id!r}: {payload!r}"
+            )
+
+        result = data[0]
+        s_code = result.get("sCode")
+        if s_code == "0":
+            return True
+        if s_code in self._CANCEL_NOOP_SCODES:
+            return False
+        raise RuntimeError(
+            f"OKX cancel_order failed for ordId={order_id!r}: "
+            f"sCode={s_code!r} sMsg={result.get('sMsg')!r}"
         )
+
+    def get_order_status(self, symbol: str, order_id: str) -> dict[str, Any]:
+        """Return OKX's raw order-status dict for a given order (Phase 1).
+
+        Not part of `BaseExchange`'s abstract contract -- an OKX-specific
+        concrete addition (adding it to the shared abstract contract
+        would force an unrelated change onto `OrangexClient`'s stub, out
+        of scope here).
+
+        GETs `OKX_PLACE_ORDER_PATH` (OKX v5 reuses the same path for
+        POST-place and GET-status, confirmed against OKX's docs), reusing
+        `_private_get` unmodified. Includes OKX's `state` field
+        (`"live"`, `"filled"`, `"canceled"`, etc).
+        """
+        inst_id = to_okx_symbol(symbol)
+        request_path = f"{OKX_PLACE_ORDER_PATH}?instId={inst_id}&ordId={order_id}"
+        payload = self._private_get(request_path)
+        data = payload.get("data", [])
+        if not data:
+            raise RuntimeError(
+                f"OKX get_order_status returned no data for ordId={order_id!r}: {payload!r}"
+            )
+        return data[0]
 
     def get_balance(self) -> dict[str, float]:
         """Return OKX account balances keyed by asset (real, authenticated call).

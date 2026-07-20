@@ -1,5 +1,29 @@
 # Exchange Layer Implementation Roadmap (Priority 1)
 
+> **UPDATE (2026-07-20, Milestone 41)**: Phase 1 (order placement/
+> cancellation against OKX's demo-trading API) is now **implemented AND
+> live-verified**, not just implemented -- operator granted OKX Demo API
+> Trade permission (previously Read-only), and
+> `scripts/verify_demo_order_lifecycle.py` completed a full 11-step
+> PASS against the real demo endpoint (`x-simulated-trading: 1`, never
+> real capital): a real order was placed (ordId=`3757771015088525312`),
+> verified live, cancelled, verified canceled, with position sync and an
+> informational (non-gating) `RiskManager.evaluate()` call all clean. An
+> earlier attempt this round failed on a real bug -- the verification
+> script's order sizing used only OKX's `minSz` (quantity granularity),
+> missing OKX's separate, undocumented minimum order *notional value*
+> floor (`sCode="51020"`) -- fixed with a new `compute_order_size()`
+> helper in the test script only, `OkxClient` itself unchanged. An
+> independent post-run sweep confirmed 0 pending orders account-wide, 0
+> open positions, and a balance identical to Phase 0's original
+> snapshot. Full test suite 882/882. Full detail:
+> `docs/OKX_DEMO_ORDER_LIFECYCLE_RESULTS.md`, `PROJECT_STATUS.md`
+> Milestone 41, `ENGINEERING_DECISIONS.md` #79. **Phases 2-3 remain
+> unchanged and still require their own separate approval** -- this
+> milestone does not implement `LiveBroker`, does not decide the SL/TP
+> order mechanism (section 3 below), and does not wire anything into
+> `scripts/run_paper.py`.
+
 > **UPDATE (2026-07-19, Milestone 37)**: operator approval received for
 > "Demo Trading readiness" work that stops short of real credentials/live
 > secrets. Phase 0's read-only scope (`OkxClient.fetch_ohlcv`/

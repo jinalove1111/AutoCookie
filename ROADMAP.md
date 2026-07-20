@@ -1335,6 +1335,72 @@ fabricated.
 credentials used or fabricated; no live trading enabled; no destructive
 actions; no architecture redesign. Full suite 849/849 (838 + 11 new).
 
+**Milestone 41 -- CLOSED (2026-07-20). Exchange Layer Phase 1 (OKX demo
+order placement/cancellation) implemented and live-verified end-to-end
+against the real OKX demo-trading API; a real order-sizing bug found and
+fixed along the way.**
+Full deliverables: `scripts/verify_demo_order_lifecycle.py` (fixed --
+new `compute_order_size` helper), `backend/tests/test_verify_demo_order_lifecycle.py`
+(14 -> 19 tests), `backend/app/exchange/okx_client.py`/
+`backend/tests/test_okx_client.py` (already-implemented Phase 1 code,
+now live-verified, unchanged this round). Full rationale:
+`ENGINEERING_DECISIONS.md` #79. Full report:
+`docs/OKX_DEMO_ORDER_LIFECYCLE_RESULTS.md`.
+
+Operator granted OKX Demo API Trade permission (previously Read-only).
+Continues Phase 0 (Milestone 37, read-only `get_balance`/
+`get_open_positions`, already live-verified) and the
+already-implemented-but-previously-unverified Phase 1 code
+(`OkxClient.place_order`/`cancel_order`/`get_order_status`).
+
+**First live attempt this round failed**: OKX rejected with top-level
+`code="1"`, per-order `sCode="51020"`, `sMsg="Your order should meet or
+exceed the minimum order amount."` -- root cause confirmed via a live
+diagnostic probe reading OKX's actual per-order response body:
+`scripts/verify_demo_order_lifecycle.py` sized its test order using only
+OKX's `minSz` (0.00001 BTC, ~$0.65 notional), which enforces
+quantity-granularity only -- OKX separately enforces a minimum order
+notional value (price x size) that endpoint does not expose. No order
+was created by this rejection.
+
+**Fix, scoped to the test script only** (`okx_client.py` itself
+untouched -- a test-harness sizing bug, not an `OkxClient` bug): new
+`compute_order_size(min_sz_str, lot_sz_str, price,
+min_notional=Decimal("10"))` -- returns `minSz` unchanged if its
+notional already clears $10 USDT, otherwise scales up to `$10 / price`
+and rounds UP to the nearest `lotSz` increment. $10 is an
+explicitly-disclosed conservative choice, not OKX's exact undocumented
+threshold. 5 new unit tests. Full suite after this fix: 882 passed (up
+from 877).
+
+**Second live attempt -- the successful, final one -- PASSED all 11
+steps** against OKX's real demo-trading endpoint
+(`x-simulated-trading: 1`, never real capital): order placed
+(ordId=`3757771015088525312`, sCode="0"), verified `state="live"`,
+cancelled, verified `state="canceled"`, position sync check
+`positions=[]` before and after (order never filled), a read-only
+non-gating `RiskManager.evaluate()` informational call
+(approved=True, rr=2.1). Overall PASS, exit code 0. Independent post-run
+sweep confirmed 0 pending orders account-wide, 0 open positions, and a
+balance snapshot identical to Phase 0's original -- no capital-analog
+change occurred.
+
+`RiskManager.evaluate()`/`scripts/run_paper.py` untouched and not
+imported by any new code. No real (non-demo) OKX endpoint ever reached.
+No real capital at risk. No architecture redesign. No secrets printed or
+logged. Full suite 882/882.
+
+**What Phase 1 does NOT include, per `docs/EXCHANGE_LAYER_IMPLEMENTATION_ROADMAP.md`
+section 1's phase table**: `LiveBroker` adapter implementation
+(`fill_entry`/`check_exit` translation layer), the SL/TP order mechanism
+design decision (that document's section 3, explicitly flagged as
+needing its own sign-off), any wiring into `scripts/run_paper.py`
+(Phase 2 -- the first phase that touches the gated live-trading file at
+all, still not authorized or scheduled by this milestone), and real
+capital (Phase 3). Phase 2 is the natural next step in this specific
+line of work, pending its own separate approval gate -- not implied as
+authorized by Phase 1's completion.
+
 **Standing awareness item, not an action item**: H4's evaluation flagged
 that any existing finding resting on Net Profit margins narrower than
 roughly 10-15% could plausibly flip under vol-scaled sizing and would

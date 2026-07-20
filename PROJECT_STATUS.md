@@ -1556,6 +1556,65 @@ practice** (`scripts/cto_report.py`, milestone 17b below).
     suite 849/849** (838 + 11 new). Full rationale:
     `ENGINEERING_DECISIONS.md` #78.
 
+41. **Exchange Layer Phase 1 (OKX demo order placement/cancellation)
+    implemented and live-verified end-to-end against the real OKX
+    demo-trading API; a real order-sizing bug found and fixed along the
+    way** (2026-07-20): operator granted OKX Demo API Trade permission
+    (previously Read-only). Continues Phase 0 (Milestone 37,
+    read-only `get_balance`/`get_open_positions`, already live-verified)
+    and the already-implemented-but-previously-unverified Phase 1 code
+    (`OkxClient.place_order`/`cancel_order`/`get_order_status`, 31 mocked
+    unit tests, zero real network calls in that test file, unchanged this
+    round). **First live attempt this round failed**: OKX rejected with
+    top-level `code="1"`, per-order `sCode="51020"`, `sMsg="Your order
+    should meet or exceed the minimum order amount."` — root cause
+    confirmed via a live diagnostic probe reading OKX's actual per-order
+    response body: `scripts/verify_demo_order_lifecycle.py` sized its
+    test order using only OKX's `minSz` (0.00001 BTC, ~$0.65 notional),
+    which enforces quantity-granularity only — OKX separately enforces a
+    minimum order *notional value* (price x size) that endpoint does not
+    expose. No order was created by this rejection. **Fix, scoped to the
+    test script only** (`okx_client.py` itself untouched — a
+    test-harness sizing bug, not an `OkxClient` bug): new
+    `compute_order_size(min_sz_str, lot_sz_str, price,
+    min_notional=Decimal("10"))` — returns `minSz` unchanged if its
+    notional already clears $10 USDT, otherwise scales up to `$10 /
+    price` and rounds UP to the nearest `lotSz` increment. $10 is an
+    explicitly-disclosed conservative choice, not OKX's exact
+    undocumented threshold. 5 new unit tests
+    (`backend/tests/test_verify_demo_order_lifecycle.py`, 14 -> 19).
+    Full suite after this fix: **882 passed** (up from 877). **Second
+    live attempt — the successful, final one — PASSED all 11 steps**
+    against OKX's real demo-trading endpoint (`x-simulated-trading: 1`,
+    never real capital): instrument specs discovered (minSz=0.00001,
+    lotSz=0.00000001, tickSz=0.1, BTC-USDT); limit price computed 10%
+    below market (58075.9 vs. last_close 64528.8); order size computed
+    via the new helper (0.00017219 BTC, notional ~$10.000089221);
+    `place_order` returned ordId=`3757771015088525312`, sCode="0";
+    order verified `state="live"`, `cancel_order` returned `True`, order
+    verified `state="canceled"`; position sync check `positions=[]`
+    before and after; a read-only, non-gating `RiskManager.evaluate()`
+    call (informational only, never wired into `run_paper.py`) returned
+    stop_loss=57495.141, take_profit=59295.4939, rr=2.1, approved=True.
+    Overall PASS, exit code 0. **Independent post-run verification**
+    (separate from the script's own checks): account-wide
+    `GET /api/v5/trade/orders-pending` swept to 0 pending orders,
+    `get_open_positions()` returned 0, `get_balance()` returned `{BTC:
+    1.0, ETH: 1.0, OKB: 100.0, USDT: 5000.0}`, identical to the very
+    first Phase 0 balance snapshot — confirms no capital-analog change
+    occurred. `RiskManager.evaluate()`/`scripts/run_paper.py` untouched
+    and not imported by any new code; no real (non-demo) OKX endpoint
+    ever reached (`demo=True` hardcoded in the verification script's
+    only construction site); no real capital at risk; no architecture
+    redesign (`BaseExchange`'s abstract contract unmodified,
+    `get_order_status` a concrete `OkxClient`-only addition); no secrets
+    printed or logged. **What Phase 1 does NOT include**: `LiveBroker`
+    adapter implementation, SL/TP order mechanism design, any wiring
+    into `scripts/run_paper.py` (Phase 2, separately gated), real
+    capital (Phase 3). **Full suite 882/882**. Full rationale:
+    `ENGINEERING_DECISIONS.md` #79. Full report:
+    `docs/OKX_DEMO_ORDER_LIFECYCLE_RESULTS.md`.
+
 **Production-behavior note**: milestones 1-6 were purely additive/
 observational. Milestone 7 was the FIRST to change actual paper-trading
 sizing/rejection math (more conservative sizing in high volatility;

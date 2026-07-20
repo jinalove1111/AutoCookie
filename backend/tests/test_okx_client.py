@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 
 import httpx
 import pytest
@@ -231,19 +232,242 @@ def test_fetch_ohlcv_delegates_to_candle_fetcher(monkeypatch):
     }
 
 
-# --- Phase 0 scope boundary: place_order/cancel_order stay unimplemented ---
+# --- Phase 1: place_order --------------------------------------------
 
 
-def test_place_order_raises_not_implemented_phase_1_scope():
-    client = OkxClient(api_key="k", api_secret="s", passphrase="p")
-    with pytest.raises(NotImplementedError, match="Phase 1"):
-        client.place_order("BTCUSDT", "buy", "market", 0.01)
+class _FakePostResponse:
+    def __init__(self, json_data: dict, status_code: int = 200):
+        self._json_data = json_data
+        self.status_code = status_code
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            request = httpx.Request("POST", "https://www.okx.com/fake")
+            raise httpx.HTTPStatusError(
+                "error", request=request, response=httpx.Response(self.status_code, request=request)
+            )
+
+    def json(self) -> dict:
+        return self._json_data
 
 
-def test_cancel_order_raises_not_implemented_phase_1_scope():
-    client = OkxClient(api_key="k", api_secret="s", passphrase="p")
-    with pytest.raises(NotImplementedError, match="Phase 1"):
-        client.cancel_order("BTCUSDT", "some-order-id")
+def _capture_post(monkeypatch, fake_payload, calls):
+    def fake_post(url, headers=None, content=None, timeout=None):
+        calls.append({"url": url, "headers": headers, "body": json.loads(content) if content else {}})
+        return _FakePostResponse(fake_payload)
+
+    monkeypatch.setattr(okx_client_module.httpx, "post", fake_post)
+
+
+def test_place_order_sends_correct_fields_for_limit_order(monkeypatch):
+    fake_payload = {
+        "code": "0",
+        "data": [{"ordId": "111", "clOrdId": "abc123", "sCode": "0", "sMsg": ""}],
+    }
+    calls = []
+    _capture_post(monkeypatch, fake_payload, calls)
+
+    client = OkxClient(api_key="k", api_secret="s", passphrase="p", demo=True)
+    result = client.place_order(
+        "BTCUSDT", "buy", "limit", 0.01, price=50000.0, client_order_id="abc123"
+    )
+
+    assert len(calls) == 1
+    body = calls[0]["body"]
+    assert body["instId"] == "BTC-USDT"
+    assert body["tdMode"] == "cash"
+    assert body["side"] == "buy"
+    assert body["ordType"] == "limit"
+    assert body["sz"] == "0.01"
+    assert body["px"] == "50000.0"
+    assert body["clOrdId"] == "abc123"
+    assert result["ordId"] == "111"
+    assert result["clOrdId"] == "abc123"
+
+
+def test_place_order_sends_correct_fields_for_market_order(monkeypatch):
+    fake_payload = {
+        "code": "0",
+        "data": [{"ordId": "222", "clOrdId": "xyz789", "sCode": "0", "sMsg": ""}],
+    }
+    calls = []
+    _capture_post(monkeypatch, fake_payload, calls)
+
+    client = OkxClient(api_key="k", api_secret="s", passphrase="p", demo=True)
+    client.place_order("ETHUSDT", "sell", "market", 1.5, client_order_id="xyz789")
+
+    body = calls[0]["body"]
+    assert body["instId"] == "ETH-USDT"
+    assert body["ordType"] == "market"
+    assert body["sz"] == "1.5"
+    assert "px" not in body
+    assert body["clOrdId"] == "xyz789"
+
+
+def test_place_order_auto_generates_client_order_id_when_not_supplied(monkeypatch):
+    fake_payload = {"code": "0", "data": [{"ordId": "1", "sCode": "0", "sMsg": ""}]}
+    calls = []
+    _capture_post(monkeypatch, fake_payload, calls)
+
+    client = OkxClient(api_key="k", api_secret="s", passphrase="p", demo=True)
+    client.place_order("BTCUSDT", "buy", "market", 0.01)
+
+    generated = calls[0]["body"]["clOrdId"]
+    assert generated
+    assert len(generated) <= 32
+    assert generated.isalnum()
+
+
+def test_place_order_generates_unique_client_order_ids_across_calls(monkeypatch):
+    fake_payload = {"code": "0", "data": [{"ordId": "1", "sCode": "0", "sMsg": ""}]}
+    calls = []
+    _capture_post(monkeypatch, fake_payload, calls)
+
+    client = OkxClient(api_key="k", api_secret="s", passphrase="p", demo=True)
+    client.place_order("BTCUSDT", "buy", "market", 0.01)
+    client.place_order("BTCUSDT", "buy", "market", 0.01)
+
+    ids = [c["body"]["clOrdId"] for c in calls]
+    assert ids[0] != ids[1]
+
+
+def test_place_order_uses_supplied_client_order_id_verbatim(monkeypatch):
+    fake_payload = {"code": "0", "data": [{"ordId": "1", "sCode": "0", "sMsg": ""}]}
+    calls = []
+    _capture_post(monkeypatch, fake_payload, calls)
+
+    client = OkxClient(api_key="k", api_secret="s", passphrase="p", demo=True)
+    client.place_order("BTCUSDT", "buy", "market", 0.01, client_order_id="my-custom-id")
+
+    assert calls[0]["body"]["clOrdId"] == "my-custom-id"
+
+
+def test_place_order_raises_runtime_error_with_okx_smsg_on_per_order_failure(monkeypatch):
+    fake_payload = {
+        "code": "0",
+        "data": [{"ordId": "", "clOrdId": "abc", "sCode": "51008", "sMsg": "Insufficient balance"}],
+    }
+    calls = []
+    _capture_post(monkeypatch, fake_payload, calls)
+
+    client = OkxClient(api_key="k", api_secret="s", passphrase="p", demo=True)
+    with pytest.raises(RuntimeError, match="Insufficient balance"):
+        client.place_order("BTCUSDT", "buy", "market", 0.01, client_order_id="abc")
+
+
+def test_place_order_does_not_retry_on_failure(monkeypatch):
+    fake_payload = {
+        "code": "0",
+        "data": [{"ordId": "", "clOrdId": "abc", "sCode": "51008", "sMsg": "Insufficient balance"}],
+    }
+    call_count = {"n": 0}
+
+    def fake_post(url, headers=None, content=None, timeout=None):
+        call_count["n"] += 1
+        return _FakePostResponse(fake_payload)
+
+    monkeypatch.setattr(okx_client_module.httpx, "post", fake_post)
+
+    client = OkxClient(api_key="k", api_secret="s", passphrase="p", demo=True, retry_attempts=3)
+    with pytest.raises(RuntimeError):
+        client.place_order("BTCUSDT", "buy", "market", 0.01, client_order_id="abc")
+
+    assert call_count["n"] == 1
+
+
+def test_place_order_sets_simulated_trading_header_when_demo(monkeypatch):
+    fake_payload = {"code": "0", "data": [{"ordId": "1", "sCode": "0", "sMsg": ""}]}
+    calls = []
+    _capture_post(monkeypatch, fake_payload, calls)
+
+    client = OkxClient(api_key="k", api_secret="s", passphrase="p", demo=True)
+    client.place_order("BTCUSDT", "buy", "market", 0.01)
+
+    assert calls[0]["headers"]["x-simulated-trading"] == "1"
+
+
+# --- Phase 1: cancel_order ----------------------------------------------
+
+
+def test_cancel_order_returns_true_on_success(monkeypatch):
+    fake_payload = {"code": "0", "data": [{"ordId": "111", "clOrdId": "abc", "sCode": "0", "sMsg": ""}]}
+    calls = []
+    _capture_post(monkeypatch, fake_payload, calls)
+
+    client = OkxClient(api_key="k", api_secret="s", passphrase="p", demo=True)
+    assert client.cancel_order("BTCUSDT", "111") is True
+    assert calls[0]["body"] == {"instId": "BTC-USDT", "ordId": "111"}
+
+
+@pytest.mark.parametrize(
+    "s_code,s_msg",
+    [
+        ("51400", "Cancellation failed as the order does not exist."),
+        ("51401", "Cancellation failed as the order is already canceled."),
+        ("51402", "Cancellation failed as the order is already completed."),
+    ],
+)
+def test_cancel_order_returns_false_for_noop_okx_codes(monkeypatch, s_code, s_msg):
+    fake_payload = {"code": "0", "data": [{"ordId": "111", "sCode": s_code, "sMsg": s_msg}]}
+    calls = []
+    _capture_post(monkeypatch, fake_payload, calls)
+
+    client = OkxClient(api_key="k", api_secret="s", passphrase="p", demo=True)
+    assert client.cancel_order("BTCUSDT", "111") is False
+
+
+def test_cancel_order_raises_for_genuine_auth_failure(monkeypatch):
+    client = OkxClient(api_key="", api_secret="", passphrase="", demo=True)
+    with pytest.raises(OkxAuthError):
+        client.cancel_order("BTCUSDT", "111")
+
+
+def test_cancel_order_raises_connection_error_on_network_failure(monkeypatch):
+    def fake_post(url, headers=None, content=None, timeout=None):
+        request = httpx.Request("POST", url)
+        raise httpx.ConnectError("boom", request=request)
+
+    monkeypatch.setattr(okx_client_module.httpx, "post", fake_post)
+
+    client = OkxClient(api_key="k", api_secret="s", passphrase="p", demo=True)
+    with pytest.raises(ConnectionError):
+        client.cancel_order("BTCUSDT", "111")
+
+
+def test_cancel_order_sets_simulated_trading_header_when_demo(monkeypatch):
+    fake_payload = {"code": "0", "data": [{"ordId": "111", "sCode": "0", "sMsg": ""}]}
+    calls = []
+    _capture_post(monkeypatch, fake_payload, calls)
+
+    client = OkxClient(api_key="k", api_secret="s", passphrase="p", demo=True)
+    client.cancel_order("BTCUSDT", "111")
+
+    assert calls[0]["headers"]["x-simulated-trading"] == "1"
+
+
+# --- Phase 1: get_order_status -------------------------------------------
+
+
+def test_get_order_status_returns_parsed_order_dict(monkeypatch):
+    fake_order = {"ordId": "111", "clOrdId": "abc", "state": "live", "instId": "BTC-USDT"}
+    fake_payload = {"code": "0", "data": [fake_order]}
+
+    captured = {}
+
+    def fake_get(url, headers=None, timeout=None):
+        captured["url"] = url
+        captured["headers"] = headers
+        return _FakeResponse(fake_payload)
+
+    monkeypatch.setattr(okx_client_module.httpx, "get", fake_get)
+
+    client = OkxClient(api_key="k", api_secret="s", passphrase="p", demo=True)
+    result = client.get_order_status("BTCUSDT", "111")
+
+    assert result == fake_order
+    assert "instId=BTC-USDT" in captured["url"]
+    assert "ordId=111" in captured["url"]
+    assert captured["headers"]["x-simulated-trading"] == "1"
 
 
 def test_get_exchange_name_returns_okx():

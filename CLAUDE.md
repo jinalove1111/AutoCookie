@@ -205,7 +205,7 @@ confirmed structural across two independent years
 
 ## 7. Milestone count
 
-The current milestone count is **40** as of this writing (2026-07-20).
+The current milestone count is **41** as of this writing (2026-07-20).
 This number increments once per completed
 research/engineering round and both `PROJECT_STATUS.md` and
 `ROADMAP.md`/`docs/ADAPTIVE_ARCHITECTURE.md` section 7 are updated
@@ -243,9 +243,15 @@ that same fix generalized plus a real monitoring gap closed (milestone
 40 — the path bug also affected 6 write-target arguments, fixed the
 same way; `paper_trader_health_check.py` now scans the trader's own
 stdout log content, not just DB state; see `ENGINEERING_DECISIONS.md`
-#78). Section 4's research-workflow discipline below is unchanged and
-still applies to any FUTURE hypothesis — it just isn't the only mode
-this project operates in anymore.
+#78), and Exchange Layer Phase 1 (OKX demo order placement/cancellation)
+implemented and live-verified end-to-end against the real OKX
+demo-trading API (milestone 41 — a real order-sizing bug, OKX's
+undocumented minimum-notional floor, found and fixed in the verification
+script along the way; `LiveBroker`/`run_paper.py` wiring remains Phase
+2, still separately gated; see `ENGINEERING_DECISIONS.md` #79). Section
+4's research-workflow discipline below is unchanged and still applies to
+any FUTURE hypothesis — it just isn't the only mode this project
+operates in anymore.
 
 ## A note on the agent/department operating model
 

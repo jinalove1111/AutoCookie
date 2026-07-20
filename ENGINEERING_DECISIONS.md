@@ -5741,3 +5741,99 @@ itself). No architecture redesign. Full suite 849/849 (838 + 11 new).
 CI verification itself handled as a genuine background task (`Monitor`,
 15-minute poll interval) rather than blocking this round's work on
 GitHub's rate limit, per explicit operator instruction.
+
+## 79. Milestone 41: Phase 1 OKX demo order placement live-verified; a real order-sizing bug (OKX's undocumented minimum-notional floor) found and fixed along the way
+
+**Decision context**: operator granted OKX Demo API Trade permission
+(previously Read-only, confirmed via a live 401/`sCode=50120` rejection
+in an earlier round of this same work). This continues Phase 0
+(Milestone 37, read-only `get_balance`/`get_open_positions`, already
+live-verified) and the already-implemented-but-previously-unverified
+Phase 1 code (`OkxClient.place_order`/`cancel_order`/`get_order_status`
+in `backend/app/exchange/okx_client.py`, 31 mocked unit tests in
+`backend/tests/test_okx_client.py`, zero real network calls in that test
+file, unchanged this round).
+
+**First live attempt this round failed, root cause confirmed not
+guessed**: after Trade permission was granted, OKX rejected the order
+with top-level `code="1"`, per-order `sCode="51020"`, `sMsg="Your order
+should meet or exceed the minimum order amount."` A live diagnostic
+probe read OKX's actual per-order response body directly (not assumed):
+`scripts/verify_demo_order_lifecycle.py` had sized its test order using
+only OKX's `minSz` (0.00001 BTC for BTC-USDT, roughly $0.65 notional at
+the time) from `GET /api/v5/public/instruments`, which enforces
+quantity-granularity only -- OKX separately enforces a minimum order
+*notional value* (price x size) that this endpoint does not expose. A
+`code="1"` rejection means OKX created no order at all, so nothing
+needed cleanup.
+
+**Fix, scoped to the test script only**: `okx_client.py` itself was not
+touched -- this was a test-harness sizing bug, not an `OkxClient` bug.
+New `compute_order_size(min_sz_str, lot_sz_str, price,
+min_notional=Decimal("10"))` pure helper in
+`scripts/verify_demo_order_lifecycle.py`: returns `minSz` unchanged if
+its notional already clears $10 USDT, otherwise scales up to `$10 /
+price` and rounds UP to the nearest `lotSz` increment -- mirrors the
+existing `compute_limit_buy_price` helper's round-DOWN-for-price logic,
+but rounds up here since rounding size down could drop the order back
+below the floor. $10 is an explicitly-disclosed conservative choice, not
+OKX's exact undocumented threshold (unknown, somewhere between the
+observed ~$0.65 rejection and $10). 5 new unit tests added to
+`backend/tests/test_verify_demo_order_lifecycle.py` (file total 14 ->
+19, all passing). Full suite after this fix: **882 passed** (up from
+877).
+
+**Second live attempt this round -- the successful, final one --
+PASSED all 11 steps** against OKX's real demo-trading endpoint
+(`x-simulated-trading: 1`, never real capital): instrument specs
+discovered (minSz=0.00001, lotSz=0.00000001, tickSz=0.1, BTC-USDT);
+limit price computed 10% below market (58075.9 vs. last_close 64528.8,
+so the order rests as "live" rather than filling immediately); order
+size computed via the new helper (0.00017219 BTC, notional
+~$10.000089221, clears the floor); `place_order` returned
+ordId=`3757771015088525312`, sCode="0", sMsg="Order placed"; the order
+verified `state="live"`, then `cancel_order` returned `True` and the
+order verified `state="canceled"`; position sync check showed
+`positions=[]` both before and after (the order never filled, so no
+position was ever created); a read-only, non-gating `RiskManager.evaluate()`
+call for informational purposes only (stop_loss=57495.141,
+take_profit=59295.4939, rr=2.1, approved=True) -- never wired into
+`run_paper.py`, never touches production risk gating. Overall PASS, exit
+code 0. Full JSON report at
+`scripts/reports/demo_order_lifecycle_verification.json` (gitignored,
+same convention as `exchange_readonly_latency.json`).
+
+**Independent post-run verification**, separate from the script's own
+checks, done directly against the live OKX demo account: a full
+account-wide sweep of `GET /api/v5/trade/orders-pending` returned 0
+pending orders (not just this one order); `get_open_positions()`
+returned 0; `get_balance()` returned `{BTC: 1.0, ETH: 1.0, OKB: 100.0,
+USDT: 5000.0}`, identical to the very first Phase 0 balance snapshot
+from an earlier session round -- confirms no capital-analog change
+occurred, nothing was ever actually filled or spent.
+
+**Rationale / scope discipline**: `RiskManager.evaluate()` and
+`scripts/run_paper.py` were not modified in any way and neither is
+imported by any of this new code (`okx_client.py`,
+`verify_demo_order_lifecycle.py`) -- nothing from this milestone is
+wired into any live/paper-trading path. No real (non-demo) OKX endpoint
+was ever reached -- `demo=True`/`x-simulated-trading: 1` is hardcoded in
+the verification script's only `OkxClient` construction site, not
+configurable via CLI/env. No real capital at risk (demo account only).
+No architecture redesign -- `BaseExchange`'s abstract contract was not
+modified (`get_order_status` is a concrete `OkxClient`-only addition,
+deliberately not added to the shared interface so `OrangexClient`'s stub
+is untouched). No secrets printed or logged at any point (verified --
+all diagnostic output either omits credential values entirely or only
+ever surfaces OKX's own non-secret response bodies/order IDs).
+
+**What Phase 1 explicitly does NOT include**, per
+`docs/EXCHANGE_LAYER_IMPLEMENTATION_ROADMAP.md` section 1's phase table:
+`LiveBroker` adapter implementation (`fill_entry`/`check_exit`
+translation layer), SL/TP order mechanism design (roadmap section 3,
+explicitly flagged as needing its own separate sign-off), any wiring
+into `scripts/run_paper.py` (Phase 2, the first phase that touches the
+gated live-trading file at all), and real capital (Phase 3).
+
+**Status**: Full test suite **882/882** passing. Full rationale and
+per-step numbers: `docs/OKX_DEMO_ORDER_LIFECYCLE_RESULTS.md`.
